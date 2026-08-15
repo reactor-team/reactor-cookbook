@@ -1,0 +1,173 @@
+{
+  "model": "reactor/xr1-robocasa365",
+  "task": "close the blender lid",
+  "n_examples": 5,
+  "passes": 5,
+  "repeats": 4,
+  "recorded_utc": "2026-08-13T21:04:37Z",
+  "ready_seconds": 10.1,
+  "out_bytes": 19246,
+  "tracks": [
+    "left_agentview",
+    "right_agentview",
+    "wrist_view"
+  ],
+  "frame_hw": [
+    256,
+    256
+  ],
+  "action_shape": [
+    16,
+    60
+  ],
+  "live_dims": 12,
+  "obs_history": 4,
+  "state_row_dim": 14,
+  "frames": "synthetic, deterministic; a protocol fixture, not a demo",
+  "action_l2_norms": [
+    6.1341,
+    5.7215,
+    5.6965,
+    5.6946,
+    5.6399
+  ],
+  "band": {
+    "l2_band": 10.067548940323519,
+    "step_delta_band_per_column": [
+      0.895206484443331,
+      0.3639700564036055,
+      0.40416468171916564,
+      0.04312197595204033,
+      0.4267820431855875,
+      0.04727636930545592,
+      2.0390625,
+      0.575066007396683,
+      0.46901146714625674,
+      0.10262937853732464,
+      0.015941396043398823,
+      2.015625
+    ],
+    "step_delta_band_3sigma": [
+      0.895206484443331,
+      0.3639700564036055,
+      0.40416468171916564,
+      0.04312197595204033,
+      0.4267820431855875,
+      0.04727636930545592,
+      3.434360021402739,
+      0.575066007396683,
+      0.46901146714625674,
+      0.10262937853732464,
+      0.015941396043398823,
+      3.7119238214217347
+    ],
+    "observed_column_span": [
+      1.62890625,
+      0.640625,
+      0.97265625,
+      0.1513671875,
+      0.76171875,
+      0.08935546875,
+      2.0390625,
+      1.30078125,
+      1.03125,
+      0.314453125,
+      0.0244140625,
+      2.015625
+    ],
+    "span_clamped_columns": [
+      6,
+      11
+    ],
+    "step_delta_band_note": "one band per live column, min(mean + 3 sigma, observed span). Per column because columns 6 and 11 swing the full [-1, 1] and a single global band would be set by them alone. Clamped to the span because on this sample size the 3 sigma bound exceeded the column's whole range on most columns, making the check unfailable; the clamped columns are listed above.",
+    "l2_band_mean": 3.982286331991331,
+    "l2_band_std": 2.0284208694440626,
+    "samples_per_column": 25,
+    "pairs": 20
+  },
+  "latency_ms": {
+    "run0": [
+      356.1,
+      266.7,
+      272.3,
+      262.1,
+      281.2
+    ],
+    "run1": [
+      333.4,
+      286.1,
+      274.7,
+      267.9,
+      280.7
+    ],
+    "run2": [
+      342.0,
+      271.5,
+      293.8,
+      292.3,
+      270.0
+    ],
+    "run3": [
+      342.9,
+      282.3,
+      272.4,
+      283.1,
+      274.1
+    ],
+    "run4": [
+      340.4,
+      285.1,
+      278.8,
+      285.1,
+      276.0
+    ]
+  },
+  "latency_summary_ms": {
+    "n": 25,
+    "p50": 281.2373749911785,
+    "p95": 342.6801746012643,
+    "max": 356.0709999874234
+  },
+  "recorded_run": [
+    {
+      "i": 0,
+      "step": 0,
+      "latency_ms": 356.1,
+      "discarded": 0,
+      "max_step_delta": 2.0,
+      "worst_column": 11
+    },
+    {
+      "i": 1,
+      "step": 1,
+      "latency_ms": 266.7,
+      "discarded": 0,
+      "max_step_delta": 0.375,
+      "worst_column": 0
+    },
+    {
+      "i": 2,
+      "step": 2,
+      "latency_ms": 272.3,
+      "discarded": 0,
+      "max_step_delta": 0.2168,
+      "worst_column": 0
+    },
+    {
+      "i": 3,
+      "step": 3,
+      "latency_ms": 262.1,
+      "discarded": 0,
+      "max_step_delta": 0.1719,
+      "worst_column": 2
+    },
+    {
+      "i": 4,
+      "step": 4,
+      "latency_ms": 281.2,
+      "discarded": 0,
+      "max_step_delta": 0.0879,
+      "worst_column": 0
+    }
+  ]
+}

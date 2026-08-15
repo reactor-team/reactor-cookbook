@@ -1,0 +1,25 @@
+[project]
+name = "cosmos-droid-sim"
+version = "0.1.0"
+description = "Minimal RoboLab gateway example: Isaac Sim's DROID benchmark driven by a Reactor-served cosmos-nano-policy-droid"
+requires-python = ">=3.10"
+
+dependencies = [
+    "reactor-sdk>=0.2.2",
+    "aiortc>=1.9",
+    "av>=12.0",
+    "numpy>=1.26",
+    # The openpi WebSocket server RoboLab's own client connects to.
+    "openpi-server",
+]
+
+# RoboLab / Isaac Sim is NOT a dependency: it runs unmodified in its own
+# container with its own python, and connects to this process over
+# localhost. See README.md "Running it".
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["cosmos_droid_sim*"]

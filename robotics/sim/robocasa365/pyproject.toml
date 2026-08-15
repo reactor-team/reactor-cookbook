@@ -1,0 +1,27 @@
+[project]
+name = "robocasa365-sim"
+version = "0.1.0"
+description = "RoboCasa365 evaluation example: the vendor's rollout loop, unmodified, against a Reactor-served xr1-robocasa365"
+requires-python = ">=3.10"
+
+dependencies = [
+    # Pinned exactly, matching notebooks/pyproject.toml. 0.8.0 is the version
+    # this path was verified against, and the client works around a specific
+    # gap in it (no client keepalive, so it pings on its own; see client.py).
+    "reactor-sdk==0.8.0",
+    "aiortc>=1.9",
+    "av>=12.0",
+    "numpy>=1.26",
+]
+
+# RoboCasa365 itself is NOT a dependency. Its environment tolerates
+# numpy>=1.26, so this package installs INTO the simulator's environment and
+# the vendor loop imports the client directly. One environment, no gateway,
+# no relay port. See README.md.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["robocasa365_sim*"]

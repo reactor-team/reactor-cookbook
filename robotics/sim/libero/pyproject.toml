@@ -1,0 +1,37 @@
+[project]
+name = "libero-sim"
+version = "0.1.0"
+description = "Minimal LIBERO sim-wrapper example: LIBERO/robosuite driven closed-loop by a Reactor-served policy"
+requires-python = ">=3.10,<3.11"
+
+dependencies = [
+    "reactor-sdk==0.8.0",
+    "aiortc>=1.9",
+    "av>=12.0",
+    "robosuite==1.4.0",
+    "bddl==1.0.1",
+    "future",
+    "mujoco<3.9.0",
+    "numpy==1.26.4",
+    # <2.6: LIBERO's init-state files are torch.load()'ed under the hood, and
+    # were written back when weights_only defaulted to False. Pinning here
+    # keeps that default rather than reaching into torch's pickle allowlist.
+    "torch<2.6",
+    "matplotlib>=3.5.3",
+    "cloudpickle>=2.0.0",
+    "gym>=0.25,<0.27",
+    "opencv-python",
+    "easydict",
+    "hydra-core>=1.2,<1.4",
+    "termcolor",
+    "imageio",
+    "imageio-ffmpeg",
+    # LIBERO itself is not on PyPI, so install from a vendored clone (see README).
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["libero_sim*"]

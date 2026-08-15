@@ -1,0 +1,173 @@
+{
+  "recorded_utc": "2026-08-11T09:37:04Z",
+  "model": "reactor/lingbot-va",
+  "task": "pick up the black bowl and place it on the plate",
+  "frames": "SYNTHETIC (deterministic, synthetic_observation()), 128x128 \u2014 LIBERO's native camera size",
+  "action_shape": [
+    16,
+    7
+  ],
+  "seed_skip_steps": 4,
+  "n_examples": 5,
+  "passes": 3,
+  "ready_seconds": 5.9,
+  "out_bytes": 9090,
+  "recorded_run": [
+    {
+      "i": 0,
+      "executable_rows": 12,
+      "step": 0,
+      "latency_ms": 190.3086,
+      "discarded": []
+    },
+    {
+      "i": 1,
+      "executable_rows": 16,
+      "step": 1,
+      "latency_ms": 208.4139,
+      "discarded": []
+    },
+    {
+      "i": 2,
+      "executable_rows": 16,
+      "step": 2,
+      "latency_ms": 203.8151,
+      "discarded": []
+    },
+    {
+      "i": 3,
+      "executable_rows": 16,
+      "step": 3,
+      "latency_ms": 214.4733,
+      "discarded": []
+    },
+    {
+      "i": 4,
+      "executable_rows": 16,
+      "step": 4,
+      "latency_ms": 243.2047,
+      "discarded": []
+    }
+  ],
+  "action_l2_norms": [
+    3.5781,
+    4.1685,
+    4.1318,
+    4.0196,
+    4.002
+  ],
+  "band": {
+    "pairs": [
+      {
+        "runs": [
+          0,
+          1
+        ],
+        "per_chunk_l2": [
+          0.4683615088781866,
+          1.4268022832347953,
+          1.6017528315629763,
+          0.8067433684525367,
+          0.6561621958506086
+        ]
+      },
+      {
+        "runs": [
+          0,
+          2
+        ],
+        "per_chunk_l2": [
+          1.0523428260289258,
+          1.0990309110220815,
+          1.5394635955300047,
+          0.8807789953512862,
+          1.2404846600166293
+        ]
+      },
+      {
+        "runs": [
+          1,
+          2
+        ],
+        "per_chunk_l2": [
+          0.8290886013094104,
+          0.9753932064551171,
+          1.7037000049762003,
+          0.7656342389562159,
+          1.1469543177966326
+        ]
+      }
+    ],
+    "n_samples": 15,
+    "mean_l2": 1.079512903028107,
+    "std_l2": 0.3649649045537889,
+    "band_mean_plus_3sigma": 2.1744076166894737,
+    "max_observed_l2": 1.7037000049762003,
+    "run_to_run_exact": false
+  },
+  "latency_ms": {
+    "run0": [
+      190.3,
+      208.4,
+      203.8,
+      214.5,
+      243.2
+    ],
+    "run1": [
+      195.2,
+      239.3,
+      211.9,
+      203.8,
+      204.3
+    ],
+    "run2": [
+      227.4,
+      212.2,
+      200.2,
+      207.2,
+      205.6
+    ]
+  },
+  "latency_steady_state_ms": {
+    "gate": "echo -> chunk",
+    "p50": 207.8,
+    "min": 200.2,
+    "max": 243.2,
+    "n": 12
+  },
+  "latency_seed_chunk_ms": {
+    "gate": "reset -> chunk (includes gathering the first 12 frames)",
+    "p50": 195.2,
+    "values": [
+      190.3,
+      195.2,
+      227.4
+    ]
+  },
+  "seed_pinned_row": [
+    0.120536,
+    0.005358,
+    0.0,
+    0.025179,
+    0.012322,
+    0.039108,
+    0.0
+  ],
+  "seed_pinned_exact_across_passes": true,
+  "seed_rows_identical_within_chunk": true,
+  "echo_duplicates": 0,
+  "echo_rows_sent": [
+    12,
+    16,
+    16,
+    16,
+    12,
+    16,
+    16,
+    16,
+    12,
+    16,
+    16,
+    16
+  ]
+}

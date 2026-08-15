@@ -1,0 +1,33 @@
+[project]
+name = "robotwin-sim"
+version = "0.1.0"
+description = "Minimal RoboTwin 2.0 gateway example: the authors' evaluation client, unmodified, against a Reactor-served xwam"
+requires-python = ">=3.10"
+
+dependencies = [
+    # Pinned exactly, matching notebooks/pyproject.toml. 0.8.0 is the version
+    # this path was verified against, and the bridge works around a specific
+    # gap in it (no client keepalive, so it pings on its own; see
+    # bridge.py). The three older examples in this repo floor at >=0.2.2;
+    # this one needs 0.8.0's API, in particular the runtime-scoped ping.
+    "reactor-sdk==0.8.0",
+    "aiortc>=1.9",
+    "av>=12.0",
+    # >=1.24 is forced by reactor-sdk. It is also why this package cannot
+    # share the simulator's virtualenv, which pins numpy==1.23.5; see
+    # README.md "Two virtualenvs".
+    "numpy>=1.26",
+    # The authors' client speaks pickle over zmq; this is the other end.
+    "pyzmq>=25.0",
+]
+
+# RoboTwin 2.0 / SAPIEN is NOT a dependency: the authors' evaluation stack
+# runs unmodified in its own virtualenv with its own numpy, and connects to
+# this process over a local port. See README.md "Running an evaluation".
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["robotwin_sim*"]

@@ -1,0 +1,157 @@
+{
+  "recorded_utc": "2026-08-11T07:38:12Z",
+  "task": "pick up the marker and put it in the cup",
+  "frames": "SYNTHETIC (deterministic, from synthetic_observation()); exterior_2 intentionally black per RoboLab --cam2-source black",
+  "n_examples": 5,
+  "passes": 3,
+  "out_path": "notebooks/examples/dreamzero_examples.npz",
+  "out_bytes": 15997,
+  "recorded_run": [
+    {
+      "i": 0,
+      "chunk_index": 0,
+      "inference_seconds": 0.289,
+      "obs_seq": 15,
+      "latency_ms": 624.8024,
+      "discarded": [],
+      "wall_s": 0.6249
+    },
+    {
+      "i": 1,
+      "chunk_index": 1,
+      "inference_seconds": 0.232,
+      "obs_seq": 29,
+      "latency_ms": 232.631,
+      "discarded": [],
+      "wall_s": 0.2327
+    },
+    {
+      "i": 2,
+      "chunk_index": 2,
+      "inference_seconds": 0.252,
+      "obs_seq": 39,
+      "latency_ms": 254.0477,
+      "discarded": [],
+      "wall_s": 0.2541
+    },
+    {
+      "i": 3,
+      "chunk_index": 3,
+      "inference_seconds": 0.263,
+      "obs_seq": 51,
+      "latency_ms": 267.508,
+      "discarded": [],
+      "wall_s": 0.2676
+    },
+    {
+      "i": 4,
+      "chunk_index": 4,
+      "inference_seconds": 0.259,
+      "obs_seq": 63,
+      "latency_ms": 256.239,
+      "discarded": [],
+      "wall_s": 0.2564
+    }
+  ],
+  "action_l2_norms": [
+    14.1455,
+    14.2691,
+    13.9566,
+    13.5875,
+    13.2898
+  ],
+  "band": {
+    "pairs": [
+      {
+        "runs": [
+          0,
+          1
+        ],
+        "per_chunk_l2": [
+          0.16696842020184224,
+          0.07078608694188296,
+          0.07478713102767688,
+          0.09235011135825374,
+          0.09290515771935748
+        ]
+      },
+      {
+        "runs": [
+          0,
+          2
+        ],
+        "per_chunk_l2": [
+          0.15058318019627168,
+          0.0725045082788446,
+          0.07885072689026029,
+          0.09730120471132828,
+          0.1061168667064825
+        ]
+      },
+      {
+        "runs": [
+          1,
+          2
+        ],
+        "per_chunk_l2": [
+          0.06913348686089674,
+          0.06348793781840274,
+          0.06810280606933657,
+          0.10212134430896362,
+          0.10177507913411078
+        ]
+      }
+    ],
+    "n_samples": 15,
+    "mean_l2": 0.09385160321492743,
+    "std_l2": 0.030039655240617667,
+    "band_mean_plus_3sigma": 0.18397056893678043,
+    "max_observed_l2": 0.16696842020184224
+  },
+  "inference_seconds": {
+    "run0": [
+      0.289,
+      0.232,
+      0.252,
+      0.263,
+      0.259
+    ],
+    "run1": [
+      0.26,
+      0.227,
+      0.245,
+      0.261,
+      0.262
+    ],
+    "run2": [
+      0.256,
+      0.224,
+      0.242,
+      0.261,
+      0.258
+    ]
+  },
+  "latency_ms": {
+    "run0": [
+      624.8,
+      232.6,
+      254.0,
+      267.5,
+      256.2
+    ],
+    "run1": [
+      596.1,
+      221.6,
+      247.8,
+      261.8,
+      264.2
+    ],
+    "run2": [
+      598.8,
+      224.8,
+      243.6,
+      262.8,
+      264.8
+    ]
+  }
+}

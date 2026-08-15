@@ -1,0 +1,173 @@
+{
+  "recorded_utc": "2026-08-12T23:45:59Z",
+  "model": "reactor/cosmos-nano-policy-droid",
+  "task": "put the banana in the bowl",
+  "frames": "SYNTHETIC (deterministic, synthetic_observation()), 180x320, three distinct views",
+  "action_shape": [
+    32,
+    8
+  ],
+  "n_examples": 5,
+  "passes": 3,
+  "ready_seconds": 9.9,
+  "out_bytes": 22050,
+  "recorded_run": [
+    {
+      "i": 0,
+      "step": 0,
+      "latency_ms": 659.0,
+      "discarded": 0,
+      "anchor_max_abs_rad": 0.05098
+    },
+    {
+      "i": 1,
+      "step": 1,
+      "latency_ms": 783.8,
+      "discarded": 0,
+      "anchor_max_abs_rad": 0.02284
+    },
+    {
+      "i": 2,
+      "step": 2,
+      "latency_ms": 830.2,
+      "discarded": 0,
+      "anchor_max_abs_rad": 0.04524
+    },
+    {
+      "i": 3,
+      "step": 3,
+      "latency_ms": 809.5,
+      "discarded": 0,
+      "anchor_max_abs_rad": 0.08155
+    },
+    {
+      "i": 4,
+      "step": 4,
+      "latency_ms": 782.5,
+      "discarded": 0,
+      "anchor_max_abs_rad": 0.06913
+    }
+  ],
+  "action_l2_norms": [
+    17.8319,
+    17.7747,
+    17.3068,
+    17.2176,
+    16.1826
+  ],
+  "band": {
+    "pairs": [
+      {
+        "runs": [
+          0,
+          1
+        ],
+        "per_chunk_l2": [
+          1.5900446859540063,
+          1.5653830012238512,
+          0.9570205530785756,
+          1.272793993860545,
+          1.9684801490187211
+        ]
+      },
+      {
+        "runs": [
+          0,
+          2
+        ],
+        "per_chunk_l2": [
+          1.5164691559756902,
+          1.93425054554383,
+          1.7938959070989413,
+          1.9604623777232482,
+          2.714332770254285
+        ]
+      },
+      {
+        "runs": [
+          1,
+          2
+        ],
+        "per_chunk_l2": [
+          0.7924572540785636,
+          1.099592439241806,
+          1.9428321879412436,
+          1.411981700506961,
+          2.9437229635475104
+        ]
+      }
+    ],
+    "n_samples": 15,
+    "mean_l2": 1.6975813123365184,
+    "std_l2": 0.5918316618538854,
+    "band_mean_plus_3sigma": 3.4730762978981744,
+    "max_observed_l2": 2.9437229635475104,
+    "run_to_run_exact": false
+  },
+  "anchor": {
+    "what": "max|action[0][:7] - streamed joint_position| in rad",
+    "n_samples": 15,
+    "values": [
+      0.05098,
+      0.02284,
+      0.04524,
+      0.08155,
+      0.06913,
+      0.03384,
+      0.08419,
+      0.05144,
+      0.07239,
+      0.06856,
+      0.06669,
+      0.08905,
+      0.03336,
+      0.09376,
+      0.0759
+    ],
+    "mean": 0.06259271545493433,
+    "std": 0.02185554565973352,
+    "band_mean_plus_3sigma": 0.1281593524341349,
+    "max_observed": 0.09376068750964561
+  },
+  "per_step_joint_delta": {
+    "what": "max|action[k+1][:7] - action[k][:7]| in rad, per chunk",
+    "n_samples": 15,
+    "mean": 0.05698427756627401,
+    "std": 0.010880563057192904,
+    "band_mean_plus_3sigma": 0.08962596673785272,
+    "max_observed": 0.08441078662872314
+  },
+  "latency_ms": {
+    "run0": [
+      659.0,
+      783.8,
+      830.2,
+      809.5,
+      782.5
+    ],
+    "run1": [
+      804.6,
+      826.7,
+      757.0,
+      762.8,
+      763.5
+    ],
+    "run2": [
+      835.7,
+      827.3,
+      767.1,
+      825.0,
+      771.6
+    ]
+  },
+  "latency_summary_ms": {
+    "gate": "executed-step echo -> chunk (first chunk: proprio -> chunk)",
+    "p50": 783.8,
+    "min": 659.0,
+    "max": 835.7,
+    "n": 15,
+    "chunk_budget_ms": 2133.3,
+    "reference_compute_ms": 568.0,
+    "reference_wire_p50_ms": 745.0
+  }
+}

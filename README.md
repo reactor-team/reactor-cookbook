@@ -15,15 +15,17 @@ documentation. For API references and guides, see the platform docs.
 
 ## Structure
 
-Each example lives in its own folder under [`examples/`](./examples), with a
-README explaining what it does and the code to run it. An example should run
-on its own: clone the repo, `cd` into the example's folder, follow its README.
+- [`examples/`](./examples) contains short, self-contained examples.
+- [`robotics/`](./robotics) contains robot-policy quickstarts and simulator
+  integrations.
+
+Each example has a README explaining what it does and how to run it.
 
 ## Contributing
 
-Adding an example? Give it its own folder under `examples/` named for what it
-does (not the API it happens to call), and a README that leads with the
-problem it solves.
+Adding an example? Put general examples under `examples/` and robotics examples
+under `robotics/`. Give each example a folder named for what it does (not the
+API it happens to call), and a README that leads with the problem it solves.
 
 ## License
 

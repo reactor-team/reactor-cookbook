@@ -1,0 +1,32 @@
+[project]
+name = "reactor-robotics-notebooks"
+version = "0.1.0"
+description = "Quickstart scripts + minimal clients for Reactor-served robotics policies (xwam, lingbot-va, groot-n17, cosmos-nano-policy-droid, dreamzero, xr1-robocasa365)"
+requires-python = ">=3.10"
+
+dependencies = [
+    # Pinned exactly, not floored. 0.8.0 is the version these scripts were
+    # verified against, and it has a specific known gap the clients work
+    # around: no client keepalive (see reactor_robotics/session.py). A newer
+    # SDK that grows one would make the scripts' own ping loop redundant but
+    # not wrong; an older one has a different track API. Pin, then re-verify
+    # deliberately when bumping.
+    "reactor-sdk==0.8.0",
+    "aiortc>=1.9",
+    "av>=12.0",
+    "numpy>=1.26",
+]
+
+# No simulator dependency. Every script replays recorded observations against
+# the hosted model, so it needs no sim, no GPU and no model weights. The
+# optional full-simulator section at the bottom of each guide runs that
+# model's own benchmark in its own environment. For five of the six the
+# harness is in this repo (../libero/, ../cosmos-droid/,
+# ../robotwin/, ../dreamzero/, ../robocasa365/).
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["reactor_robotics*"]

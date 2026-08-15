@@ -1,0 +1,200 @@
+{
+  "recorded_utc": "2026-08-11T09:43:17Z",
+  "model": "reactor/groot-n17",
+  "task": "Put the blue block in the green bowl",
+  "frames": "REAL \u2014 Franka Research 3 rig, DROID camera layout, 180x320; source capture is a Reactor-internal artifact, frames committed in this fixture",
+  "frame_source": "groot_eval_result.npz (Reactor-internal capture)",
+  "action_horizon": 40,
+  "action_dims": {
+    "eef_9d": 9,
+    "gripper_position": 1,
+    "joint_position": 7
+  },
+  "state_recovered_from": "reference chunk row 0 (absolute-anchored)",
+  "n_examples": 5,
+  "passes": 3,
+  "ready_seconds": 6.0,
+  "free_running_chunk_period_ms": 98.4,
+  "out_bytes": 735016,
+  "recorded_run": [
+    {
+      "i": 0,
+      "step": 13,
+      "latency_ms": 157.9,
+      "discarded": 13,
+      "anchor_max_abs_rad": 0.02261
+    },
+    {
+      "i": 1,
+      "step": 28,
+      "latency_ms": 102.6,
+      "discarded": 14,
+      "anchor_max_abs_rad": 0.02799
+    },
+    {
+      "i": 2,
+      "step": 44,
+      "latency_ms": 199.9,
+      "discarded": 15,
+      "anchor_max_abs_rad": 0.03801
+    },
+    {
+      "i": 3,
+      "step": 59,
+      "latency_ms": 106.1,
+      "discarded": 14,
+      "anchor_max_abs_rad": 0.03157
+    },
+    {
+      "i": 4,
+      "step": 74,
+      "latency_ms": 109.7,
+      "discarded": 14,
+      "anchor_max_abs_rad": 0.05483
+    }
+  ],
+  "joint_position_l2_norms": [
+    17.0325,
+    17.5928,
+    17.1705,
+    17.9784,
+    16.0329
+  ],
+  "band": {
+    "field": "joint_position",
+    "pairs": [
+      {
+        "runs": [
+          0,
+          1
+        ],
+        "per_chunk_l2_joint_position": [
+          1.0843044868712113,
+          1.4605880063759755,
+          0.8566052722486072,
+          1.9191666831629355,
+          1.6037741313836242
+        ]
+      },
+      {
+        "runs": [
+          0,
+          2
+        ],
+        "per_chunk_l2_joint_position": [
+          0.8225782715012109,
+          0.906158257211203,
+          0.8251103913212354,
+          1.8603634245201301,
+          1.537907710945756
+        ]
+      },
+      {
+        "runs": [
+          1,
+          2
+        ],
+        "per_chunk_l2_joint_position": [
+          0.8520948448959847,
+          1.8809178618302418,
+          0.7982296768285878,
+          1.1405287392699694,
+          0.7448832619834661
+        ]
+      }
+    ],
+    "n_samples": 15,
+    "mean_l2": 1.219547401356676,
+    "std_l2": 0.4432092924736684,
+    "band_mean_plus_3sigma": 2.5491752787776814,
+    "max_observed_l2": 1.9191666831629355
+  },
+  "anchor": {
+    "what": "max|joint_position[0] - streamed joint_position| in rad",
+    "n_samples": 15,
+    "values": [
+      0.02261,
+      0.02799,
+      0.03801,
+      0.03157,
+      0.05483,
+      0.02546,
+      0.0212,
+      0.03582,
+      0.05407,
+      0.04212,
+      0.02141,
+      0.02516,
+      0.04083,
+      0.04696,
+      0.03699
+    ],
+    "mean": 0.03500051653633515,
+    "std": 0.011260583985953468,
+    "band_mean_plus_3sigma": 0.06878226849419555,
+    "max_observed": 0.054825544357299805
+  },
+  "per_step_joint_delta": {
+    "what": "max|joint_position[k+1] - joint_position[k]| in rad, per chunk",
+    "reference": "Reactor's FR3 client clamps at 0.05 rad/tick (0.75 rad/s at 15 Hz) \u2014 internal",
+    "n_samples": 15,
+    "values": [
+      0.0331,
+      0.03985,
+      0.03534,
+      0.04536,
+      0.05009,
+      0.04053,
+      0.03764,
+      0.03943,
+      0.04263,
+      0.04122,
+      0.03858,
+      0.03985,
+      0.03682,
+      0.02853,
+      0.05936
+    ],
+    "mean": 0.0405556578344355,
+    "std": 0.007212692373271327,
+    "band_mean_plus_3sigma": 0.062193734954249486,
+    "max_observed": 0.059356093406677246
+  },
+  "latency_ms": {
+    "run0": [
+      157.9,
+      102.6,
+      199.9,
+      106.1,
+      109.7
+    ],
+    "run1": [
+      127.7,
+      102.6,
+      199.8,
+      200.0,
+      106.7
+    ],
+    "run2": [
+      197.0,
+      200.0,
+      199.7,
+      199.8,
+      198.1
+    ]
+  },
+  "latency_summary_ms": {
+    "gate": "end of frame-window hold -> chunk (one chunk discarded first)",
+    "p50": 197.0,
+    "min": 102.6,
+    "max": 200.0,
+    "n": 15
+  },
+  "capture_reference_latency_ms": [
+    1589.4,
+    130.2,
+    126.4,
+    124.8,
+    125.1
+  ]
+}
