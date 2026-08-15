@@ -120,9 +120,9 @@ export REACTOR_API_KEY='<your key>'   # create one at https://reactor.inc/accoun
 ```
 
 Set the key in your shell, not in a file you might commit. Nothing here prints
-it; `reactor-sdk` mints the session JWT from it in-process, so the key never
-leaves the machine. `REACTOR_API_URL` defaults to `https://api.reactor.inc`,
-where `dreamzero` is served.
+or logs it. `reactor-sdk` exchanges it for a session JWT through the Reactor
+API's `/tokens` endpoint over HTTPS. `REACTOR_API_URL` defaults to
+`https://api.reactor.inc`, where `dreamzero` is served.
 
 The simulator side is the expensive part, and none of it is Reactor-specific:
 

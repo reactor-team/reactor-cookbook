@@ -16,11 +16,12 @@ checks the results.
 
 ## Setup
 
-Two things: a Reactor API key (create one at [reactor.inc/account/api-keys](https://reactor.inc/account/api-keys)) and the
-client package.
+From a clone of this repository, install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) and create a
+[Reactor API key](https://reactor.inc/account/api-keys).
 
 ```bash
-cd robotics/sim/notebooks && uv sync --python 3.12
+cd robotics/sim/notebooks && uv sync --locked --python 3.12
 export REACTOR_API_KEY='<your key>'   # in your shell
 uv run python dreamzero_quickstart.py   # then run it
 ```
@@ -247,10 +248,12 @@ To drive an arm:
    the camera-index mapping above.
 2. Send the arm's measured state with `set_joint_position` and
    `set_gripper_position` on every observation.
-3. Execute the newest chunk as it arrives, with no chunk filtering at all.
-   That is what the free-running protocol is designed for; the `obs_seq`
-   high-water-mark gate exists for scripted replay, not for a robot.
-4. Read [robot-policy-client-contract.md](./robot-policy-client-contract.md)
+3. Adopt the newest chunk and discard older queued chunks. The `obs_seq` gate
+   is for pairing scripted replays, not continuous robot control.
+4. Add hardware safety: validate actions, enforce motion and joint limits,
+   reject stale chunks, and add a watchdog/e-stop. The bare quickstart client
+   is not safe to command an arm.
+5. Read [robot-policy-client-contract.md](./robot-policy-client-contract.md)
    for the generic contract. DreamZero has a row in its table recording where
    its own wire departs from it.
 

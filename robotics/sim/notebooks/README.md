@@ -2,7 +2,7 @@
 
 Six runnable scripts, each with a guide, that drive a hosted Reactor robotics
 policy from Python, replaying recorded observations. They need no simulator,
-no GPU and no model weights: `uv pip install`, an API key, and a few minutes.
+no GPU and no model weights: `uv sync`, an API key, and a few minutes.
 
 Open the guide for the model you care about and run its script; there is no
 reading order. `xwam` is the reference implementation of
@@ -37,10 +37,17 @@ With [uv](https://docs.astral.sh/uv/):
 
 ```sh
 cd robotics/sim/notebooks        # from the cookbook repo root
-uv sync --python 3.12            # or: uv pip install "reactor-sdk==0.8.0" aiortc av numpy
+uv sync --locked --python 3.12
 
 export REACTOR_API_KEY='<your key>'   # create one at https://reactor.inc/account/api-keys
 uv run python xwam_quickstart.py      # or any other *_quickstart.py
+```
+
+For an explicit package install instead of the project environment:
+
+```sh
+uv venv --python 3.12
+uv pip install "reactor-sdk==0.8.0" "aiortc>=1.9" "av>=12.0" "numpy>=1.26"
 ```
 
 Set the key in your shell, not in a script: a key pasted into a script is

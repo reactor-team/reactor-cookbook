@@ -99,9 +99,9 @@ uv sync --python 3.12
 export REACTOR_API_KEY='<your key>'   # create one at https://reactor.inc/account/api-keys
 ```
 
-Set the key in your shell, not in a file you might commit. Nothing here
-prints it; `reactor-sdk` mints the session JWT from it in-process, so the
-key never leaves the machine.
+Set the key in your shell, not in a file you might commit. Nothing here prints
+or logs it. `reactor-sdk` exchanges it for a session JWT through the Reactor
+API's `/tokens` endpoint over HTTPS.
 
 `REACTOR_API_URL` defaults to `https://api.reactor.inc`, where `xwam` is
 served. It exists as an escape hatch for another deployment.

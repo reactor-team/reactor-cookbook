@@ -73,11 +73,10 @@ async def main():
 
     EXAMPLES_PATH = Path("examples/xr1_robocasa365_examples.npz")
 
-    # The fixture is not recorded yet, so this runs live checks against the model.
-    # Once examples/xr1_robocasa365_examples.npz exists it holds five observations
-    # recorded against this deployment together with the chunks it returned then,
-    # plus the bands calibrated at recording time, and the comparison switches to
-    # those recordings. CALIBRATED below is that detection.
+    # The committed fixture holds five deterministic synthetic observations,
+    # chunks recorded from this deployment, and bands calibrated at recording
+    # time. CALIBRATED also lets a standalone copy of this script fall back when
+    # the fixture directory was not copied with it.
     #
     # The frames are synthetic and deterministic: a five-step kitchen approach at
     # the benchmark's native 256x256, with three genuinely distinct views. So this

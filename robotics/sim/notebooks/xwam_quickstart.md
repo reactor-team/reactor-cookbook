@@ -19,11 +19,12 @@ start coming from a camera instead of a recorded file.
 
 ## Setup
 
-Two things: a Reactor API key (create one at [reactor.inc/account/api-keys](https://reactor.inc/account/api-keys)) and the
-client package.
+From a clone of this repository, install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) and create a
+[Reactor API key](https://reactor.inc/account/api-keys).
 
 ```bash
-cd robotics/sim/notebooks && uv sync --python 3.12
+cd robotics/sim/notebooks && uv sync --locked --python 3.12
 export REACTOR_API_KEY='<your key>'   # in your shell
 uv run python xwam_quickstart.py      # then run it
 ```
@@ -226,7 +227,10 @@ The protocol does not change. To drive an arm:
 3. Send one request per distinct `state_json` (`proprio` + `chunk_id`), after
    the frame settle, and discard any reply whose `step` does not echo your
    `chunk_id`.
-4. Follow [robot-policy-client-contract.md](./robot-policy-client-contract.md)
+4. Add hardware safety: validate actions, enforce motion and joint limits,
+   reject stale chunks, and add a watchdog/e-stop. The bare quickstart client
+   is not safe to command an arm.
+5. Follow [robot-policy-client-contract.md](./robot-policy-client-contract.md)
    for the wire rules while you build the rig. X-WAM is its reference
    implementation, so the contract text and this model agree.
 

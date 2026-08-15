@@ -16,10 +16,12 @@ frames, stored with the chunks this deployment returned.
 
 ## Setup
 
-A Reactor API key (create one at [reactor.inc/account/api-keys](https://reactor.inc/account/api-keys)) and the client package.
+From a clone of this repository, install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) and create a
+[Reactor API key](https://reactor.inc/account/api-keys).
 
 ```bash
-cd robotics/sim/notebooks && uv sync --python 3.12
+cd robotics/sim/notebooks && uv sync --locked --python 3.12
 export REACTOR_API_KEY='<your key>'   # in your shell
 uv run python groot_n17_quickstart.py   # then run it
 ```

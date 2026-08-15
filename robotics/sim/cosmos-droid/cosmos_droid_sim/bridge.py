@@ -18,8 +18,8 @@
 #
 #   request arrives -> frames+proprio out -> echo chunk N -> await N+1 -> reply
 #
-# reactor-sdk mints the session JWT from the API key in-process; the key
-# never leaves the machine.
+# reactor-sdk exchanges the API key for a session JWT through the API's
+# /tokens endpoint over HTTPS. This bridge never prints or logs the key.
 # ──────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 

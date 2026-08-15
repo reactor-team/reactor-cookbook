@@ -46,8 +46,9 @@ def api_url() -> str:
 def require_api_key() -> str:
     """Return ``REACTOR_API_KEY``, or raise with an actionable message.
 
-    Never logs, prints, or embeds the value. The caller gets the string and
-    hands it straight to the SDK, which mints the session JWT in-process.
+    Never logs, prints, or embeds the value. The caller hands it to the SDK,
+    which exchanges it for a session JWT through the API's ``/tokens``
+    endpoint over HTTPS.
     """
     key = os.environ.get("REACTOR_API_KEY")
     if not key:

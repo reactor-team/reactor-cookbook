@@ -1,16 +1,17 @@
 # Robotics: Sim & Policy Quickstart Examples
 
 Runnable examples of driving robotics policies served on Reactor. Start with
-the quickstarts, which replay recorded observations against a hosted
-policy and need no local install beyond Python and [uv](https://docs.astral.sh/uv/). The four sim packages then
-drive a real physics simulator against the same served policies, using the
-Python [reactor-sdk](https://pypi.org/project/reactor-sdk/) transport.
+the quickstarts, which replay recorded observations against a hosted policy
+and need no local install beyond Python and
+[uv](https://docs.astral.sh/uv/). The five sim packages then drive a real
+physics simulator against the same served policies, using the Python
+[reactor-sdk](https://pypi.org/project/reactor-sdk/) transport.
 
 ## Quickstarts
 
 **[`notebooks/`](./notebooks)** holds six runnable Python scripts, each with a
 guide, that drive a **hosted** Reactor robotics policy by replaying recorded
-observations. **No simulator, no GPU, no model weights**: `uv pip install`, an API
+observations. **No simulator, no GPU, no model weights**: `uv sync`, an API
 key, and a few minutes. Open the one for your model; there is no reading order.
 
 - [`lingbot_va_quickstart.md`](./notebooks/lingbot_va_quickstart.md):
@@ -42,9 +43,8 @@ key, and a few minutes. Open the one for your model; there is no reading order.
   packed chunks of which the first 12 columns are live. Its paper's
   benchmark is [`robocasa365/`](./robocasa365) below.
 
-[`notebooks/README.md`](./notebooks#what-you-can-run) has a "What you
-can run" matrix, model × (script replay / the paper's own simulator / in
-robot).
+[`notebooks/README.md`](./notebooks#choose-a-model) has a model matrix covering
+the wire protocol, action chunk, and available closed-loop harness.
 
 The client package the scripts import (`notebooks/reactor_robotics/`) is
 the same client an eval harness or a controller for a physical robot uses; see
@@ -98,7 +98,7 @@ request. Each package's README covers its threading where it affects usage.
 ## Setup
 
 Each example is its own installable package with its own `pyproject.toml` and
-README, which has its exact setup and run instructions. All four need Python
+README, which has its exact setup and run instructions. All five need Python
 3.10+ (`libero` pins `<3.11`) and a real simulator install:
 
 | Example | Simulator you install | Rough cost |
@@ -120,5 +120,6 @@ simulator and the gateway cannot share an environment. Its README covers it.
 ## Your API key
 
 Create one at [reactor.inc/account/api-keys](https://reactor.inc/account/api-keys).
-`reactor-sdk` mints the session JWT locally from `REACTOR_API_KEY`; the key
-itself never leaves your machine.
+`reactor-sdk` exchanges `REACTOR_API_KEY` for a session JWT by sending the key
+to the Reactor API's `/tokens` endpoint over HTTPS. The examples never print or
+log the key.

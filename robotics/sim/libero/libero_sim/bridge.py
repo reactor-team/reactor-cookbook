@@ -7,8 +7,8 @@
 #   model -> sim:  @on_message -> {type:"action_prediction", data:{action, step}}
 #                  -> RolloutState.submit_chunk(data)
 #
-# reactor-sdk mints the session JWT from the API key in-process, so the key
-# never leaves the machine.
+# reactor-sdk exchanges the API key for a session JWT through the API's
+# /tokens endpoint over HTTPS. This bridge never prints or logs the key.
 #
 # TIMING CAVEAT (the thing most likely to bite): the echo goes over the data
 # channel while the frames go over WebRTC video, and the engine pairs

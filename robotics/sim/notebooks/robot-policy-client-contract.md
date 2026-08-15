@@ -56,9 +56,9 @@ the generic **one request at a time** policy contract implemented by X-WAM.
 The other hosted models use the same transport but expose model-specific state,
 request, and reply messages; the table below records each departure.
 
-For a particular model, an evaluation harness driving a simulator and a
-controller driving a physical robot use the same model client. They differ
-only in where frames and measured state come from.
+Simulator and physical-robot controllers can share the wire client. Hardware
+still needs action mapping, motion limits, stale-chunk rejection, and a
+watchdog/e-stop; those controls are outside this transport contract.
 
 ## If a model disagrees with this document
 

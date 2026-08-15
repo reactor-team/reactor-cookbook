@@ -20,8 +20,8 @@
 #    its own 10 s loop for the life of the session.
 # 3. RETRY MUST CHANGE A BYTE. See contract.encode_state_json.
 #
-# reactor-sdk mints the session JWT from the API key in-process; the key
-# never leaves the machine.
+# reactor-sdk exchanges the API key for a session JWT through the API's
+# /tokens endpoint over HTTPS. This bridge never prints or logs the key.
 # ──────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 

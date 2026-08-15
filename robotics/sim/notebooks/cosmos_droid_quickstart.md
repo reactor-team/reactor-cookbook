@@ -21,12 +21,12 @@ detects which mode it is in.
 
 ## Setup
 
-Three things: [uv](https://docs.astral.sh/uv/getting-started/installation/),
-a Reactor API key (create one at [reactor.inc/account/api-keys](https://reactor.inc/account/api-keys)), and this
-repository.
+From a clone of this repository, install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) and create a
+[Reactor API key](https://reactor.inc/account/api-keys).
 
 ```bash
-cd robotics/sim/notebooks && uv sync --python 3.12
+cd robotics/sim/notebooks && uv sync --locked --python 3.12
 export REACTOR_API_KEY='<your key>'   # in your shell
 uv run python cosmos_droid_quickstart.py   # then run it
 ```

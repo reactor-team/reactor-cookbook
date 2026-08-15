@@ -11,18 +11,20 @@ views plus a short robot-state history, and it returns a 16-step action chunk
 in the vendor's packed 60-column layout, of which the first 12 columns drive
 this embodiment.
 
-The script runs live checks against the hosted model. Once the recorded-example
-fixture exists (observations recorded against this deployment, stored together
-with the chunks it returned at the time) it compares against those recordings
-instead. The script detects which mode it is in.
+The committed fixture pairs five deterministic synthetic observations with
+chunks recorded from this deployment. The script sends those observations to
+the hosted model, runs structural checks, and reports the calibrated
+run-to-run bands. Because the policy samples, it does not require an exact
+numeric replay.
 
 ## Setup
 
-Two things: a Reactor API key (create one at [reactor.inc/account/api-keys](https://reactor.inc/account/api-keys)) and the
-client package.
+From a clone of this repository, install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) and create a
+[Reactor API key](https://reactor.inc/account/api-keys).
 
 ```bash
-cd robotics/sim/notebooks && uv sync --python 3.12
+cd robotics/sim/notebooks && uv sync --locked --python 3.12
 export REACTOR_API_KEY='<your key>'   # in your shell
 uv run python xr1_robocasa365_quickstart.py   # then run it
 ```

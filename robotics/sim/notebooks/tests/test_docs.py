@@ -11,6 +11,7 @@ import numpy as np
 
 
 ROOT = Path(__file__).resolve().parents[1]
+ROBOTICS_ROOT = ROOT.parents[1]
 
 MODELS = {
     "xwam": ("xwam_quickstart.md", "xwam_quickstart.py"),
@@ -49,14 +50,32 @@ class DocumentationConsistencyTest(unittest.TestCase):
 
     def test_all_relative_markdown_links_resolve(self) -> None:
         link_pattern = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
-        for markdown in ROOT.rglob("*.md"):
+        heading_pattern = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
+        for markdown in ROBOTICS_ROOT.rglob("*.md"):
             text = markdown.read_text()
             for match in link_pattern.finditer(text):
-                target = match.group(1).split("#", 1)[0]
-                if not target or "://" in target or target.startswith("mailto:"):
+                raw_target = match.group(1)
+                target, separator, anchor = raw_target.partition("#")
+                if "://" in target or target.startswith("mailto:"):
                     continue
+                destination = markdown if not target else (markdown.parent / target)
+                destination = destination.resolve()
                 with self.subTest(document=markdown.name, target=target):
-                    self.assertTrue((markdown.parent / target).resolve().exists())
+                    self.assertTrue(destination.exists())
+                    if separator:
+                        anchor_document = (
+                            destination / "README.md"
+                            if destination.is_dir()
+                            else destination
+                        )
+                        self.assertTrue(anchor_document.is_file())
+                        headings = {
+                            re.sub(r"\s+", "-", re.sub(r"[^\w\- ]", "", heading.lower()))
+                            for heading in heading_pattern.findall(
+                                anchor_document.read_text()
+                            )
+                        }
+                        self.assertIn(anchor, headings)
 
     def test_recorded_action_shapes_match_the_guides(self) -> None:
         for filename, (key, shape) in FIXTURE_ACTIONS.items():

@@ -40,8 +40,8 @@
 #    that is quiet for 20 s and reactor-sdk 0.8.0 has no ping of its own. An
 #    evaluation is quiet by construction while the simulator executes a chunk.
 #
-# reactor-sdk mints the session JWT from the API key in-process; the key
-# never leaves the machine.
+# reactor-sdk exchanges the API key for a session JWT through the API's
+# /tokens endpoint over HTTPS. This bridge never prints or logs the key.
 # ──────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
