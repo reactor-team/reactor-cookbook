@@ -12,12 +12,10 @@ You stream three camera views plus proprioception (the robot's measured joint
 and gripper state), and it returns a 32-step chunk of absolute joint targets:
 2133 ms of motion at DROID's 15 Hz.
 
-The script compares the model's answers against a recorded-example fixture
-(observations recorded against this deployment, stored together with the
-chunks it returned at the time, see
-[`examples/PROVENANCE.md`](./examples/PROVENANCE.md)). If the fixture is
-missing it falls back to live checks against the hosted model. The script
-detects which mode it is in.
+The script drives the hosted model with five deterministic synthetic
+observations, stored with the chunks this deployment returned at recording
+time. It sends the same observations again and checks the answers. If the
+fixture is missing, it falls back to live structural checks.
 
 ## Setup
 
@@ -39,17 +37,8 @@ shell; [`cosmos_droid_quickstart.py`](./cosmos_droid_quickstart.py) reports
 only its length and the API endpoint. The optional RoboLab section is the
 separate, heavyweight benchmark path.
 
-The script falls back to the recording script's own deterministic observations
-when `examples/cosmos_droid_examples.npz` is not present, so it runs either
-way. Without calibrated tolerances it runs only the checks that need none and
-reports the rest.
-
-If the session connects but every prediction times out, don't assume your
-client is wrong. The silence semantics below make a broken deployment look
-identical to a bad echo: the model answers nothing in either case. Rule out
-your side first -- three tracks published, `proprio_json` parses, the echoed
-`step` strictly increased -- and if all three hold, the deployment itself is
-not answering, and no client change will fix that. Report it.
+Without the fixture's calibrated tolerances, the script runs only the checks
+that need none and reports the rest.
 
 ## Connect
 
@@ -63,10 +52,8 @@ client = CosmosDroidClient()      # model="cosmos-nano-policy-droid", 15 fps
 await client.connect()
 ```
 
-Capacity: one B200 serves one session. HTTP 429
-`no available capacity` on session creation means no capacity is free right
-now. Wait and retry, or ask Reactor for additional capacity; the script
-retries the connect a few times before giving up.
+Capacity: HTTP 429 `no available capacity` on session creation means no capacity is free right
+now. Wait and retry, or ask Reactor for additional capacity.
 
 This model's wire: three tracks, three commands, one reply type, and no
 `reset` event at all.
@@ -169,6 +156,9 @@ RESULT: PASS
 After the verdict it runs the failure modes you are most likely to hit: a
 non-increasing echoed `step` produces no chunk, a 25 s idle does not drop the
 session, and a task change needs no ceremony because the model is stateless.
+If every prediction times out, verify that all three tracks are published,
+`proprio_json` parses, and the echoed `step` increases. If all three are
+correct, report the deployment rather than changing the client.
 
 ## Latency
 
@@ -189,7 +179,7 @@ competence. That number comes from NVIDIA's RoboLab DROID benchmark on Isaac
 Sim, and the harness that measures it is in this repository:
 [`../cosmos-droid/`](../cosmos-droid).
 
-The gateway leaves RoboLab unmodified. Isaac Sim owns its own process, python
+The gateway leaves RoboLab unmodified. Isaac Sim owns its own process, Python
 and episode loop, and the seam it exposes for a remote policy is an openpi
 WebSocket port; the example is that port, relaying each request to this
 hosted model. Keeping the simulator unmodified is what makes any success rate
@@ -206,7 +196,7 @@ stalls in 150 chunks. The same Reactor figures are in
 
 ### Commands
 
-```
+```bash
 # 1. the gateway (this repo; host side, or any machine RoboLab can reach)
 cd ../cosmos-droid
 uv sync --python 3.12
