@@ -12,8 +12,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Keep the expensive dependency layer reusable across adapter-only edits.
-COPY requirements.txt /app/requirements.txt
-RUN python -m pip install --no-cache-dir -r /app/requirements.txt
+COPY requirements.txt requirements-flash-attn.txt /app/
+# Three passes because FlashAttention 4 and the runtime cannot be resolved
+# together: the CuTe DSL caps protobuf below 7 and the runtime needs 7.35. The
+# attention wheels land second, then the protobuf the runtime needs goes back on
+# top — verified to serve both. requirements-flash-attn.txt has the detail.
+RUN python -m pip install --no-cache-dir -r /app/requirements.txt \
+    && python -m pip install --no-cache-dir -r /app/requirements-flash-attn.txt \
+    && python -m pip install --no-cache-dir --no-deps "protobuf==7.35.1"
 
 COPY . /app/
 

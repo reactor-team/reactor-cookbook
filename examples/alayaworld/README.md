@@ -6,9 +6,18 @@ the weights, text encoder, spatial memory, prompt encoding, denoiser, and VAE
 remain in the Runtime process and stay resident across chunks.
 
 AlayaWorld generates four latent frames per turn. Each turn adds 32 RGB frames,
-or about 1.33 seconds at 24 FPS. Prompt and six-axis camera values are sampled
+or about 1.33 seconds of video. Prompt and six-axis camera values are sampled
 at the chunk boundary. Commands received during an in-flight CUDA turn apply
 to the following chunk.
+
+A turn takes longer to compute than the video it produces, and how much longer
+depends on how far the camera moves, so the adapter declares no fixed frame rate
+and emits each chunk with the time it took. Frames then play at the rate they
+were produced instead of draining in 1.33 seconds and leaving the stream with
+nothing to show. `buffer_size` bounds the queue at one chunk, which is as low as
+it goes — the runtime never applies a bound below a single chunk — so a camera
+change is answered by the next turn generated rather than waiting behind frames
+already queued.
 
 A new session starts paused without choosing a scene for the user. Upload an
 image with `set_image`, or invoke `random_image` to select one of the public
@@ -57,9 +66,36 @@ curl -s localhost:18080/health
 curl -s localhost:18080/schema
 ```
 
-Connect from the [Reactor Sandbox](https://reactor-sandbox.vercel.app/) using
-**Local (Direct)**, or point the [JS SDK](https://docs.reactor.inc) at the local
-endpoint.
+## Play it in the browser
+
+[`demo/`](./demo) is a small Next.js app for this model: pick a starting image,
+write a prompt, and steer the camera from the keyboard while the video streams
+back. With the container running, start it in a second terminal:
+
+```sh
+cd examples/alayaworld/demo
+pnpm install
+pnpm dev
+```
+
+Open [http://localhost:3000](http://localhost:3000). The page lists three steps —
+**Connect**, choose a starting image, then drive — and reports which of them it is
+waiting on, so a disabled control always says why.
+
+The app connects to `http://localhost:8080` with no configuration, matching where
+`reactor run` serves. Tell it about a different port through the environment:
+
+```sh
+cp .env.example .env
+# REACTOR_LOCAL_URL=http://localhost:18080   # match `reactor run --port`
+```
+
+`W`/`A`/`S`/`D` move, `I`/`J`/`K`/`L` look, `Space`/`C` change height, and `Q`/`E`
+roll. [`demo/README.md`](./demo/README.md) covers the full mapping and how its
+typed client is generated from the `/schema` response above.
+
+As an alternative, the [Reactor Sandbox](https://reactor-sandbox.vercel.app/)
+reaches the same container with **Local (Direct)**.
 
 ## Public source and model assets
 
@@ -68,12 +104,19 @@ directory to the model as `REACTOR_WEIGHTS_PATH`. The checked-in default keeps
 AlayaWorld under `~/.cache/reactor_registry/alayaworld`, outside the image and
 the Git checkout, so container rebuilds retain every large download.
 
-On first load the adapter clones the pinned AlayaWorld and Depth-Anything-3
-revisions, downloads the merged checkpoint and Gemma text encoder, and
+On first load the adapter clones the pinned AlayaWorld, Depth-Anything-3, and
+TAEHV revisions, downloads the merged checkpoint and Gemma text encoder, and
 populates the pinned DA3 cache. Interrupted Hugging Face downloads resume on
 the next start. Later runs verify and reuse the completed resources. The
 playground cases used by `random_image` arrive in the AlayaWorld checkout; no
 separate sample dataset is required.
+
+The TAEHV checkout supplies the tiny decoder that `inference.bank_taehv` uses for
+spatial-memory pixels. Its `taeltx2_3_wide` weights are the larger LTX-2.3
+variant, published on a branch of the upstream repository rather than its default
+one, which is why `assets.taehv_source` pins a revision that a plain clone would
+not reach. Setting `bank_taehv: false` skips the decoder without removing the
+checkout; dropping `assets.taehv_source` skips the download too.
 
 `source.path` in `alayaworld.yaml` is relative to the mounted weights root.
 Every other relative model, configuration, and playground path is then resolved
@@ -126,13 +169,13 @@ rollout, and six-axis camera state. A newly connected viewer receives the same
 snapshot immediately.
 
 The frontend owns keyboard, pointer, joystick, sensitivity, and layout mapping.
-A conventional eight-key mapping uses W/S for forward, A/D for strafe, the up
-and down arrows for pitch, and the left and right arrows for yaw. Key down sends
-`-1` or `1`; key up sends zero. Vertical translation and roll remain available
-for touch controls, a second joystick, or a six-degree-of-freedom controller.
-The backend normalizes simultaneous translation and rotation axes before
-integrating them into the pixel-rate camera-to-world matrices consumed by
-AlayaWorld.
+Key down sends `-1` or `1`; key up sends zero. [`demo/`](./demo) binds all six
+axes to twelve keys — W/S and A/D translate, I/K and J/L rotate, Space/C and Q/E
+cover height and roll — which suits a model that samples one velocity per chunk
+better than mouse deltas would. The same axes are equally reachable from touch
+controls, twin joysticks, or a six-degree-of-freedom controller. The backend
+normalizes simultaneous translation and rotation axes before integrating them
+into the pixel-rate camera-to-world matrices consumed by AlayaWorld.
 
 ## Image uploads
 
@@ -165,9 +208,31 @@ autoregressive state from the selected image, active prompt, and seed without
 reloading model weights. Chunk numbering then starts again at 1. This bounds the
 dense camera trajectory while allowing the Reactor session to continue.
 
+`inference.attention_backend` chooses which attention implementation serves the
+model. `flash_attention_4` is the default and needs a Hopper or Blackwell GPU;
+`pytorch` serves anything older, and `upstream` leaves AlayaWorld's own selection
+alone. The adapter substitutes the callable on the loaded attention modules
+rather than patching the pinned source, and masked blocks always fall through to
+the PyTorch implementation, which is the only one that builds the banded mask a
+sliding window needs.
+
+`inference.bank_taehv` decodes spatial-memory pixels — the depth and warp sources
+the model builds its memory from — with a tiny decoder instead of the full VAE.
+It is lossy for that memory and leaves the frames the client sees untouched. The
+checkpoint comes from the pinned `assets.taehv_source` checkout; its filename
+selects the decoder architecture, so renaming it silently changes the model.
+
 The adapter uses the default `torch.compile` mode so generation keeps
 Inductor-compiled kernels without enabling CUDA Graph Trees, whose thread-local
 execution state is incompatible with Runtime's off-loop chunk generation.
+
+Those kernels are built on the first turn that reaches them rather than when the
+engine is constructed, and the attention backend compiles its own on top, so the
+adapter generates `inference.warmup_chunks` throwaway turns from a built-in scene
+while loading and discards the rollout they build. Health stays unavailable until
+that finishes, which keeps a cost of tens of seconds off the first client's first
+chunk. Set it to `0` to serve sooner and pay the compile on first use; the caches
+live in the container, so a restart compiles again.
 
 Autoregressive history remains a 16-latent sliding window. The adapter keeps
 only the latest generated latent outside that window and bounds the spatial

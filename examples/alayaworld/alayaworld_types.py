@@ -44,11 +44,15 @@ class AlayaWorldConfig:
     da3_cache: Path
     seed: int
     compile_mode: str
+    warmup_chunks: int
     attention_backend: str
     flex_attention: bool
     ttc: bool
     bank_taehv: bool
     taehv_path: Path | None
+    taehv_source_path: Path | None
+    taehv_source_url: str | None
+    taehv_source_revision: str | None
     decode_overlap_latents: int
     max_spatial_frames: int
     recent_spatial_frames: int

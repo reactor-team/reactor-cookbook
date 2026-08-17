@@ -60,6 +60,7 @@ if TYPE_CHECKING:
         compact_rollout_cache,
         ensure_camera_capacity,
         load_upstream_modules,
+        resolve_attention_backend,
         set_attention_backend,
         uploaded_image_video,
         validate_uploaded_image,
@@ -92,6 +93,7 @@ else:
     compact_rollout_cache = utils_module.compact_rollout_cache
     ensure_camera_capacity = utils_module.ensure_camera_capacity
     load_upstream_modules = utils_module.load_upstream_modules
+    resolve_attention_backend = utils_module.resolve_attention_backend
     set_attention_backend = utils_module.set_attention_backend
     uploaded_image_video = utils_module.uploaded_image_video
     validate_uploaded_image = utils_module.validate_uploaded_image
@@ -108,8 +110,13 @@ class AlayaWorld(ReactorPipeline):
 
     state: AlayaWorldState
     output: AlayaWorldOutput
-    fps = FPS
-    buffer_size = 1
+    # Declaring no `fps` hands pacing to the measured cost of each chunk, which
+    # is what the client should see: a turn is expensive and its length varies,
+    # so a fixed rate would drain the queue and stall between turns. One chunk
+    # of queued frames is the smallest bound that still holds a whole turn, so a
+    # command lands on the next turn generated rather than waiting behind frames
+    # already queued.
+    buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
         super().__init__()
@@ -186,15 +193,16 @@ class AlayaWorld(ReactorPipeline):
             bank_taehv=config.bank_taehv,
             verbose=True,
         )
-        if config.attention_backend == "pytorch":
-            patched_attention_modules = set_attention_backend(
-                engine,
-                modules["pytorch_attention"],
-            )
+        attention = resolve_attention_backend(
+            config.attention_backend,
+            pytorch_attention=modules["pytorch_attention"],
+            torch_module=torch,
+        )
+        if attention is not None:
             logger.info(
                 "AlayaWorld attention backend selected",
-                backend="pytorch",
-                modules=patched_attention_modules,
+                backend=config.attention_backend,
+                modules=set_attention_backend(engine, attention),
             )
         if modules["apply_da3_robust_scale"]():
             logger.info("AlayaWorld DA3 colinear camera fallback enabled")
@@ -224,6 +232,7 @@ class AlayaWorld(ReactorPipeline):
         self._gap_steps = gap_steps
         self._condition_latents = condition_latents
         self._seed = config.seed
+        self._warmup()
         logger.info(
             "AlayaWorld model ready",
             source_revision=config.source_revision,
@@ -232,6 +241,40 @@ class AlayaWorld(ReactorPipeline):
             compile_mode=config.compile_mode,
             random_images=len(config.random_inputs),
             max_chunks_per_rollout=config.max_chunks_per_rollout,
+        )
+
+    def _warmup(self) -> None:
+        """Generate throwaway turns so the first client does not pay for them.
+
+        Compiled kernels are built on the first turn that reaches them, not when
+        the engine is constructed, so without this the cost lands on whoever
+        selects the first image. Running the same path here moves it inside
+        model load, where the runtime keeps the model unavailable until it
+        finishes. A built-in scene supplies the image, and the rollout it builds
+        is discarded so a session still starts with nothing selected.
+        """
+        config = self._config
+        if config is None:
+            raise RuntimeError("AlayaWorld was not loaded")
+        if config.warmup_chunks == 0:
+            return
+        scene = config.random_inputs[0]
+        prompt = scene_prompt_path(scene).read_text(encoding="utf-8").strip()
+        started = time.perf_counter()
+        logger.info("AlayaWorld warming up", chunks=config.warmup_chunks)
+        try:
+            self._reset_rollout(prompt or _UPLOAD_DEFAULT_PROMPT, config.seed, scene)
+            for _ in range(config.warmup_chunks):
+                self._generate_chunk(prompt, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        finally:
+            self._cache = None
+            self._camera = None
+            self._ar_index = 0
+            self._active_prompt = ""
+        logger.info(
+            "AlayaWorld warmup complete",
+            chunks=config.warmup_chunks,
+            seconds=round(time.perf_counter() - started, 3),
         )
 
     @session_started
@@ -671,6 +714,9 @@ class AlayaWorld(ReactorPipeline):
             if self.state._reset_requested:
                 self.state._reset_requested = False
                 self._reset_in_flight = True
+                # Cut playout at the boundary so queued frames from the world
+                # being replaced never play after the new one starts.
+                self.output.flush()
                 try:
                     await asyncio.to_thread(
                         self._reset_rollout,
@@ -712,10 +758,12 @@ class AlayaWorld(ReactorPipeline):
             finally:
                 self._chunk_in_flight = False
             await self._send_state_update()
-            for frame in frames:
-                if self.state._reset_requested:
-                    break
-                yield AlayaWorldOutput(main_video=frame)
+            if self.state._reset_requested:
+                continue
+            # One batched output per turn, so the runtime pairs all 32 frames
+            # with the time they took and plays them at the rate they were
+            # produced.
+            yield AlayaWorldOutput(main_video=frames)
 
     def _reset_rollout(
         self,
@@ -838,12 +886,16 @@ class AlayaWorld(ReactorPipeline):
             raise RuntimeError("AlayaWorld interactive decode requires history latents")
         started = time.perf_counter()
         pred = pipeline.generate(self._ar_index, cache)
+        # Generation dominates the turn and its cost tracks how much the camera
+        # moves, so it is reported apart from the fixed cost of decoding.
+        generated = time.perf_counter()
         pipeline.finalize(self._ar_index, cache, pred)
         compact_rollout_cache(
             cache,
             max_spatial_frames=config.max_spatial_frames,
             recent_spatial_frames=config.recent_spatial_frames,
         )
+        decode_started = time.perf_counter()
         frames = self._decode_new_frames(history, pred)
         self._ar_index += 1
         logger.info(
@@ -851,6 +903,8 @@ class AlayaWorld(ReactorPipeline):
             chunk=self._ar_index,
             frames=int(frames.shape[0]),
             seconds=round(time.perf_counter() - started, 3),
+            generate_seconds=round(generated - started, 3),
+            decode_seconds=round(time.perf_counter() - decode_started, 3),
             prompt=prompt[:80],
             strafe=strafe,
             vertical=vertical,

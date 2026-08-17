@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 _COMPILE_MODES = ["none", "default", "reduce-overhead", "max-autotune"]
-_ATTENTION_BACKENDS = ["pytorch", "upstream"]
+_ATTENTION_BACKENDS = ["flash_attention_4", "pytorch", "upstream"]
 _SCENE_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 _SCENE_MEMBER_SUFFIXES = (
     "_video.mp4",
@@ -58,11 +58,14 @@ def read_config(config_path: Path | None) -> AlayaWorldConfig:
     compile_mode = str(inference.get("compile", "reduce-overhead"))
     if compile_mode not in _COMPILE_MODES:
         raise ValueError(f"inference.compile must be one of {', '.join(_COMPILE_MODES)}")
-    attention_backend = str(inference.get("attention_backend", "pytorch"))
+    attention_backend = str(inference.get("attention_backend", "flash_attention_4"))
     if attention_backend not in _ATTENTION_BACKENDS:
         raise ValueError(
             f"inference.attention_backend must be one of {', '.join(_ATTENTION_BACKENDS)}"
         )
+    warmup_chunks = int(inference.get("warmup_chunks", 1))
+    if warmup_chunks < 0:
+        raise ValueError("inference.warmup_chunks must be zero or more")
 
     overlap = int(decode.get("overlap_latents", 6))
     if overlap <= 0:
@@ -92,6 +95,10 @@ def read_config(config_path: Path | None) -> AlayaWorldConfig:
     source_path = _path(get_weights_path(), source["path"])
     taehv_raw = assets.get("taehv")
     taehv_path = _path(source_path, taehv_raw) if taehv_raw else None
+    taehv_source_raw = assets.get("taehv_source")
+    taehv_source = (
+        _mapping(taehv_source_raw, "assets.taehv_source") if taehv_source_raw else None
+    )
     random_inputs_raw = inputs.get("random_images")
     if not isinstance(random_inputs_raw, list) or not random_inputs_raw:
         raise ValueError("inputs.random_images must be a non-empty YAML list")
@@ -111,11 +118,25 @@ def read_config(config_path: Path | None) -> AlayaWorldConfig:
         da3_cache=_path(source_path, assets["da3_cache"]),
         seed=int(inference.get("seed", 1234)),
         compile_mode=compile_mode,
+        warmup_chunks=warmup_chunks,
         attention_backend=attention_backend,
         flex_attention=bool(inference.get("flex_attention", True)),
         ttc=bool(inference.get("ttc", False)),
         bank_taehv=bool(inference.get("bank_taehv", False)),
         taehv_path=taehv_path,
+        taehv_source_path=(
+            None if taehv_source is None else _path(source_path, taehv_source["path"])
+        ),
+        taehv_source_url=(
+            None
+            if taehv_source is None
+            else _repository_url(taehv_source.get("url"), "assets.taehv_source.url")
+        ),
+        taehv_source_revision=(
+            None
+            if taehv_source is None
+            else _revision(taehv_source.get("revision"), "assets.taehv_source.revision")
+        ),
         decode_overlap_latents=overlap,
         max_spatial_frames=max_spatial_frames,
         recent_spatial_frames=recent_spatial_frames,
@@ -150,6 +171,17 @@ def prepare_runtime_assets(config: AlayaWorldConfig) -> None:
         name="Depth-Anything-3 checkpoint",
         cache_dir=config.da3_cache / "hub",
     )
+    if (
+        config.taehv_source_path is not None
+        and config.taehv_source_url is not None
+        and config.taehv_source_revision is not None
+    ):
+        _ensure_git_checkout(
+            config.taehv_source_path,
+            url=config.taehv_source_url,
+            revision=config.taehv_source_revision,
+            name="TAEHV tiny decoder source",
+        )
 
 
 def validate_runtime_paths(config: AlayaWorldConfig) -> None:

@@ -155,7 +155,7 @@ def load_upstream_modules(source_path: Path) -> dict[str, Any]:
 
 
 def set_attention_backend(engine: Any, attention_function: Any) -> int:
-    """Select an upstream attention callable on every loaded attention module."""
+    """Select an attention callable on every loaded attention module."""
     changed = 0
     for root in (engine.transformer, engine.text_encoder):
         if root is None:
@@ -167,6 +167,75 @@ def set_attention_backend(engine: Any, attention_function: Any) -> int:
     if changed == 0:
         raise RuntimeError("AlayaWorld exposed no configurable attention modules")
     return changed
+
+
+class FlashAttention4:
+    """Route attention through FlashAttention 4, keeping masked blocks on PyTorch.
+
+    AlayaWorld calls its attention hook both with and without an additive or
+    boolean mask. FlashAttention 4 covers the unmasked calls, including the
+    sliding window it accepts natively, and the masked calls fall through to the
+    PyTorch implementation that builds the equivalent banded mask.
+    """
+
+    def __init__(self, flash_attention: Any, masked_fallback: Any, torch_module: Any) -> None:
+        self._flash_attention = flash_attention
+        self._masked_fallback = masked_fallback
+        self._torch = torch_module
+
+    def __call__(
+        self,
+        q: Any,
+        k: Any,
+        v: Any,
+        heads: int,
+        mask: Any | None = None,
+        window_size: tuple[int, int] | None = None,
+    ) -> Any:
+        """Return attention over ``[batch, tokens, heads * head_dim]`` inputs."""
+        if mask is not None:
+            return self._masked_fallback(q, k, v, heads, mask, window_size=window_size)
+        batch, _, fused = q.shape
+        head_dim = fused // heads
+        query, key, value = (t.view(batch, -1, heads, head_dim) for t in (q, k, v))
+        bfloat16 = self._torch.bfloat16
+        out = self._flash_attention(
+            query.to(bfloat16),
+            key.to(bfloat16),
+            value.to(bfloat16),
+            # (-1, -1) is full attention; anything else is the token window the
+            # caller asked for, in (left, right) form.
+            window_size=window_size if window_size is not None else (-1, -1),
+        )
+        # The kernel returns the output alongside its log-sum-exp.
+        if isinstance(out, tuple):
+            out = out[0]
+        return out.reshape(batch, -1, heads * head_dim).to(value.dtype)
+
+
+def resolve_attention_backend(
+    backend: str,
+    *,
+    pytorch_attention: Any,
+    torch_module: Any,
+) -> Any | None:
+    """Return the attention callable for *backend*, or ``None`` to leave upstream's.
+
+    Raises:
+        RuntimeError: FlashAttention 4 was asked for but cannot be imported.
+    """
+    if backend == "upstream":
+        return None
+    if backend == "pytorch":
+        return pytorch_attention
+    try:
+        from flash_attn.cute import flash_attn_func
+    except ImportError as error:
+        raise RuntimeError(
+            "inference.attention_backend is flash_attention_4 but flash-attn-4 is "
+            "not importable; install it or set the backend to pytorch"
+        ) from error
+    return FlashAttention4(flash_attn_func, pytorch_attention, torch_module)
 
 
 def camera_frames(camera: Any) -> Any:

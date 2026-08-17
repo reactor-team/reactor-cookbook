@@ -21,15 +21,31 @@ assets:
     repo_id: depth-anything/DA3NESTED-GIANT-LARGE-1.1
     revision: b2359bdf726fb44ef62acca04d629dcf158053e7
   da3_cache: checkpoints/hf_cache
+  # The tiny decoder that stands in for the full VAE on spatial-memory pixels.
+  # `taeltx2_3_wide` is the larger, less blurry LTX-2.3 variant, and its
+  # filename is what selects that architecture, so keep the name.
+  taehv_source:
+    path: checkpoints/taehv
+    url: https://github.com/madebyollin/taehv.git
+    revision: 32ac0146b11007cda5a57b60a3b35653361fb8a4
+  taehv: checkpoints/taehv/taeltx2_3_wide.pth
 
 inference:
   config: configs/infer.yaml
   seed: 1234
   compile: default
-  attention_backend: pytorch
+  # Turns generated at load so the compiled kernels are built before the model
+  # reports itself available, rather than on the first client's first chunk.
+  warmup_chunks: 1
+  # flash_attention_4 needs a Hopper or Blackwell GPU; pytorch serves anything
+  # older, and upstream leaves AlayaWorld's own selection in place.
+  attention_backend: flash_attention_4
   flex_attention: true
   ttc: false
-  bank_taehv: false
+  # Decode spatial-memory pixels with the tiny decoder instead of the full VAE.
+  # Lossy for the depth and warp sources the memory is built from, and the
+  # frames the client sees are unaffected.
+  bank_taehv: true
 
 inputs:
   # Uploaded images use this public camera calibration and motion horizon.
