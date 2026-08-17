@@ -1,8 +1,8 @@
 # Quickstart scripts and guides
 
-Six runnable scripts, each with a guide, that drive a hosted Reactor robotics
-policy from Python, replaying recorded observations. They need no simulator,
-no GPU and no model weights: `uv sync`, an API key, and a few minutes.
+Six replay quickstarts and one live robot bridge for hosted Reactor robotics
+policies. They need no simulator, GPU, or model weights: `uv sync`, an API key,
+and a few minutes.
 
 Open the guide for the model you care about and run its script; there is no
 reading order. `xwam` is the reference implementation of
@@ -11,9 +11,10 @@ so it is the one to read if you want the contract itself rather than a model.
 
 ## Choose a model
 
-Every guide starts with the same lightweight recorded-observation replay. Its
-last two sections cover the optional closed-loop simulator and the remaining
-work for physical deployment. Published figures link to upstream sources;
+Every replay guide starts with the same lightweight recorded-observation
+workflow. Its last two sections cover the optional closed-loop simulator and
+the remaining work for physical deployment. Published figures link to
+upstream sources;
 figures labeled Reactor-measured come from the committed harness or fixture
 provenance.
 
@@ -30,6 +31,14 @@ provenance.
 depart from it (different state fields, no `chunk_id` echo, free-running
 instead of request/reply) and each guide states how for its own model. A
 client written against the generic contract will not drive them unchanged.
+
+## Live robot bridge
+
+[`dreamzero_yam_bridge.md`](./dreamzero_yam_bridge.md) and
+[`dreamzero_yam_bridge.py`](./dreamzero_yam_bridge.py) connect
+`dreamzero-yam-molmoact2` to a bimanual YAM robot. Run the example with
+placeholder cameras and state, then replace three methods to connect your
+hardware. The model returns free-running `(24, 14)` action chunks.
 
 ## Setup
 
@@ -58,7 +67,7 @@ At session close the SDK may log `WARNING Control channel not open; dropping
 'unpublish_track' notification` a few times. That is benign teardown noise —
 the session is already closing — not a failure.
 
-`REACTOR_API_URL` defaults to `https://api.reactor.inc` (PROD, where all six
+`REACTOR_API_URL` defaults to `https://api.reactor.inc` (PROD, where all seven
 models are served). It exists as an escape hatch for pointing at another
 deployment.
 
@@ -67,6 +76,8 @@ deployment.
 ```
 <model>_quickstart.py            the runnable script, one per model
 <model>_quickstart.md            its guide
+dreamzero_yam_bridge.py          live bimanual YAM bridge
+dreamzero_yam_bridge.md          integration guide and safety boundary
 reactor_robotics/
   session.py       connect + READY + tracks + keepalive; the shared plumbing
   track.py         a video track that repeats one frame until you replace it

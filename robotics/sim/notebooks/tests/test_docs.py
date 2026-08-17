@@ -26,6 +26,10 @@ MODELS = {
         "xr1_robocasa365_quickstart.md",
         "xr1_robocasa365_quickstart.py",
     ),
+    "dreamzero-yam-molmoact2": (
+        "dreamzero_yam_bridge.md",
+        "dreamzero_yam_bridge.py",
+    ),
 }
 
 FIXTURE_ACTIONS = {

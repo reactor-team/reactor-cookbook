@@ -9,10 +9,10 @@ physics simulator against the same served policies, using the Python
 
 ## Quickstarts
 
-**[`notebooks/`](./notebooks)** holds six runnable Python scripts, each with a
-guide, that drive a **hosted** Reactor robotics policy by replaying recorded
-observations. **No simulator, no GPU, no model weights**: `uv sync`, an API
-key, and a few minutes. Open the one for your model; there is no reading order.
+**[`notebooks/`](./notebooks)** holds seven runnable Python examples: six
+recorded-observation replays and one live robot bridge. **No simulator, no GPU,
+no model weights**: `uv sync`, an API key, and a few minutes. Open the one for
+your model; there is no reading order.
 
 - [`lingbot_va_quickstart.md`](./notebooks/lingbot_va_quickstart.md):
   `lingbot-va`, LIBERO manipulation. Lock-step, driven by an executed-action
@@ -33,6 +33,10 @@ key, and a few minutes. Open the one for your model; there is no reading order.
   predicts every engine tick (~100 ms), and the client filters chunks by
   engine ordering. `(40, 17)` split across three named fields; real FR3 rig
   frames.
+- [`dreamzero_yam_bridge.md`](./notebooks/dreamzero_yam_bridge.md):
+  `dreamzero-yam-molmoact2`, a live bridge for the bimanual YAM embodiment.
+  Replace three methods to connect cameras, robot state, and a controller;
+  the model returns `(24, 14)` action chunks.
 - [`dreamzero_quickstart.md`](./notebooks/dreamzero_quickstart.md):
   `dreamzero`, a 14B world-action model on the DROID/Franka embodiment.
   Free-running: it broadcasts `(24, 8)` chunks and the client uses `obs_seq`
@@ -43,11 +47,11 @@ key, and a few minutes. Open the one for your model; there is no reading order.
   packed chunks of which the first 12 columns are live. Its paper's
   benchmark is [`robocasa365/`](./robocasa365) below.
 
-[`notebooks/README.md`](./notebooks#choose-a-model) has a model matrix covering
-the wire protocol, action chunk, and available closed-loop harness.
+[`notebooks/README.md`](./notebooks#choose-a-model) covers the replay models and
+the live bridge.
 
-The client package the scripts import (`notebooks/reactor_robotics/`) is
-the same client an eval harness or a controller for a physical robot uses; see
+The replay scripts share `notebooks/reactor_robotics/`; the live bridge uses
+the SDK directly. See
 [robot-policy-client-contract.md](./notebooks/robot-policy-client-contract.md).
 
 ## The sim packages
