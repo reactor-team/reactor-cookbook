@@ -12,6 +12,10 @@ venv/
 AlayaWorld/
 weights/
 
+# The demo frontend is a separate app that reaches the model over the network,
+# so it stays out of the inference image.
+demo/
+
 # Editor, source-control, and Docker metadata
 .vscode/
 .idea/

@@ -2,7 +2,7 @@ apiVersion: v1beta
 kind: VideoModel
 
 model:
-  name: alayaworld-distilled
+  name: alaya-world
   version: v0.0.1
   description: |
     Play the distilled AlayaWorld model with live prompt and six-axis camera controls.
