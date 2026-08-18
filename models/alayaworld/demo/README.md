@@ -18,7 +18,7 @@ somewhere else takes no code change.
 Start the model first, from the example root:
 
 ```sh
-cd examples/alayaworld
+cd models/alayaworld
 reactor build
 reactor run --gpus device=0 -e HF_TOKEN
 ```

@@ -26,7 +26,7 @@ model image; the host only needs the CLI, Docker, and the NVIDIA prerequisites
 listed above. Build the image, then expose one GPU to the container:
 
 ```sh
-cd examples/open-dreamer
+cd models/open-dreamer
 reactor build
 reactor run --gpus device=0
 ```
@@ -47,8 +47,8 @@ reactor build && reactor run --gpus device=0
 
 Connect from the [Reactor Sandbox](https://reactor-sandbox.vercel.app/) using
 **Local (Direct)** and `http://localhost:8080`, or point the
-[JS SDK](https://docs.reactor.inc) at it with `local: true`. A quick liveness
-check:
+[JS SDK](https://docs.reactor.inc/sdk-reference/using-the-sdk) at it with
+`local: true`. A quick liveness check:
 
 ```sh
 curl -s localhost:8080/health

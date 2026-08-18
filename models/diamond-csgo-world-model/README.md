@@ -11,7 +11,7 @@ source snapshot into the model image.
 
 ## Prerequisites
 
-- The [Reactor CLI](https://deploy-docs.reactor.inc/platform/installation) and a
+- The [Reactor CLI](https://docs.reactor.inc/deploy/overview) and a
   running Docker daemon. On macOS:
 
   ```sh
@@ -38,7 +38,7 @@ runtime inside and runs it — nothing to install on your host but the CLI and
 Docker.
 
 ```sh
-cd examples/diamond-csgo-world-model
+cd models/diamond-csgo-world-model
 reactor build
 reactor run
 ```
@@ -68,7 +68,8 @@ Docker containers cannot access Metal/MPS, so Apple Silicon inference is
 CPU-only and substantially slower than host-native MPS.
 
 Connect a client from the [Reactor Sandbox](https://reactor-sandbox.vercel.app/)
-(pick **Local (Direct)**), or point the [JS SDK](https://docs.reactor.inc) at it
+(pick **Local (Direct)**), or point the
+[JS SDK](https://docs.reactor.inc/sdk-reference/using-the-sdk) at it
 with `local: true`. A quick liveness check:
 
 ```sh

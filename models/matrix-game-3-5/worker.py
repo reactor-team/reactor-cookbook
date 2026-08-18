@@ -166,7 +166,7 @@ class MatrixRuntime:
         if "interactive_session" not in inspect.signature(run_distilled_inference).parameters:
             raise RuntimeError(
                 "Matrix source is missing the Reactor stateful rollout patch; "
-                "apply the patch documented in examples/matrix_game_3_5/README.md"
+                "apply the patch documented in models/matrix-game-3-5/README.md"
             )
         self._config = load_inference_config(Path(settings["inference_config"]))
         if int(self._config.num_blocks) != 1:

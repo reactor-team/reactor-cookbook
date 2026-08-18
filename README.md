@@ -11,21 +11,31 @@
 ---
 
 Short, self-contained code you copy, run, and adapt — not reference
-documentation. For API references and guides, see the platform docs.
+documentation. For API references and guides, see the
+[Reactor docs](https://docs.reactor.inc).
 
 ## Structure
 
-- [`examples/`](./examples) contains short, self-contained examples.
-- [`robotics/`](./robotics) contains robot-policy quickstarts and simulator
-  integrations.
+The two top-level folders sit on opposite sides of a session.
+
+- [`models/`](./models) holds models you serve. Each folder is a `reactor`
+  workspace you build and run with the CLI, and everything that example needs
+  lives inside it — the adapter, its configuration, and any client shipped to
+  demonstrate it. [Build your own model](https://docs.reactor.inc/deploy/overview)
+  covers the workspace they follow.
+- [`robotics/`](./robotics) holds code that drives a model someone else is
+  already serving: policy quickstarts and closed-loop simulator integrations
+  built on the Python SDK.
 
 Each example has a README explaining what it does and how to run it.
 
 ## Contributing
 
-Adding an example? Put general examples under `examples/` and robotics examples
-under `robotics/`. Give each example a folder named for what it does (not the
-API it happens to call), and a README that leads with the problem it solves.
+Adding an example? Put it under [`models/`](./models) if it serves a model, and
+under [`robotics/`](./robotics) if it drives one that is already served. Keep
+each example self-contained, give the folder a name describing what it does
+rather than the API it happens to call, and lead its README with the problem it
+solves.
 
 ## License
 

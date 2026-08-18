@@ -29,15 +29,20 @@ starts generation.
 This directory is a `reactor` workspace. The manifest names the model and its
 B200 resource, the Dockerfile builds a Python 3.12 image with the CUDA 12.8
 PyTorch wheels, and `requirements.txt` pins Reactor Runtime alongside the model
-dependencies. The host needs only the
-[`reactor` CLI](https://deploy-docs.reactor.inc/platform/installation), Docker,
-the NVIDIA Container Toolkit, and a compatible NVIDIA GPU.
+dependencies. The host needs only the `reactor` CLI, Docker, the NVIDIA
+Container Toolkit, and a compatible NVIDIA GPU;
+[Build your own model](https://docs.reactor.inc/deploy/overview) covers the
+workspace it expects. On macOS the CLI installs with:
+
+```sh
+brew install reactor-team/tools/reactor-cli
+```
 
 Gemma is gated. Accept its Hugging Face license, export a read token, then build
 the image and expose one GPU to the container:
 
 ```sh
-cd examples/alayaworld
+cd models/alayaworld
 export HF_TOKEN=hf_your_read_token
 
 reactor build
@@ -73,7 +78,7 @@ write a prompt, and steer the camera from the keyboard while the video streams
 back. With the container running, start it in a second terminal:
 
 ```sh
-cd examples/alayaworld/demo
+cd models/alayaworld/demo
 pnpm install
 pnpm dev
 ```

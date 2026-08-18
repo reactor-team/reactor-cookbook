@@ -34,17 +34,20 @@ camera axes are sampled again before the next expensive chunk begins.
 
 ## Run with the Reactor CLI
 
-This directory is a `reactor` workspace and follows the public
-[quickstart](https://deploy-docs.reactor.inc/development/quickstart). The host
-needs only the
-[`reactor` CLI](https://deploy-docs.reactor.inc/platform/installation), Docker,
-the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. Matrix requires
-Linux, CUDA, and approximately 40 GB of VRAM at 704x1280.
+This directory is a `reactor` workspace, described in
+[Build your own model](https://docs.reactor.inc/deploy/overview). The host needs
+only the `reactor` CLI, Docker, the NVIDIA Container Toolkit, and a compatible
+NVIDIA GPU. Matrix requires Linux, CUDA, and approximately 40 GB of VRAM at
+704x1280. On macOS the CLI installs with:
+
+```sh
+brew install reactor-team/tools/reactor-cli
+```
 
 Build the Python 3.12 serving image, expose one GPU, and start Runtime:
 
 ```sh
-cd examples/matrix_game_3_5
+cd models/matrix-game-3-5
 reactor build
 reactor run --gpus device=0
 ```
@@ -78,8 +81,8 @@ curl -s -X POST localhost:8080/start_session \
 ```
 
 A WebRTC client consumes the `main_video` track at 16 FPS. Recording is enabled
-for that video track. Connect using a client described in the
-[deployment documentation](https://deploy-docs.reactor.inc).
+for that video track. Connect using a client built with the
+[Reactor SDK](https://docs.reactor.inc/sdk-reference/using-the-sdk).
 
 ## Public source and model assets
 
