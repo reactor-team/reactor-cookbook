@@ -11,7 +11,7 @@ source snapshot into the model image.
 
 ## Prerequisites
 
-- The [Reactor CLI](https://docs.reactor.inc/deploy/overview) and a
+- The [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation) and a
   running Docker daemon. On macOS:
 
   ```sh

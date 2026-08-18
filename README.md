@@ -12,7 +12,7 @@
 
 Short, self-contained code you copy, run, and adapt — not reference
 documentation. For API references and guides, see the
-[Reactor docs](https://docs.reactor.inc).
+[Reactor docs](https://docs.reactor.inc/overview).
 
 ## Structure
 

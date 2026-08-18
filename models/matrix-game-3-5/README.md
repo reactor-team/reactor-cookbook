@@ -36,13 +36,10 @@ camera axes are sampled again before the next expensive chunk begins.
 
 This directory is a `reactor` workspace, described in
 [Build your own model](https://docs.reactor.inc/deploy/overview). The host needs
-only the `reactor` CLI, Docker, the NVIDIA Container Toolkit, and a compatible
-NVIDIA GPU. Matrix requires Linux, CUDA, and approximately 40 GB of VRAM at
-704x1280. On macOS the CLI installs with:
-
-```sh
-brew install reactor-team/tools/reactor-cli
-```
+only the
+[`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
+the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. Matrix requires
+Linux, CUDA, and approximately 40 GB of VRAM at 704x1280.
 
 Build the Python 3.12 serving image, expose one GPU, and start Runtime:
 

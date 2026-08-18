@@ -29,14 +29,9 @@ starts generation.
 This directory is a `reactor` workspace. The manifest names the model and its
 B200 resource, the Dockerfile builds a Python 3.12 image with the CUDA 12.8
 PyTorch wheels, and `requirements.txt` pins Reactor Runtime alongside the model
-dependencies. The host needs only the `reactor` CLI, Docker, the NVIDIA
-Container Toolkit, and a compatible NVIDIA GPU;
-[Build your own model](https://docs.reactor.inc/deploy/overview) covers the
-workspace it expects. On macOS the CLI installs with:
-
-```sh
-brew install reactor-team/tools/reactor-cli
-```
+dependencies. The host needs only the
+[`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
+the NVIDIA Container Toolkit, and a compatible NVIDIA GPU.
 
 Gemma is gated. Accept its Hugging Face license, export a read token, then build
 the image and expose one GPU to the container:
