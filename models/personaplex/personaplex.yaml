@@ -1,0 +1,42 @@
+# PersonaPlex deployment settings.
+#
+# Only what a client cannot choose lives here. The persona, voice, and the two
+# sampling temperatures are client-settable, so their defaults are declared on
+# PersonaPlexState in personaplex_types.py — that way the published schema and
+# the running model cannot disagree about them.
+
+assets:
+  # The model repository is gated: accept its licence on Hugging Face and pass
+  # a read token to the container as HF_TOKEN before the first start.
+  repo_id: nvidia/personaplex-7b-v1
+
+  # Immutable commit rather than `main`, so a rebuild downloads the same
+  # checkpoint, codec, tokenizer, and voice set as every start before it.
+  revision: fdaf4090a61cb315c138a1faee287ffd6c716309
+
+  # Where the downloaded assets land, relative to the CLI's weights mount
+  # (`runtime.weights_path` in reactor.yaml, exported as REACTOR_WEIGHTS_PATH).
+  # Roughly 20 GB once the checkpoint and voices are on disk.
+  path: assets
+
+# Torch device for the language model and the codec. `auto` prefers CUDA.
+device: auto
+
+# Move language-model layers to host memory when GPU memory is short. Costs
+# latency on every step, so leave it off unless a start fails for memory.
+cpu_offload: false
+
+sampling:
+  # Top-k cutoffs, fixed per deployment; the temperatures beside them are the
+  # client-settable half of the same sampling controls.
+  audio_top_k: 250
+  text_top_k: 25
+
+# Silence held between the voice prompt, the role prompt, and the conversation,
+# matching upstream's spacer. Shortening it makes conditioning faster and the
+# transition into speech more abrupt.
+prompt_silence_seconds: 0.5
+
+# Seed applied before each conversation. -1 leaves generation unseeded, which is
+# what a conversation normally wants; a fixed value makes a rollout repeatable.
+seed: -1

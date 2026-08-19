@@ -1,0 +1,17 @@
+# The PersonaPlex model code, from the pinned upstream commit rather than a
+# branch head, so the same build installs the same source every time. Published
+# only as a subdirectory of its repository, never to PyPI.
+#
+# It is installed on its own, with --no-deps, because its metadata declares
+# `torch >= 2.2, < 2.5` and Blackwell support starts at PyTorch 2.7 — no single
+# resolution can satisfy both, and pip refuses the install outright with
+# ResolutionImpossible. Everything it declares is restated in requirements.txt
+# instead, alongside the two dependencies it imports without declaring.
+#
+# The ceiling is conservative rather than load-bearing: PersonaPlex touches only
+# mainstream PyTorch, and its whole inference path — Mimi streaming
+# encode/decode, LMGen.step, the .wav voice-prompt path, and
+# step_system_prompts — runs unmodified on the pinned torch above. What this
+# gives up is the single-pass guarantee: a conflict between the runtime and this
+# package now surfaces at model load instead of during the build.
+moshi-personaplex @ git+https://github.com/NVIDIA/personaplex.git@3428dfd95309a7f3c84fd93259ded0f810d1ff91#subdirectory=moshi
