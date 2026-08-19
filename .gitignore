@@ -2,3 +2,9 @@
 __pycache__/
 node_modules/
 .venv/
+
+# Next.js writes build output to an absolute path, so a dev server left running
+# across a directory move recreates it where the folder used to be, outside the
+# reach of that folder's own ignore file. Ignoring it here covers the tree.
+.next/
+*.tsbuildinfo
