@@ -1,19 +1,84 @@
-apiVersion: v1beta
-kind: VideoModel
+# Reactor model spec for the DIAMOND CSGO recipe.
+#
+# `$schema` pins the schema this file is written against — reactor/v1 is the
+# current one. Keep it as the first line.
+$schema: reactor/v1
 
+# The `model:` block is read by `reactor model register/publish/deploy` and
+# describes the model to the platform. The `runtime:` block is read by the
+# runtime and names the class to serve. To deploy this recipe under your own
+# account, edit `model.name` and the resources below, then:
+#
+#   reactor run --gpus all   # serve locally
+#   reactor model publish    # build the image and prepare a release
+#   reactor model deploy     # activate that release for traffic
 model:
+  # Model name used in CLI args and API responses. Change it to something
+  # unique to your account before publishing — a name already registered by
+  # someone else is rejected. Segments must be lowercase [a-z0-9] runs
+  # separated by '.', '_' or '-'.
   name: diamond-csgo-world-model
+
+  # The release tag `reactor model publish` / `reactor model deploy` use when
+  # no `<model>:<release>` is passed on the command line. Releases are
+  # immutable, so bump this after every successful publish.
   version: v0.0.1
+
   description: |
     Play DIAMOND's Counter-Strike world model with native keyboard and mouse input.
 
+  # A new model registers private. Leave this key out and `reactor model
+  # update` will not touch the setting. Write it to make this file
+  # authoritative: true makes the model discoverable by every Reactor account.
+  # public: false
+
+  # Scheduler resources for a deployed instance. Declare all three keys:
+  # `reactor model update` replaces the model's mutable fields with what is in
+  # this file, so a key left out is cleared server-side rather than kept.
+  #
+  # The `gpu:` key is what marks a model as needing an accelerator. DIAMOND
+  # will run on CPU, but far below its native 15 FPS — slow enough that the
+  # stream is no longer interactive. A deployed instance is expected to serve
+  # real-time play, so it asks for a GPU here. Drop the `gpu:` key to schedule
+  # this as a CPU-only model and accept the frame rate.
+  resources:
+    # `reactor gpu ls` lists every accelerator type the platform accepts.
+    # DIAMOND is a small diffusion model — the checkpoint is about 1.4 GB — so
+    # it does not need a large card. This asks for the same accelerator the
+    # sibling recipes use; a smaller type from `reactor gpu ls` also serves it,
+    # subject to what your account has available.
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    # Host CPU, as Kubernetes quantities. Denoising runs on the GPU; these
+    # cores carry the action loop, frame encoding, and WebRTC.
+    cpu:
+      request: "2"
+      limit: "6"
+    # Host memory. The checkpoint and spawn bundle come to about 1.4 GB, so
+    # this model is comfortable well under the platform's default ceiling.
+    # Sized as a starting point — confirm against your own traffic.
+    memory:
+      request: 4Gi
+      limit: 16Gi
+
 runtime:
   import: diamond:Diamond
+
+  # Path to the model hyperparameters file, relative to this reactor.yaml. The
+  # runtime resolves it and hands the path to `load()`; this model reads the
+  # upstream checkpoint revision, device, and denoising profile from it. Set
+  # `profile: higher_quality` there for cleaner frames at lower throughput.
   config: diamond.yaml
 
 build:
+  # The reactor-runtime release this workspace is built against. The install
+  # pin is the `reactor-runtime==<version>` line in requirements.txt; bump it
+  # there and here together to upgrade.
   runtime_version: "3.1.2"
 
+# Session recording. The runtime records the named video track in chunks and
+# serves clips up to `clip_max_seconds`. DIAMOND emits no audio.
 recording:
   enabled: true
   chunk_seconds: 4
