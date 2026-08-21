@@ -25,7 +25,7 @@ key. Create a key from **API Keys** in the [Reactor dashboard](https://reactor.i
 
 ```bash
 git clone https://github.com/reactor-team/reactor-cookbook.git
-cd reactor-cookbook/models/lingbot-world-2/arcade
+cd reactor-cookbook/examples/world-model-arcade
 cp .env.example .env.local
 ```
 
@@ -51,7 +51,7 @@ world generation uses your Reactor account and may incur usage charges.
 You can hand the entire setup to a local coding agent with a request like:
 
 > Clone `https://github.com/reactor-team/reactor-cookbook.git`. Open
-> `models/lingbot-world-2/arcade`, install its dependencies, and create `.env.local`
+> `examples/world-model-arcade`, install its dependencies, and create `.env.local`
 > without committing it. If `REACTOR_API_KEY` is not already available, ask me
 > for it. Start the development server and tell me the local URL when the arcade
 > is ready.
