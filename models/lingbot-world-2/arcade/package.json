@@ -1,0 +1,27 @@
+{
+  "name": "world-model-arcade",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.6",
+    "@react-three/fiber": "^9.3.0",
+    "@reactor-models/lingbot-world-2": "^0.2.5",
+    "next": "^16.3.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/three": "^0.180.0",
+    "typescript": "^5.9.0"
+  }
+}
