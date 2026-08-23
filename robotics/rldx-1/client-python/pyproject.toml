@@ -1,0 +1,22 @@
+[project]
+name = "rldx-1-client-python"
+version = "0.2.0"
+description = "Reactor Python SDK client for RLDX-1 — frame-metadata sync and timeline correlation"
+requires-python = ">=3.10"
+dependencies = [
+    # The only 1.x pin in this cookbook, deliberately. Per-frame metadata does
+    # not exist in the 0.x SDK: `push_frame(..., user_data=, capture_time_us=)`
+    # and `time_micros()` — the whole subject of this example — arrived with 1.0.
+    # Do not "fix" this pin downward to match the other examples.
+    #
+    # The floor is 1.1.1 rather than 1.1.0 because 1.1.0 accepted
+    # `capture_time_us` and then dropped it, stamping the engine's own send
+    # instant instead — so a tick's three views reached the model a few hundred
+    # microseconds apart instead of sharing one instant, and cross-view alignment
+    # had nothing exact to align on. 1.1.1 carries the declared value through.
+    "reactor-sdk>=1.1.1",
+    "numpy>=1.24.0",
+]
+# No aiortc / av. On the 1.x SDK a published track is a `reactor_sdk.Track` that
+# takes numpy frames through `push_frame`; there is no aiortc MediaStreamTrack to
+# subclass and no PyAV VideoFrame to build.

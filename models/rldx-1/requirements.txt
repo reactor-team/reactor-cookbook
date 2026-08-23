@@ -1,0 +1,55 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
+# Dependencies for the RLDX-1 ReactorPipeline port.
+#
+# The Dockerfile fetches the pinned upstream source into /opt/rldx-1 and adds
+# it to PYTHONPATH. This file pins the serving dependency closure, minus the
+# packages the Dockerfile installs explicitly for Blackwell/B200:
+#   torch==2.7.0, torchvision==0.22.0  -> cu128 wheel index (Dockerfile)
+#   flash-attn==2.7.4.post1            -> built from source (Dockerfile)
+#   torchcodec==0.4.0                  -> omitted (video decode; unused at serving)
+# Keep the runtime pin in sync with build.runtime_version in reactor.yaml.
+
+reactor-runtime==3.2.2
+albumentations==1.4.18
+av==18.1.0
+diffusers==0.35.1
+dm-tree==0.1.8
+lmdb==1.7.5
+msgpack==1.1.0
+msgpack-numpy==0.4.8
+pandas==2.2.3
+peft==0.17.1
+termcolor==3.2.0
+transformers==4.57.0
+tyro==0.9.17
+click==8.1.8
+datasets==3.6.0
+einops==0.8.1
+gymnasium==1.2.2
+matplotlib==3.10.1
+# numpy and av floors come from reactor-runtime 3.x (numpy>=2.1, av>=18.0.0).
+# The upstream RLDX pins were numpy==1.26.4 / av==15.0.0, which the single
+# resolution pass cannot satisfy alongside the runtime. These exact pins are a
+# jointly resolved runtime/model closure, so rebuilds do not drift. Nothing in
+# this adapter or its pinned RLDX path touches a numpy API that numpy 2 removed.
+numpy==2.4.6
+omegaconf==2.3.0
+scipy==1.15.3
+# wandb is dropped, not pinned: it caps protobuf below 7 and the runtime floors
+# it at 7.35.1, so the single resolution pass has no solution and the image
+# cannot build with both. Nothing serves through wandb — the vendored tree names
+# it only in two unused fields of a *training* config — so it goes the way of the
+# other training-only pins the header describes.
+pyzmq==27.0.1
+deepspeed==0.17.6
+moviepy==1.0.3
+opencv-contrib-python-headless==4.11.0.86
+accelerate==1.14.0
+safetensors==0.8.0
+huggingface-hub==0.36.2
+Pillow==12.3.0
+tqdm==4.70.0
+requests==2.34.2
+PyYAML==6.0.3
+packaging==26.3
+websockets==17.0.1

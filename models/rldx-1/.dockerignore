@@ -1,0 +1,9 @@
+# Keep the docker build context small + reproducible.
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+tests/
+outputs/
+.rsync-exclude
