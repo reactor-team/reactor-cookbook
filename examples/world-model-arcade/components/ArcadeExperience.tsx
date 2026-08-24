@@ -6,10 +6,20 @@ import {
   useLingbotWorld2,
   useLingbotWorld2Message,
 } from "@reactor-models/lingbot-world-2";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { ArcadeScene } from "@/components/ArcadeScene";
 import { GamepadViewerOverlay } from "@/components/GamepadViewerOverlay";
-import { useControllerInput } from "@/hooks/useControllerInput";
+import {
+  useControllerInput,
+  type InputMethod,
+} from "@/hooks/useControllerInput";
 import {
   captureWorldFrame,
   compareFrameSignatures,
@@ -86,10 +96,20 @@ function XboxGlyph({ button }: { button: FaceButton | "lb" | "rb" | "view" | "me
   return <span className={`xbox-glyph xbox-${button}`}>{button.toUpperCase()}</span>;
 }
 
+function KeyboardGlyph({ label }: { label: string }) {
+  return (
+    <span className={`keyboard-glyph ${label.length > 2 ? "is-wide" : ""}`}>
+      {label}
+    </span>
+  );
+}
+
 function RoomOverlay({
+  inputMethod,
   near,
   onInteract,
 }: {
+  inputMethod: InputMethod;
   near: boolean;
   onInteract: () => void;
 }) {
@@ -98,7 +118,7 @@ function RoomOverlay({
       <section className="room-intro">
         <p className="system-label">WORLD MODEL ARCADE</p>
         <h1>Pick a world.</h1>
-        <p>Walk up to the cabinet. Your controller carries across every game.</p>
+        <p>Walk up to the cabinet. Your controls carry across every game.</p>
       </section>
       <div className={`focus-reticle ${near ? "is-near" : ""}`} aria-hidden="true">
         <span />
@@ -112,9 +132,17 @@ function RoomOverlay({
         Use arcade cabinet
       </button>
       <div className="room-controls">
-        <span><XboxGlyph button="ls" /> MOVE</span>
-        <span><XboxGlyph button="rs" /> LOOK</span>
-        <span className="keyboard-hint">WASD + ARROWS</span>
+        {inputMethod === "keyboard" ? (
+          <>
+            <span><KeyboardGlyph label="WASD" /> MOVE</span>
+            <span><KeyboardGlyph label="MOUSE" /> LOOK</span>
+          </>
+        ) : (
+          <>
+            <span><XboxGlyph button="ls" /> MOVE</span>
+            <span><XboxGlyph button="rs" /> LOOK</span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -168,12 +196,14 @@ function CabinetOverlay({
 
 function BootOverlay({
   game,
+  inputMethod,
   state,
   onCancel,
   onRetry,
   onPreview,
 }: {
   game: ArcadeGame;
+  inputMethod: InputMethod;
   state: BootState;
   onCancel: () => void;
   onRetry: () => void;
@@ -196,8 +226,14 @@ function BootOverlay({
               <h2>THE WORLD DIDN&apos;T OPEN</h2>
               <p>Give it another try, or preview the controls while you wait.</p>
               <div className="boot-actions">
-                <button onClick={onRetry}><XboxGlyph button="a" /> RETRY</button>
-                <button onClick={onPreview}><XboxGlyph button="x" /> LOCAL PREVIEW</button>
+                <button onClick={onRetry}>
+                  {inputMethod === "keyboard" ? <KeyboardGlyph label="ENTER" /> : <XboxGlyph button="a" />}
+                  RETRY
+                </button>
+                <button onClick={onPreview}>
+                  {inputMethod === "keyboard" ? <KeyboardGlyph label="3" /> : <XboxGlyph button="x" />}
+                  LOCAL PREVIEW
+                </button>
               </div>
             </>
           ) : (
@@ -209,7 +245,10 @@ function BootOverlay({
           )}
         </div>
       </section>
-      <button className="cancel-boot" onClick={onCancel}><XboxGlyph button="view" /> CANCEL</button>
+      <button className="cancel-boot" onClick={onCancel}>
+        {inputMethod === "keyboard" ? <KeyboardGlyph label="ESC" /> : <XboxGlyph button="view" />}
+        CANCEL
+      </button>
     </div>
   );
 }
@@ -217,11 +256,13 @@ function BootOverlay({
 function QuickActions({
   game,
   active,
+  inputMethod,
   onDown,
   onUp,
 }: {
   game: ArcadeGame;
   active: FaceButton[];
+  inputMethod: InputMethod;
   onDown: (button: FaceButton) => void;
   onUp: (button: FaceButton) => void;
 }) {
@@ -235,7 +276,11 @@ function QuickActions({
           onPointerUp={() => onUp(button)}
           onPointerLeave={() => onUp(button)}
         >
-          <XboxGlyph button={button} />
+          {inputMethod === "keyboard" ? (
+            <KeyboardGlyph label={String(({ a: 1, b: 2, x: 3, y: 4 } as const)[button])} />
+          ) : (
+            <XboxGlyph button={button} />
+          )}
           <span>{game.actions[button].label}</span>
         </button>
       ))}
@@ -328,6 +373,7 @@ function GameHud({
   paused,
   localPreview,
   activeButtons,
+  inputMethod,
   axesRef,
   buttonsRef,
   resetToken,
@@ -349,6 +395,7 @@ function GameHud({
   paused: boolean;
   localPreview: boolean;
   activeButtons: FaceButton[];
+  inputMethod: InputMethod;
   axesRef: ReturnType<typeof useControllerInput>["axesRef"];
   buttonsRef: ReturnType<typeof useControllerInput>["buttonsRef"];
   resetToken: number;
@@ -684,19 +731,35 @@ function GameHud({
       </div>
       <GameSpecificHud game={game} />
       <div className="stick-help">
-        <span><XboxGlyph button="ls" /> MOVE</span>
-        <span><XboxGlyph button="rs" /> LOOK</span>
+        <span>
+          {inputMethod === "keyboard" ? <KeyboardGlyph label="WASD" /> : <XboxGlyph button="ls" />}
+          MOVE
+        </span>
+        <span>
+          {inputMethod === "keyboard" ? <KeyboardGlyph label="MOUSE" /> : <XboxGlyph button="rs" />}
+          LOOK
+        </span>
       </div>
       <QuickActions
         game={game}
         active={activeButtons}
+        inputMethod={inputMethod}
         onDown={onActionDown}
         onUp={onActionUp}
       />
       <div className="game-system-controls">
-        <button onClick={onToggleDebug}><XboxGlyph button="lb" /> DEBUG</button>
-        <button onClick={onReset}><XboxGlyph button="menu" /> RESTART</button>
-        <button onClick={onExit}><XboxGlyph button="view" /> ARCADE</button>
+        <button onClick={onToggleDebug}>
+          {inputMethod === "keyboard" ? <KeyboardGlyph label="Q" /> : <XboxGlyph button="lb" />}
+          DEBUG
+        </button>
+        <button onClick={onReset}>
+          {inputMethod === "keyboard" ? <KeyboardGlyph label="P" /> : <XboxGlyph button="menu" />}
+          RESTART
+        </button>
+        <button onClick={onExit}>
+          {inputMethod === "keyboard" ? <KeyboardGlyph label="TAB" /> : <XboxGlyph button="view" />}
+          ARCADE
+        </button>
       </div>
       {debugVisible && (
         <aside className="consistency-debug">
@@ -718,6 +781,7 @@ function GameHud({
 }
 
 function ReactorArcade({ configured }: { configured: boolean }) {
+  const appRef = useRef<HTMLElement>(null);
   const lw2 = useLingbotWorld2();
   const { status, sendCommand, uploadFile } = lw2;
   const [phase, setPhase] = useState<Phase>("room");
@@ -737,6 +801,7 @@ function ReactorArcade({ configured }: { configured: boolean }) {
   const [debugVisible, setDebugVisible] = useState(false);
   const [paused, setPaused] = useState(false);
   const [localPreview, setLocalPreview] = useState(false);
+  const [softMouseLook, setSoftMouseLook] = useState(false);
 
   const phaseRef = useRef<Phase>(phase);
   const statusRef = useRef(status);
@@ -1280,6 +1345,70 @@ function ReactorArcade({ configured }: { configured: boolean }) {
 
   const controller = useControllerInput({ onButtonDown, onButtonUp });
 
+  const captureMouseLook = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (
+        event.button !== 0 ||
+        (phaseRef.current !== "room" && phaseRef.current !== "game") ||
+        document.pointerLockElement
+      ) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest("button, a, input, textarea, select, [role='button']")
+      ) {
+        return;
+      }
+      if (typeof event.currentTarget.requestPointerLock !== "function") {
+        setSoftMouseLook(true);
+        return;
+      }
+      try {
+        const request = event.currentTarget.requestPointerLock();
+        request?.catch(() => setSoftMouseLook(true));
+      } catch {
+        setSoftMouseLook(true);
+      }
+    },
+    [],
+  );
+
+  const updateSoftMouseLook = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (
+        !softMouseLook ||
+        (phaseRef.current !== "room" && phaseRef.current !== "game")
+      ) {
+        return;
+      }
+      controller.applyMouseLook(event.movementX, event.movementY);
+    },
+    [controller.applyMouseLook, softMouseLook],
+  );
+
+  useEffect(() => {
+    if (phase !== "room" && phase !== "game") {
+      setSoftMouseLook(false);
+      if (document.pointerLockElement === appRef.current) {
+        document.exitPointerLock();
+      }
+    }
+  }, [phase]);
+
+  useEffect(() => {
+    if (!softMouseLook) return;
+    const releaseSoftMouseLook = (event: KeyboardEvent) => {
+      if (event.code !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setSoftMouseLook(false);
+    };
+    window.addEventListener("keydown", releaseSoftMouseLook, true);
+    return () => window.removeEventListener("keydown", releaseSoftMouseLook, true);
+  }, [softMouseLook]);
+
   useEffect(() => {
     let navigationLatch = 0;
     const timer = window.setInterval(() => {
@@ -1391,21 +1520,34 @@ function ReactorArcade({ configured }: { configured: boolean }) {
 
   const selectedGame = GAMES[selectedIndex];
   const activeGame = currentGameRef.current;
+  const inputMethod = controller.lastDevice;
   const scenePhase: "room" | "cabinet" | "booting" =
     phase === "room" ? "room" : phase === "booting" ? "booting" : "cabinet";
 
   return (
-    <main className="arcade-app">
+    <main
+      ref={appRef}
+      className="arcade-app"
+      data-pointer-locked={controller.pointerLocked ? "true" : "false"}
+      data-mouse-look-active={
+        controller.pointerLocked || softMouseLook ? "true" : "false"
+      }
+      onPointerDown={captureMouseLook}
+      onPointerMove={updateSoftMouseLook}
+      onPointerLeave={() => setSoftMouseLook(false)}
+    >
       {phase !== "game" ? (
         <div className="scene-shell">
           <ArcadeScene
             phase={scenePhase}
             game={selectedGame}
+            inputMethod={inputMethod}
             axesRef={controller.axesRef}
             onNearChange={setNearCabinet}
           />
           {phase === "room" && (
             <RoomOverlay
+              inputMethod={inputMethod}
               near={nearCabinet}
               onInteract={() => {
                 if (nearCabinet) setPhase("cabinet");
@@ -1424,6 +1566,7 @@ function ReactorArcade({ configured }: { configured: boolean }) {
           {phase === "booting" && (
             <BootOverlay
               game={selectedGame}
+              inputMethod={inputMethod}
               state={bootState}
               onCancel={cancelBoot}
               onRetry={launchGame}
@@ -1455,6 +1598,7 @@ function ReactorArcade({ configured }: { configured: boolean }) {
             paused={paused}
             localPreview={localPreview}
             activeButtons={activeButtons}
+            inputMethod={inputMethod}
             axesRef={controller.axesRef}
             buttonsRef={controller.buttonsRef}
             resetToken={hudResetToken}
@@ -1470,7 +1614,10 @@ function ReactorArcade({ configured }: { configured: boolean }) {
         axesRef={controller.axesRef}
         buttonsRef={controller.buttonsRef}
         connected={controller.connected}
+        inputMethod={inputMethod}
+        keysRef={controller.keysRef}
         mode={phase}
+        mouseLookActive={controller.pointerLocked || softMouseLook}
       />
     </main>
   );

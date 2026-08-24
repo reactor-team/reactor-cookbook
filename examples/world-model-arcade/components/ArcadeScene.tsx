@@ -10,7 +10,10 @@ import {
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import type { ControllerAxes } from "@/hooks/useControllerInput";
+import type {
+  ControllerAxes,
+  InputMethod,
+} from "@/hooks/useControllerInput";
 import { GAMES, type ArcadeGame } from "@/lib/games";
 
 type ScenePhase = "room" | "cabinet" | "booting";
@@ -18,6 +21,7 @@ type ScenePhase = "room" | "cabinet" | "booting";
 type ArcadeSceneProps = {
   phase: ScenePhase;
   game: ArcadeGame;
+  inputMethod: InputMethod;
   axesRef: MutableRefObject<ControllerAxes>;
   onNearChange: (near: boolean) => void;
 };
@@ -504,6 +508,7 @@ function drawCover(
 function drawButtonPrompt(
   context: CanvasRenderingContext2D,
   button: "A" | "X",
+  inputMethod: InputMethod,
   label: string,
   x: number,
   y: number,
@@ -518,24 +523,37 @@ function drawButtonPrompt(
   context.fill();
   context.stroke();
 
+  const control =
+    inputMethod === "keyboard" ? (button === "A" ? "ENTER" : "3") : button;
+  const controlWidth = inputMethod === "keyboard" ? (button === "A" ? 58 : 34) : 34;
+  const controlX = x + 14;
+
   context.fillStyle = emphasized ? "#11171a" : "#071014";
-  context.strokeStyle = emphasized ? "rgba(17, 23, 26, 0.62)" : button === "A" ? "#7fa276" : "#7196ac";
+  context.strokeStyle = emphasized
+    ? "rgba(17, 23, 26, 0.62)"
+    : button === "A"
+      ? "#7fa276"
+      : "#7196ac";
   context.beginPath();
-  context.arc(x + 31, y + 31, 17, 0, Math.PI * 2);
+  if (inputMethod === "keyboard") {
+    context.roundRect(controlX, y + 14, controlWidth, 34, 3);
+  } else {
+    context.arc(x + 31, y + 31, 17, 0, Math.PI * 2);
+  }
   context.fill();
   context.stroke();
 
   context.fillStyle = emphasized ? "#f4e8ca" : button === "A" ? "#bad8b1" : "#acd0e3";
-  context.font = "700 18px Arial, sans-serif";
+  context.font = `700 ${inputMethod === "keyboard" ? 12 : 18}px Arial, sans-serif`;
   context.textAlign = "center";
-  context.fillText(button, x + 31, y + 38);
+  context.fillText(control, controlX + controlWidth / 2, y + 37);
   context.textAlign = "left";
   context.fillStyle = emphasized ? "#11171a" : "#f1f2ed";
-  context.font = "700 17px Arial, sans-serif";
-  context.fillText(label, x + 59, y + 38);
+  context.font = `700 ${inputMethod === "keyboard" ? 15 : 17}px Arial, sans-serif`;
+  context.fillText(label, controlX + controlWidth + 12, y + 38);
 }
 
-function useCabinetMenuTexture(game: ArcadeGame) {
+function useCabinetMenuTexture(game: ArcadeGame, inputMethod: InputMethod) {
   const [texture, setTexture] = useState<THREE.CanvasTexture | null>(null);
 
   useEffect(() => {
@@ -599,8 +617,8 @@ function useCabinetMenuTexture(game: ArcadeGame) {
       context.letterSpacing = "0px";
       context.fillText(game.deck, 42, 440, 560);
 
-      drawButtonPrompt(context, "A", "ENTER WORLD", 42, 486, 214, true);
-      drawButtonPrompt(context, "X", "PREVIEW HUD", 270, 486, 214);
+      drawButtonPrompt(context, "A", inputMethod, "ENTER WORLD", 42, 486, 214, true);
+      drawButtonPrompt(context, "X", inputMethod, "PREVIEW HUD", 270, 486, 214);
 
       context.fillStyle = "#879198";
       context.font = "700 13px Arial, sans-serif";
@@ -687,7 +705,7 @@ function useCabinetMenuTexture(game: ArcadeGame) {
       cancelled = true;
       nextTexture.dispose();
     };
-  }, [game]);
+  }, [game, inputMethod]);
 
   return texture;
 }
@@ -703,15 +721,17 @@ function CabinetScrew({ position }: { position: [number, number, number] }) {
 
 function Cabinet({
   game,
+  inputMethod,
   phase,
   surfaceMaps,
 }: {
   game: ArcadeGame;
+  inputMethod: InputMethod;
   phase: ScenePhase;
   surfaceMaps?: SurfaceMaps;
 }) {
   const attractTexture = useAttractTexture();
-  const menuTexture = useCabinetMenuTexture(game);
+  const menuTexture = useCabinetMenuTexture(game, inputMethod);
   const wordmarkTexture = useTexture("/brand/reactor-lockup-white.png");
   const displayTexture = phase === "room" ? attractTexture : menuTexture;
   wordmarkTexture.colorSpace = THREE.SRGBColorSpace;
@@ -1047,6 +1067,7 @@ function Cabinet({
 function SceneRig({
   phase,
   game,
+  inputMethod,
   axesRef,
   onNearChange,
 }: ArcadeSceneProps) {
@@ -1180,6 +1201,7 @@ function SceneRig({
       />
       <Cabinet
         game={game}
+        inputMethod={inputMethod}
         phase={phase}
         surfaceMaps={architecturalMaps?.cabinet}
       />

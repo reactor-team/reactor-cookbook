@@ -1,9 +1,10 @@
 # World Model Arcade
 
-A complete controller-first interface for switching between seven real-time
-world-model experiences without leaving a shared 3D arcade. The room, cabinet,
-game selector, controller visualization, and HUD run locally; launching a world
-starts a live [`reactor/lingbot-world-2`](https://docs.reactor.inc/model-api-reference/lingbot-world-2/overview)
+A complete keyboard-first, controller-compatible interface for switching
+between seven real-time world-model experiences without leaving a shared 3D
+arcade. The room, cabinet, game selector, input visualization, and HUD run
+locally; launching a world starts a live
+[`reactor/lingbot-world-2`](https://docs.reactor.inc/model-api-reference/lingbot-world-2/overview)
 session using that world's reference frame and prompt contract.
 
 ![World Model Arcade lobby](./docs/preview.png)
@@ -13,7 +14,7 @@ to make a generative experience feel like a product:
 
 - keep the Reactor API key on the server and mint a scoped, short-lived token;
 - condition one model with several visual anchors and world contracts;
-- translate gamepad and keyboard input into persistent movement state;
+- translate keyboard, mouse, and gamepad input into persistent movement state;
 - make held face-button actions survive model chunk boundaries;
 - drive conventional HUD telemetry immediately from the same controls; and
 - audit visual continuity and re-anchor a world when it drifts.
@@ -44,7 +45,8 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000). Walk up to the cabinet,
 press <kbd>A</kbd> or <kbd>Enter</kbd>, choose a world, and launch it. Live
-world generation uses your Reactor account and may incur usage charges.
+world generation uses your Reactor account and may incur usage charges. Click
+the scene to capture mouse look; press <kbd>Escape</kbd> to release it.
 
 ## Give this to a coding agent
 
@@ -64,15 +66,17 @@ receives a scoped session token, never the API key.
 | Input | Arcade | In a world |
 | --- | --- | --- |
 | Left stick / WASD | Walk, move selection | Move or steer |
-| Right stick / arrow keys | Look around | Look; also drives reactive HUD instruments |
+| Right stick / mouse | Look around | Look; also drives reactive HUD instruments |
+| Click scene / Escape | Capture or release mouse look | Capture or release mouse look |
 | A / Enter or 1 | Use cabinet, launch selection | Primary world action |
 | B, X, Y / 2, 3, 4 | Back; X previews a world locally | World-specific quick actions |
 | LB, RB / Q, E | Previous / next world | LB toggles diagnostics |
 | Menu / P | — | Return to the world's first frame |
-| View / Tab or Escape | Step back | Leave the current world |
+| View / Tab | Step back | Leave the current world |
 
-The controller diagram is interactive. Keyboard input updates it too, so the
-demo remains legible while screen recording without a connected gamepad.
+The input overlay defaults to a live keyboard map and switches to the Xbox view
+when a controller is used. A small prompt makes the optional controller path
+discoverable without obscuring the demo.
 
 ## Where to change things
 

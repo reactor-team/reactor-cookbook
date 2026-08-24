@@ -66,6 +66,10 @@ button:focus-visible {
   background: var(--interstellar);
 }
 
+.arcade-app[data-pointer-locked="true"] {
+  cursor: none;
+}
+
 .system-label,
 .world-telemetry,
 .flight-heading,
@@ -421,6 +425,33 @@ button:focus-visible {
 .xbox-y {
   border-color: #c6b56d;
   color: #eadb99;
+}
+
+.keyboard-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  border-radius: 3px;
+  background: #191a18;
+  color: var(--dune-light);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.42);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.keyboard-glyph.is-wide {
+  min-width: 40px;
 }
 
 .cabinet-screen-controls {
@@ -859,6 +890,204 @@ button:focus-visible {
   position: relative;
   width: 180px;
   height: 151px;
+}
+
+.input-overlay-keyboard {
+  width: min(390px, calc(100vw - 32px));
+  filter: drop-shadow(0 18px 24px rgba(3, 5, 7, 0.34));
+  opacity: 0.94;
+}
+
+.input-overlay-keyboard .input-overlay-viewport {
+  width: 100%;
+  height: auto;
+}
+
+.controller-connect-prompt {
+  position: absolute;
+  bottom: calc(100% + 11px);
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 284px;
+  padding: 9px 10px 9px 12px;
+  border: 1px solid rgba(199, 192, 153, 0.28);
+  border-radius: 3px;
+  background: rgba(8, 10, 10, 0.9);
+  box-shadow: 0 14px 42px rgba(3, 5, 7, 0.26);
+  color: rgba(241, 242, 237, 0.62);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.04em;
+  line-height: 1.45;
+  pointer-events: auto;
+  transform: translateX(-50%);
+  backdrop-filter: blur(12px);
+}
+
+.controller-connect-prompt span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.controller-connect-prompt b {
+  color: var(--dune-light);
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  font-weight: 720;
+  letter-spacing: 0.08em;
+}
+
+.controller-connect-prompt button {
+  flex: 0 0 auto;
+  padding: 5px 6px;
+  border: 1px solid rgba(241, 242, 237, 0.18);
+  border-radius: 3px;
+  background: rgba(241, 242, 237, 0.04);
+  color: rgba(241, 242, 237, 0.58);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 6px;
+  letter-spacing: 0.08em;
+}
+
+.controller-connect-prompt button:hover {
+  border-color: rgba(199, 192, 153, 0.5);
+  color: var(--dune-light);
+}
+
+.controller-connect-prompt button:active {
+  transform: translateY(1px);
+}
+
+.keyboard-map {
+  display: grid;
+  grid-template-columns: 72px 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 82px;
+  padding: 10px 12px;
+  border: 1px solid rgba(241, 242, 237, 0.16);
+  border-radius: 3px;
+  background: rgba(7, 10, 11, 0.84);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    0 18px 42px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(12px);
+}
+
+.keyboard-cluster {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+}
+
+.keyboard-cluster > span {
+  color: rgba(241, 242, 237, 0.48);
+  font-family: var(--font-mono);
+  font-size: 6px;
+  letter-spacing: 0.11em;
+}
+
+.keyboard-key-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 20px);
+  grid-template-rows: repeat(2, 20px);
+  gap: 3px;
+}
+
+.keyboard-key-grid kbd,
+.mouse-look-key,
+.keyboard-action kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid rgba(241, 242, 237, 0.27);
+  border-radius: 3px;
+  background: #171918;
+  color: rgba(241, 242, 237, 0.76);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.45);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 600;
+  line-height: 1;
+  transition:
+    transform 80ms ease,
+    border-color 80ms ease,
+    background-color 80ms ease,
+    color 80ms ease;
+}
+
+.keyboard-key-grid kbd[data-pressed="true"],
+.mouse-look-key[data-pressed="true"],
+.keyboard-action kbd[data-pressed="true"] {
+  border-color: rgba(253, 245, 198, 0.78);
+  background: rgba(199, 192, 153, 0.22);
+  color: var(--dune-light);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  transform: translateY(1px);
+}
+
+.mouse-look-key {
+  min-width: 55px;
+  height: 43px;
+  letter-spacing: 0.08em;
+}
+
+.keyboard-key-grid-wasd kbd:first-child {
+  grid-column: 2;
+}
+
+.keyboard-key-grid-wasd kbd:nth-child(2) {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.keyboard-key-grid-wasd kbd:nth-child(3) {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.keyboard-key-grid-wasd kbd:nth-child(4) {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.keyboard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  gap: 6px 9px;
+  min-width: 0;
+  padding-left: 11px;
+  border-left: 1px solid rgba(241, 242, 237, 0.12);
+}
+
+.keyboard-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.keyboard-action kbd.is-wide {
+  min-width: 38px;
+}
+
+.keyboard-action small {
+  color: rgba(241, 242, 237, 0.48);
+  font-family: var(--font-mono);
+  font-size: 6px;
+  letter-spacing: 0.07em;
+  white-space: nowrap;
 }
 
 .gpv-gamepad {
@@ -2492,8 +2721,7 @@ button:focus-visible {
   }
 
   .room-controls {
-    bottom: 18px;
-    left: 18px;
+    display: none;
   }
 
   .keyboard-hint {
@@ -2516,6 +2744,39 @@ button:focus-visible {
   .input-overlay-viewport {
     width: 150px;
     height: 126px;
+  }
+
+  .input-overlay-keyboard {
+    width: min(320px, calc(100vw - 24px));
+  }
+
+  .input-overlay-keyboard .input-overlay-viewport {
+    width: 100%;
+    height: auto;
+  }
+
+  .input-overlay-keyboard .keyboard-map {
+    grid-template-columns: 58px 58px minmax(0, 1fr);
+    gap: 8px;
+    min-height: 72px;
+    padding: 8px;
+  }
+
+  .input-overlay-keyboard .keyboard-actions {
+    gap: 5px 7px;
+    padding-left: 8px;
+  }
+
+  .input-overlay-keyboard .keyboard-action {
+    gap: 3px;
+  }
+
+  .input-overlay-keyboard .keyboard-action small {
+    font-size: 5px;
+  }
+
+  .controller-connect-prompt {
+    width: min(274px, calc(100vw - 36px));
   }
 
   .gpv-gamepad {
@@ -2715,7 +2976,8 @@ button:focus-visible {
     font-size: 6.5px;
   }
 
-  .quick-action .xbox-glyph {
+  .quick-action .xbox-glyph,
+  .quick-action .keyboard-glyph {
     min-width: 19px;
     height: 19px;
     font-size: 8px;

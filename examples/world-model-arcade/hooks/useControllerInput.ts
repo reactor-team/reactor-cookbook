@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type ControllerAxes = {
   lx: number;
@@ -9,12 +9,17 @@ export type ControllerAxes = {
   ry: number;
 };
 
+export type InputMethod = "gamepad" | "keyboard";
+
 type ControllerOptions = {
   onButtonDown: (button: number) => void;
   onButtonUp: (button: number) => void;
 };
 
 const DEAD_ZONE = 0.16;
+const MOUSE_LOOK_GAIN = 0.11;
+const MOUSE_LOOK_DECAY = 0.84;
+const MOUSE_LOOK_EPSILON = 0.008;
 const KEY_TO_BUTTON: Record<string, number> = {
   Enter: 0,
   Space: 0,
@@ -49,13 +54,29 @@ export function useControllerInput({ onButtonDown, onButtonUp }: ControllerOptio
   const axesRef = useRef<ControllerAxes>({ lx: 0, ly: 0, rx: 0, ry: 0 });
   const buttonsRef = useRef<boolean[]>(Array(18).fill(false));
   const keyboardRef = useRef(new Set<string>());
+  const mouseLookRef = useRef({ rx: 0, ry: 0 });
   const handlersRef = useRef({ onButtonDown, onButtonUp });
   const [connected, setConnected] = useState(false);
-  const [lastDevice, setLastDevice] = useState<"gamepad" | "keyboard">(
-    "keyboard",
-  );
+  const [lastDevice, setLastDevice] = useState<InputMethod>("keyboard");
+  const [pointerLocked, setPointerLocked] = useState(false);
 
   handlersRef.current = { onButtonDown, onButtonUp };
+
+  const applyMouseLook = useCallback((movementX: number, movementY: number) => {
+    if ((!movementX && !movementY) || !Number.isFinite(movementX + movementY)) {
+      return;
+    }
+    const mouse = mouseLookRef.current;
+    mouse.rx = Math.max(
+      -1,
+      Math.min(1, mouse.rx * 0.35 + movementX * MOUSE_LOOK_GAIN),
+    );
+    mouse.ry = Math.max(
+      -1,
+      Math.min(1, mouse.ry * 0.35 + movementY * MOUSE_LOOK_GAIN),
+    );
+    setLastDevice("keyboard");
+  }, []);
 
   useEffect(() => {
     const keys = keyboardRef.current;
@@ -104,6 +125,31 @@ export function useControllerInput({ onButtonDown, onButtonUp }: ControllerOptio
   }, []);
 
   useEffect(() => {
+    const onPointerLockChange = () => {
+      const locked = Boolean(document.pointerLockElement);
+      setPointerLocked(locked);
+      if (locked) {
+        setLastDevice("keyboard");
+      } else {
+        mouseLookRef.current.rx = 0;
+        mouseLookRef.current.ry = 0;
+      }
+    };
+
+    const onMouseMove = (event: MouseEvent) => {
+      if (!document.pointerLockElement) return;
+      applyMouseLook(event.movementX, event.movementY);
+    };
+
+    document.addEventListener("pointerlockchange", onPointerLockChange);
+    document.addEventListener("mousemove", onMouseMove);
+    return () => {
+      document.removeEventListener("pointerlockchange", onPointerLockChange);
+      document.removeEventListener("mousemove", onMouseMove);
+    };
+  }, [applyMouseLook]);
+
+  useEffect(() => {
     let raf = 0;
     let wasConnected = false;
     const previousButtons = Array(18).fill(false) as boolean[];
@@ -118,15 +164,20 @@ export function useControllerInput({ onButtonDown, onButtonUp }: ControllerOptio
       }
 
       const keys = keyboardRef.current;
-      const keyboardAxes = {
-        lx: (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0),
-        ly: (keys.has("KeyS") ? 1 : 0) - (keys.has("KeyW") ? 1 : 0),
+      const mouse = mouseLookRef.current;
+      const arrowLook = {
         rx:
           (keys.has("ArrowRight") ? 1 : 0) -
           (keys.has("ArrowLeft") ? 1 : 0),
         ry:
           (keys.has("ArrowDown") ? 1 : 0) -
           (keys.has("ArrowUp") ? 1 : 0),
+      };
+      const keyboardAxes = {
+        lx: (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0),
+        ly: (keys.has("KeyS") ? 1 : 0) - (keys.has("KeyW") ? 1 : 0),
+        rx: arrowLook.rx || mouse.rx,
+        ry: arrowLook.ry || mouse.ry,
       };
 
       const gamepadAxes = pad
@@ -142,6 +193,11 @@ export function useControllerInput({ onButtonDown, onButtonUp }: ControllerOptio
       );
       if (gamepadActive) setLastDevice("gamepad");
       axesRef.current = gamepadActive ? gamepadAxes : keyboardAxes;
+
+      mouse.rx *= MOUSE_LOOK_DECAY;
+      mouse.ry *= MOUSE_LOOK_DECAY;
+      if (Math.abs(mouse.rx) < MOUSE_LOOK_EPSILON) mouse.rx = 0;
+      if (Math.abs(mouse.ry) < MOUSE_LOOK_EPSILON) mouse.ry = 0;
 
       for (let index = 0; index < previousButtons.length; index += 1) {
         const pressed = Boolean(pad?.buttons[index]?.pressed);
@@ -163,5 +219,13 @@ export function useControllerInput({ onButtonDown, onButtonUp }: ControllerOptio
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  return { axesRef, buttonsRef, connected, lastDevice };
+  return {
+    axesRef,
+    buttonsRef,
+    connected,
+    keysRef: keyboardRef,
+    lastDevice,
+    pointerLocked,
+    applyMouseLook,
+  };
 }
