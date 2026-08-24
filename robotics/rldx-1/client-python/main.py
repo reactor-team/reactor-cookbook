@@ -36,9 +36,8 @@ deployment that reads frame tags and against an older one that only accepts the
 `set_state_json` command.
 
 Usage:
-    uv run python main.py --local
-    uv run python main.py --api-key rk_...
-    uv run python main.py --api-key rk_... --task "put the cup on the tray"
+    REACTOR_API_KEY=rk_... uv run python main.py
+    REACTOR_API_KEY=rk_... uv run python main.py --task "put the cup on the tray"
 """
 
 from __future__ import annotations
@@ -48,10 +47,10 @@ import asyncio
 import json
 import logging
 import math
+import os
 import time
 
 import numpy as np
-
 from reactor_sdk import Reactor, ReactorStatus, time_micros
 
 logging.basicConfig(level=logging.WARNING)
@@ -130,7 +129,6 @@ class Client:
             model_name=args.model,
             api_key=args.api_key,
             api_url=args.api_url,
-            local=args.local,
         )
         self.t0 = time.monotonic()
         self.schema: dict | None = None
@@ -258,8 +256,7 @@ class Client:
         self.reactor.on_status(self.on_status)
         self.reactor.on_message(self.on_message)
 
-        print(f"Connecting to {'localhost' if args.local else args.api_url} "
-              f"(model={args.model}) ...")
+        print(f"Connecting to {args.api_url} (model={args.model}) ...")
         await self.reactor.connect()
         while self.reactor.get_status() != ReactorStatus.READY:
             await asyncio.sleep(0.1)
@@ -441,17 +438,20 @@ class Client:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="RLDX-1 client: frame-metadata sync + timeline correlation")
-    mode = p.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--local", action="store_true", help="Connect to localhost:8080")
-    mode.add_argument("--api-key", help="Reactor API key (rk_...)")
-    p.add_argument("--api-url", default="https://api.reactor.inc",
+    p.add_argument("--api-key", default=os.environ.get("REACTOR_API_KEY", ""),
+                   help="Reactor API key (defaults to REACTOR_API_KEY)")
+    p.add_argument("--api-url",
+                   default=os.environ.get("REACTOR_API_URL", "https://api.reactor.inc"),
                    help="Reactor API base URL")
     p.add_argument("--model", default="rldx-1", help="Model name (default: rldx-1)")
     p.add_argument("--task", default="", help="Task description to condition the policy")
     p.add_argument("--duration", type=float, default=60.0, help="Seconds to stream")
     p.add_argument("--connect-timeout", type=float, default=300.0,
                    help="Max seconds to wait for READY (cold start pulls weights)")
-    return p.parse_args()
+    args = p.parse_args()
+    if not args.api_key:
+        p.error("set REACTOR_API_KEY or pass --api-key")
+    return args
 
 
 if __name__ == "__main__":

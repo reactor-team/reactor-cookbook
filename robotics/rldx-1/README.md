@@ -5,9 +5,8 @@
 head. The client publishes three camera views and robot state; the model returns
 16-step action chunks over the data channel. It does not generate video.
 
-This client works with the published `rldx-1` platform model or the matching
-[`models/rldx-1`](../../models/rldx-1) recipe. It also shows how to solve two
-common multi-camera problems:
+This client connects to the published `rldx-1` model on Reactor. It also shows
+how to solve two common multi-camera problems:
 
 - keeping independently delivered camera views aligned; and
 - identifying which observation produced an action chunk.
@@ -145,29 +144,19 @@ Install uv if needed:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-## Run locally
-
-First start the matching model recipe, then run:
+## Run
 
 ```bash
 cd robotics/rldx-1/client-python
 uv sync
-uv run python main.py --local
-```
-
-## Run with Reactor Cloud
-
-```bash
-cd robotics/rldx-1/client-python
-uv sync
-uv run python main.py --api-key rk_your_key_here
+export REACTOR_API_KEY=rk_your_key_here
+uv run python main.py
 ```
 
 Optionally provide a task:
 
 ```bash
 uv run python main.py \
-  --api-key rk_your_key_here \
   --task "put the cup on the tray"
 ```
 
@@ -220,27 +209,12 @@ If the deployment does not announce `state_source`, the client falls back to
 the deployment does not return the echo fields. `view_skew_us` can still be
 available because the frames retain their shared `capture_time_us`.
 
-## Apply the pattern in your own model
+## Apply the pattern in your own client
 
-RLDX-1's server implementation is included in
-[`models/rldx-1`](../../models/rldx-1), primarily in `robot_state.py` and
-`pipeline.py`. A multi-track model needs three pieces:
-
-1. **Read frame metadata.** Each inbound frame exposes `.metadata` (the bytes
-   passed as `user_data`) and `.capture_time_us` (the client-declared stamp).
-   Decode and validate the metadata in the model.
-2. **Choose the freshest state tag.** Use the tag's `seq` when present, or its
-   `capture_us` otherwise. This embedded ordering outranks the frame's
-   `capture_time_us`, which in turn outranks arrival order. Keep the
-   separate-message carrier as a compatibility fallback.
-3. **Align the camera views.** Choose one recent frame per view near the latest
-   capture time covered by every view. Return the selected spread as
-   `view_skew_us`; if any view lacks a stamp, fall back to newest-per-view and
-   report the skew as null.
-
-Echo the selected tag's `capture_us` and `seq` on the result, and announce
-`state_source`, `state_tag_keys`, and `state_dims` in the handshake. That lets
-clients discover the contract and work across deployment versions.
+Read the model handshake, stamp every view from one observation with the same
+`capture_time_us`, and attach that observation's state bytes to each frame when
+`state_source` is `frame_metadata`. Use the echoed `source_capture_us` and
+`source_seq` fields to place returned action chunks on your client timeline.
 
 ## Notes
 
