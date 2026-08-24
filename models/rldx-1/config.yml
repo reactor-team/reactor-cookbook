@@ -1,0 +1,57 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
+# RLDX-1 ReactorPipeline configuration.
+
+# ----------------------------------------------------------------------
+# Checkpoint
+# ----------------------------------------------------------------------
+# RLDX-1 finetuned checkpoint (RLWRLD/RLDX-1-FT-ROBOCASA, ~13GB). Empty ->
+# the release weights root resolved by reactor_runtime.get_weights_path()
+# (REACTOR_WEIGHTS_PATH in production, the local cache during development). A
+# relative name resolves under that root; an absolute path bypasses it. The
+# checkpoint loads from this one local directory — nothing is fetched at run time.
+checkpoint_dir: ""
+
+# Embodiment tag the policy is built with (rldx.data.embodiment_tags.EmbodimentTag).
+embodiment_tag: GENERAL_EMBODIMENT
+
+# ----------------------------------------------------------------------
+# Input / device
+# ----------------------------------------------------------------------
+# Camera frames are resized to this resolution before the model sees them.
+height: 256
+width: 256
+device_id: 0
+
+# ----------------------------------------------------------------------
+# Observation cadence
+# ----------------------------------------------------------------------
+# Matches RLDX-1's validated eval loop under streaming:
+#   * control_hz     - robot control rate. The freshest frame is committed to the
+#                      window buffer once per 1/control_hz s, so the strided video
+#                      window (checkpoint delta_indices, in control steps) comes
+#                      out at the right real-time spacing regardless of the
+#                      client's publish fps. RoboCasa runs at control_freq=20.
+#   * exec_horizon   - action-chunk length the client executes before the server
+#                      re-plans. RLDX-1 is memory-stateful (memory_stride ==
+#                      execution_horizon), so it must re-plan in lockstep with
+#                      chunk execution, not free-run. Derived from the checkpoint
+#                      (its ``action_horizon``) at load, like the video window's
+#                      delta_indices; this value is only a fallback used when the
+#                      model config can't be read.
+#   * pace_inference - false lets the loop re-plan every tick (free-running);
+#                      leave true to reproduce the validated chunk-execution cadence.
+control_hz: 20
+exec_horizon: 16
+pace_inference: true
+
+# ----------------------------------------------------------------------
+# Robot state fallback
+# ----------------------------------------------------------------------
+# What to do when the proprioceptive state is missing or fails to parse:
+#   hold_last (default) - reuse the last valid state; skip inference until the
+#                         first valid state arrives (never acts on garbage).
+#   zero                - zero-fill the state (legacy behaviour), still signalled.
+#   error               - skip inference and signal on every bad frame.
+# A CommandError(command="state", ...) is sent to the client whenever a fallback
+# engages, so degradation is never silent.
+state_fallback: hold_last

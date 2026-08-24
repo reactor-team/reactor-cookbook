@@ -5,10 +5,9 @@
 head. The client publishes three camera views and robot state; the model returns
 16-step action chunks over the data channel. It does not generate video.
 
-This is the client example for the published `rldx-1` platform model. Customers
-self-hosting RLDX-1 receive the server and a matching copy of this client in
-[`reactor-rldx`](https://github.com/reactor-team/reactor-rldx). The example also
-shows how to solve two common multi-camera problems:
+This client works with the published `rldx-1` platform model or the matching
+[`models/rldx-1`](../../models/rldx-1) recipe. It also shows how to solve two
+common multi-camera problems:
 
 - keeping independently delivered camera views aligned; and
 - identifying which observation produced an action chunk.
@@ -148,7 +147,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## Run locally
 
-First start the self-host server from `reactor-rldx`, then run:
+First start the matching model recipe, then run:
 
 ```bash
 cd robotics/rldx-1/client-python
@@ -223,9 +222,9 @@ available because the frames retain their shared `capture_time_us`.
 
 ## Apply the pattern in your own model
 
-RLDX-1's server implementation lives in
-[`reactor-rldx`](https://github.com/reactor-team/reactor-rldx), primarily in
-`robot_state.py` and `pipeline.py`. A multi-track model needs three pieces:
+RLDX-1's server implementation is included in
+[`models/rldx-1`](../../models/rldx-1), primarily in `robot_state.py` and
+`pipeline.py`. A multi-track model needs three pieces:
 
 1. **Read frame metadata.** Each inbound frame exposes `.metadata` (the bytes
    passed as `user_data`) and `.capture_time_us` (the client-declared stamp).
