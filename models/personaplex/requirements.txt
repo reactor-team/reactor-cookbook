@@ -1,0 +1,56 @@
+# Python dependencies installed into the model image, so a conflict between the
+# runtime, PyTorch, and PersonaPlex's own stack fails during build rather than
+# at model load.
+#
+# reactor-runtime is the runtime itself; releases are immutable and there is no
+# floating `latest` version. It must match `build.runtime_version` in
+# reactor.yaml.
+reactor-runtime==3.1.2
+
+# PyTorch's CUDA 12.8 wheels, which carry the sm_100 kernels a B200 needs.
+# PyPI stays the primary index for everything else.
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+# B200-compatible replacement for PersonaPlex's upstream `torch >= 2.2, < 2.5`.
+# Blackwell support starts at PyTorch 2.7, so the declared ceiling and this GPU
+# are mutually exclusive; requirements-personaplex.txt explains how that is
+# resolved and what it costs. 2.9.1 rather than 2.7.x because Blackwell support
+# had a few releases to settle and because `alayaworld` in this repository
+# already serves B200 on it.
+torch==2.9.1+cu128
+
+# The one version satisfying both floors: Runtime needs `numpy >= 2.1` and
+# PersonaPlex needs `numpy < 2.2`. Pinned because that overlap is a single minor
+# release, and a resolver picking either side of it would fail the build.
+numpy==2.1.3
+
+# Imported directly by the adapter: the tokenizer for the role prompt, the Hub
+# client for the gated assets, and YAML for the config file. Hub is held below
+# PersonaPlex's `< 0.25` ceiling.
+sentencepiece==0.2.0
+huggingface-hub==0.24.7
+PyYAML==6.0.3
+
+# PersonaPlex's own dependencies, restated. It is installed --no-deps (see
+# requirements-personaplex.txt), so pip does not read its metadata and these
+# would otherwise be missing. Kept at the bounds upstream declares.
+einops==0.7
+safetensors>=0.4.0,<0.5
+sphn>=0.1.4,<0.2
+aiohttp>=3.10.5,<3.11
+sounddevice==0.5
+tqdm
+
+# Two more that PersonaPlex imports but never declares, so they are absent from
+# the metadata restated above. Both sit behind a specific path, which is why
+# they surface as a ModuleNotFoundError mid-session rather than at build:
+#
+#   pyloudnorm  `normalize_audio`, reached by `load_voice_prompt` — the .wav
+#               voice path. Upstream ships its voices as precomputed .pt
+#               embeddings, which skip it, so this is what makes a
+#               reference-audio .wav dropped into the voices directory work.
+#               Brings scipy.
+#   accelerate  the `cpu_offload: true` branch of `get_moshi_lm`. Installed so
+#               that config knob is real rather than a crash.
+pyloudnorm==0.2.0
+accelerate==1.14.0

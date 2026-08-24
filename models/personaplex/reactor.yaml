@@ -1,0 +1,25 @@
+apiVersion: v1beta
+kind: VideoModel
+
+model:
+  name: personaplex-7b
+  version: v0.0.1
+  description: |
+    Hold a real-time spoken conversation with a persona described in text and
+    a voice chosen from the model's packaged set.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+
+runtime:
+  import: personaplex:PersonaPlex
+  config: personaplex.yaml
+  weights_path: ~/.cache/reactor_registry/personaplex
+
+build:
+  runtime_version: "3.1.2"
+
+# No `recording:` block. The recorder muxes around a video track and disables
+# itself for a model that emits none, so enabling it on this audio-only model
+# would produce a startup warning and no recording.
