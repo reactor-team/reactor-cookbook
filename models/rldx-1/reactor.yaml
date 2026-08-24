@@ -13,10 +13,9 @@ model:
   # public: false
 
   resources:
-    # This image compiles FlashAttention for Blackwell and is configured for a
-    # B200. Use a compatible accelerator if you change the build.
+    # This image compiles FlashAttention for the RTX PRO 6000 (sm_120).
     gpu:
-      type: NVIDIA_B200
+      type: NVIDIA_RTX6000_PRO
       count: 1
     cpu:
       request: "2"

@@ -3,7 +3,7 @@
 #
 # The Dockerfile fetches the pinned upstream source into /opt/rldx-1 and adds
 # it to PYTHONPATH. This file pins the serving dependency closure, minus the
-# packages the Dockerfile installs explicitly for Blackwell/B200:
+# packages the Dockerfile installs explicitly for RTX PRO 6000 / sm_120:
 #   torch==2.7.0, torchvision==0.22.0  -> cu128 wheel index (Dockerfile)
 #   flash-attn==2.7.4.post1            -> built from source (Dockerfile)
 #   torchcodec==0.4.0                  -> omitted (video decode; unused at serving)

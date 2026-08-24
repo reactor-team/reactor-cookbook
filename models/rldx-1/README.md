@@ -13,8 +13,10 @@ it.
 
 ## Prerequisites
 
-- The [Reactor CLI](https://docs.reactor.inc/deploy/overview)
-- Docker with an NVIDIA Blackwell GPU; the included build targets a B200
+- Docker with the NVIDIA Container Toolkit
+- An NVIDIA RTX PRO 6000 (Blackwell, `sm_120`)
+- The [Reactor CLI](https://docs.reactor.inc/deploy/overview) if you prefer the
+  CLI workflow over the included Docker script
 - The [Hugging Face CLI](https://huggingface.co/docs/huggingface_hub/guides/cli)
 
 The source code is Apache-2.0. The checkpoint uses the separate
@@ -24,28 +26,50 @@ deploying the weights.
 
 ## Download the checkpoint
 
-From this folder, download the RoboCasa checkpoint into the weights path named
-by `reactor.yaml`:
+For the direct-Docker flow, download the RoboCasa checkpoint anywhere on the
+host and pass that directory to the run script:
 
 ```bash
 hf download RLWRLD/RLDX-1-FT-ROBOCASA \
-  --local-dir ~/.cache/reactor_registry/rldx-1
+  --local-dir ~/rldx-robocasa
 ```
 
 The adapter reads the checkpoint's own modality configuration, so the schema
 it announces reflects the loaded views, state dimensions, action dimensions,
 and temporal window.
 
-## Run locally
+## Run with Docker
+
+The included script builds the image, mounts the checkpoint read-only, starts
+the server on port 8080, and manages its logs and container lifecycle:
 
 ```bash
+WEIGHTS_DIR=~/rldx-robocasa ./scripts/run_reactor.sh build
+WEIGHTS_DIR=~/rldx-robocasa ./scripts/run_reactor.sh start
+./scripts/run_reactor.sh status
+./scripts/run_reactor.sh logs
+```
+
+Stop it when finished:
+
+```bash
+./scripts/run_reactor.sh stop
+```
+
+The first build compiles FlashAttention for `sm_120`. Reduce build parallelism
+on a smaller host with `FLASH_ATTN_MAX_JOBS=<n>`.
+
+## Run with the Reactor CLI
+
+The CLI reads weights from the path declared in `reactor.yaml`. Download the
+checkpoint there, then build and run the same Dockerfile:
+
+```bash
+hf download RLWRLD/RLDX-1-FT-ROBOCASA \
+  --local-dir ~/.cache/reactor_registry/rldx-1
 reactor build
 reactor run --gpus device=0
 ```
-
-The first image build compiles FlashAttention from source. If the Docker
-builder has limited memory, reduce parallel compilation with
-`--build-arg FLASH_ATTN_MAX_JOBS=<n>` using the equivalent Docker build flow.
 
 In another terminal, run the local client:
 

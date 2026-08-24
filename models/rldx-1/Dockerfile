@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
-# RLDX-1 serving image with Blackwell-compatible PyTorch and FlashAttention.
+# RLDX-1 serving image for NVIDIA RTX PRO 6000 (Blackwell, sm_120).
 
 FROM nvcr.io/nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04
 
@@ -30,16 +30,16 @@ RUN pip install --no-cache-dir --upgrade \
     psutil==7.2.2
 
 # RLDX-1 pins PyTorch 2.7.0. Use the CUDA 12.8 wheels so Blackwell kernels are
-# available instead of the default CUDA 12.6 build.
+# available for the RTX PRO 6000 instead of the default CUDA 12.6 build.
 RUN pip install --no-cache-dir torch==2.7.0 torchvision==0.22.0 \
     --index-url https://download.pytorch.org/whl/cu128
 
-# The published FlashAttention wheel does not contain Blackwell kernels, so
-# compile it against the CUDA toolkit in this image. Lower the job count on a
-# smaller Docker builder with --build-arg FLASH_ATTN_MAX_JOBS=<n>.
+# The published FlashAttention wheel does not contain sm_120 kernels, so compile
+# it against the CUDA toolkit in this image. Lower the job count on a smaller
+# Docker builder with --build-arg FLASH_ATTN_MAX_JOBS=<n>.
 ARG FLASH_ATTN_MAX_JOBS=16
 RUN MAX_JOBS=${FLASH_ATTN_MAX_JOBS} NVCC_THREADS=2 \
-    TORCH_CUDA_ARCH_LIST="10.0+PTX" \
+    TORCH_CUDA_ARCH_LIST="12.0+PTX" \
     FLASH_ATTENTION_FORCE_BUILD=TRUE \
     pip install --no-cache-dir --no-build-isolation flash-attn==2.7.4.post1
 
