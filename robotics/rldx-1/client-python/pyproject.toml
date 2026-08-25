@@ -1,7 +1,7 @@
 [project]
 name = "rldx-1-client-python"
-version = "0.2.0"
-description = "Reactor Python SDK client for RLDX-1 — frame-metadata sync and timeline correlation"
+version = "0.3.0"
+description = "Reactor Python SDK client for RLDX-1 — synchronized input and client-owned RTC scheduling"
 requires-python = ">=3.10"
 dependencies = [
     # The only 1.x pin in this cookbook, deliberately. Per-frame metadata does

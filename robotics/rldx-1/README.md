@@ -6,10 +6,11 @@ head. The client publishes three camera views and robot state; the model returns
 16-step action chunks over the data channel. It does not generate video.
 
 This client connects to the published `rldx-1` model on Reactor. It also shows
-how to solve two common multi-camera problems:
+how to solve three common robot-policy transport problems:
 
 - keeping independently delivered camera views aligned; and
-- identifying which observation produced an action chunk.
+- identifying which observation produced an action chunk; and
+- letting the client own inference timing with Real-Time Chunking (RTC).
 
 The model announces its exact contract in the `model_schema` handshake. For the
 current checkpoint, that contract is:
@@ -20,8 +21,8 @@ current checkpoint, that contract is:
 - **Output:** `action_prediction` messages containing a 16-step chunk:
   `end_effector_position` `[16,3]`, `end_effector_rotation` `[16,3]`,
   `gripper_close` `[16,1]`, `base_motion` `[16,4]`, and `control_mode` `[16,1]`.
-- **Commands:** `get_schema`, `reset`, `set_state_json`, and
-  `set_task_description`.
+- **Commands:** `get_schema`, `reset`, `set_state_json`,
+  `set_task_description`, and, when RTC is enabled, `request_action`.
 
 The client reads the announced views, resolution, control rate, state layout,
 and state carrier instead of hardcoding them.
@@ -84,6 +85,25 @@ age_ms = (time_micros() - chunk["source_capture_us"]) / 1000
 ```
 
 No clock synchronization with the server is required.
+
+### 4. Schedule RTC on the client control clock
+
+When `model_schema.inference_trigger` is `client_request`, the example switches
+from passive streaming to an RTC plan scheduler:
+
+1. It holds safely while requesting the first plan with no prefix.
+2. Every `exec_horizon` control steps, it requests a replacement and sends the
+   next `rtc_delay` physical actions from the active plan.
+3. It keeps executing that base plan while inference runs.
+4. At `install_step`, it discards the returned prefix and installs the suffix.
+
+Each request names the active `base_plan_id`; each response must echo the
+request, plan, prefix, and install metadata exactly. A missing deadline or bad
+plan chain triggers `reset` and returns the client to safe hold. The action
+prefix is flattened in the handshake's `action_order` using `action_dims`.
+
+Deployments that announce `inference_trigger: streaming` keep the existing
+server-paced behavior automatically.
 
 ## State metadata contract
 
@@ -161,8 +181,9 @@ uv run python main.py \
 ```
 
 The example publishes synthetic frames and synthetic state. Its actions are
-well-formed but do not represent meaningful robot behavior; replace both data
-sources before using it with a robot.
+well-formed but do not represent meaningful robot behavior. Replace the frame
+and state generators and the `Client.execute_action` method before using it
+with a robot; that method is the local controller seam.
 
 ## What you should see
 
@@ -189,11 +210,12 @@ view_skew_us: p50=0 max=0 (across 49 chunks)
 command_errors: none — the state carrier worked
 ```
 
-Two numbers are worth reading carefully. `inter-arrival` should be close to 800
-ms because this checkpoint re-plans once per execution horizon (16 steps at 20
-Hz = 0.8 s), no matter how fast frames are published. `view_skew_us` should be
-**0** when one capture time is stamped across a tick's views: every view then
-contributed a frame from the same declared instant.
+Two numbers are worth reading carefully. In server-paced streaming mode,
+`inter-arrival` follows the server's execution horizon. In RTC mode, requests
+follow the client's announced `exec_horizon`; a late response is rejected
+instead of shifting that control timeline. `view_skew_us` should be **0** when
+one capture time is stamped across a tick's views: every view then contributed
+a frame from the same declared instant.
 
 The metrics answer different questions:
 
@@ -213,8 +235,10 @@ available because the frames retain their shared `capture_time_us`.
 
 Read the model handshake, stamp every view from one observation with the same
 `capture_time_us`, and attach that observation's state bytes to each frame when
-`state_source` is `frame_metadata`. Use the echoed `source_capture_us` and
-`source_seq` fields to place returned action chunks on your client timeline.
+`state_source` is `frame_metadata`. For streaming mode, use the echoed
+`source_capture_us` and `source_seq`. For RTC, keep a logical control-step
+cursor, execute the old plan during inference, and install only an on-time,
+correctly chained suffix.
 
 ## Notes
 
