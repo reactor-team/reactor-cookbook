@@ -107,11 +107,11 @@ camera state in one `set_camera` call keeps diagonal movement and simultaneous
 rotation on the same chunk boundary.
 
 Prompt and camera commands accepted during inference apply to the following
-chunk. An in-flight GPU chunk finishes before pause, reset, or disconnect takes
+chunk. An in-flight GPU chunk finishes before a reset or disconnect takes
 effect. Disconnecting releases held camera motion while preserving the shared
 world.
 
-Sessions start unpaused. Selecting an image begins continuous playback.
+Selecting an image begins continuous playback.
 
 ## Image uploads
 
@@ -130,14 +130,14 @@ intrinsics because they contain no calibration metadata.
 
 Commands return typed, command-correlated messages for the client timeline:
 
-- `prompt_queued`, `camera_motion_changed`, `image_selected`, `pause_changed`,
-  `step_queued`, and `rollout_reset_queued` report an accepted change and the
-  chunk where it takes effect.
+- `prompt_queued`, `camera_motion_changed`, `image_selected`, and
+  `rollout_reset_queued` report an accepted change and the chunk where it
+  takes effect.
 - `chunk_completed` reports generation time, frame count, prompt, and all six
   camera axes sampled by one completed chunk.
 - `rollout_limit_reached` reports that the current causal timeline is full.
-- `state_update` is a complete snapshot of prompt, image, pause state, camera,
-  seed, completed chunks, and the next available boundary. A joining viewer
+- `state_update` is a complete snapshot of prompt, image, camera, seed,
+  completed chunks, and the next available boundary. A joining viewer
   receives one immediately, and every successful state change broadcasts
   another.
 
@@ -147,7 +147,7 @@ Message delivery stays outside the synchronous inference path.
 
 The public model ships a 1024-position temporal RoPE table. At four latents per
 chunk, one world supports 256 chunks: about 4 minutes and 15 seconds of steady
-16 FPS video after the first chunk. Reaching the limit pauses generation;
+16 FPS video after the first chunk. Reaching the limit idles generation;
 `reset`, `set_image`, or `random_image` starts a fresh timeline.
 
 `reactor.yaml` records `main_video` by default in four-second chunks and allows

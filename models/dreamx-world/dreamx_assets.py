@@ -11,19 +11,13 @@ import tempfile
 from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import yaml
 from reactor_runtime import get_weights_path
 from reactor_runtime.log import get_logger
 
-if TYPE_CHECKING:
-    from dreamx_types import DreamXConfig, RepositoryAsset
-else:
-    module_prefix = f"{__package__}." if __package__ else ""
-    types_module = importlib.import_module(f"{module_prefix}dreamx_types")
-    DreamXConfig = types_module.DreamXConfig
-    RepositoryAsset = types_module.RepositoryAsset
+from dreamx_types import DreamXConfig, RepositoryAsset
 
 logger = get_logger(__name__)
 

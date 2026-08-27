@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 import numpy as np
 from reactor_runtime import (
     ClientInfo,
     CommandError,
-    Idle,
     InputField,
     ReactorPipeline,
     UploadedFile,
@@ -23,40 +21,22 @@ from reactor_runtime import (
 )
 from reactor_runtime.log import get_logger
 
-if TYPE_CHECKING:
-    from camera_motion import CameraMotionPlanner, MotionConfig
-    from evoke_config import EvokeConfig
-    from evoke_schema import (
-        CommandApplied,
-        EvokeOutput,
-        EvokeState,
-        RolloutRestarted,
-        StateUpdate,
-    )
-    from upstream_backend import EvokeWorkerBackend, WorkerSettings
-else:
-    module_prefix = f"{__package__}." if __package__ else ""
-    camera_motion = importlib.import_module(f"{module_prefix}camera_motion")
-    evoke_config = importlib.import_module(f"{module_prefix}evoke_config")
-    evoke_images = importlib.import_module(f"{module_prefix}evoke_images")
-    evoke_schema = importlib.import_module(f"{module_prefix}evoke_schema")
-    upstream_backend = importlib.import_module(f"{module_prefix}upstream_backend")
-    CameraMotionPlanner = camera_motion.CameraMotionPlanner
-    MotionConfig = camera_motion.MotionConfig
-    EvokeConfig = evoke_config.EvokeConfig
-    prepare_runtime = evoke_config.prepare_runtime
-    read_config = evoke_config.read_config
-    normalize_output_frames = evoke_images.normalize_output_frames
-    validate_uploaded_image = evoke_images.validate_uploaded_image
-    validate_uploaded_pose = evoke_images.validate_uploaded_pose
-    validate_uploaded_video = evoke_images.validate_uploaded_video
-    EvokeOutput = evoke_schema.EvokeOutput
-    EvokeState = evoke_schema.EvokeState
-    CommandApplied = evoke_schema.CommandApplied
-    RolloutRestarted = evoke_schema.RolloutRestarted
-    StateUpdate = evoke_schema.StateUpdate
-    EvokeWorkerBackend = upstream_backend.EvokeWorkerBackend
-    WorkerSettings = upstream_backend.WorkerSettings
+from evoke_camera import CameraMotionPlanner, MotionConfig
+from evoke_config import EvokeConfig, prepare_runtime, read_config
+from evoke_images import (
+    normalize_output_frames,
+    validate_uploaded_image,
+    validate_uploaded_pose,
+    validate_uploaded_video,
+)
+from evoke_types import (
+    CommandApplied,
+    EvokeOutput,
+    EvokeState,
+    RolloutRestarted,
+    StateUpdate,
+)
+from upstream_backend import EvokeWorkerBackend, WorkerSettings
 
 logger = get_logger(__name__)
 
@@ -94,7 +74,6 @@ class Evoke(ReactorPipeline):
     """Generate an autoregressive EVOKE world from image, video, or text conditioning."""
 
     state: EvokeState
-    output: EvokeOutput
     buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
@@ -114,7 +93,6 @@ class Evoke(ReactorPipeline):
         self._stability_prompt = ""
         self._seed = 42
         self._chunk_index = 0
-        self._chunk_in_flight = False
 
     def load(self, config_path: Path | None) -> None:
         """Prepare public assets and load EVOKE weights once in its Python 3.10 worker."""
@@ -153,7 +131,7 @@ class Evoke(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize an unpaused built-in i2v world before its first viewer connects."""
+        """Initialize a built-in i2v world before its first viewer connects."""
         config = self._require_config()
         self._mode = "i2v"
         self._media = config.default_image
@@ -162,12 +140,9 @@ class Evoke(ReactorPipeline):
         self._input_name = config.default_image.name
         self._pose_name = ""
         self.state.prompt = config.stability_prompt
-        self.state.paused = False
-        self.state._step_requested = False
         self.state._restart_requested = True
         self._seed = config.seed
         self._chunk_index = 0
-        self._chunk_in_flight = False
         self._clear_controls()
 
     @connected
@@ -190,12 +165,10 @@ class Evoke(ReactorPipeline):
                 backend.end_session()
         finally:
             self._clear_controls()
-            self.state._step_requested = False
             self.state._restart_requested = True
             self._media = None
             self._pose = None
             self._chunk_index = 0
-            self._chunk_in_flight = False
 
     @event(
         name="set_prompt",
@@ -212,6 +185,7 @@ class Evoke(ReactorPipeline):
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Optional scene description, up to 4096 characters. Empty text selects the "
                 "configured scene-neutral stability prompt."
@@ -234,8 +208,7 @@ class Evoke(ReactorPipeline):
         name="set_image",
         description=(
             "Start a fresh camera-controlled i2v world from an uploaded image. Valid at any "
-            "time; it clears rollout progress and releases all camera axes. While paused it "
-            "automatically queues the first native chunk as a preview, then remains paused. "
+            "time; it clears rollout progress and releases all camera axes. "
             "Emits `command_applied` and broadcasts `state_update` on success, or "
             "`command_error` for invalid image bytes."
         ),
@@ -243,14 +216,16 @@ class Evoke(ReactorPipeline):
     async def set_image(
         self,
         image: UploadedFile = InputField(  # noqa: B008
+            moderate=True,
             description=(
                 "Anchor image uploaded through Reactor. Accepts JPEG, PNG, WebP, or BMP up to "
                 "25 MiB and 100 million decoded pixels."
-            )
+            ),
         ),
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Optional scene prompt for the fresh world. Empty text uses the documented "
                 "scene-neutral exposure and temporal-stability prompt."
@@ -268,19 +243,14 @@ class Evoke(ReactorPipeline):
         self._mode = "i2v"
         self._media = image
         self._pose = None
-        self._input_source = "upload"
+        self._input_source = "uploaded"
         self._input_name = image.name
         self._pose_name = ""
         self.state.prompt = self._resolve_prompt(prompt)
         if seed >= 0:
             self._seed = seed
         self._request_restart()
-        if self.state.paused:
-            self.state._step_requested = True
-        detail = f"i2v anchor selected: {image.name}"
-        if self.state.paused:
-            detail += "; first preview chunk queued"
-        message = self._confirmation("set_image", detail)
+        message = self._confirmation("set_image", f"i2v anchor selected: {image.name}")
         await self._send_state_update()
         return message
 
@@ -297,17 +267,20 @@ class Evoke(ReactorPipeline):
     async def set_reference_video(
         self,
         video: UploadedFile = InputField(  # noqa: B008
-            description="MP4, MOV, or WebM reference video up to 250 MiB."
+            moderate=True,
+            description="MP4, MOV, or WebM reference video up to 250 MiB.",
         ),
         pose: UploadedFile = InputField(  # noqa: B008
+            moderate=True,
             description=(
                 "NPZ camera track containing cam_c2w/extrinsic/data and "
                 "intrinsics/intrinsic/K arrays aligned with the reference video."
-            )
+            ),
         ),
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Optional prompt; empty text uses the documented scene-neutral stability prompt."
             ),
@@ -343,7 +316,7 @@ class Evoke(ReactorPipeline):
         self._mode = "v2v"
         self._media = video
         self._pose = pose
-        self._input_source = "upload"
+        self._input_source = "uploaded"
         self._input_name = video.name
         self._pose_name = pose.name
         self._source_fps = source_fps
@@ -373,6 +346,7 @@ class Evoke(ReactorPipeline):
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Optional text condition used from chunk 1. Empty text uses the documented "
                 "scene-neutral stability prompt."
@@ -535,45 +509,12 @@ class Evoke(ReactorPipeline):
         """Queue roll motion and confirm the complete camera state."""
         return await self._set_axis("roll", roll)
 
-    # Keep pause available for future schema re-enablement without exposing it to clients.
-    async def set_paused(
-        self,
-        paused: bool = InputField(
-            default=False,
-            description="True pauses before the next chunk; false resumes continuous generation.",
-        ),
-    ) -> CommandApplied:
-        """Set playback state and confirm the resulting gate."""
-        self.state.paused = paused
-        self.state._step_requested = False
-        self._clear_controls()
-        message = self._confirmation(
-            "set_paused",
-            "Generation paused" if paused else "Continuous generation resumed",
-        )
-        await self._send_state_update()
-        return message
-
-    # Keep single-step generation available for future schema re-enablement.
-    async def step(self) -> CommandApplied:
-        """Queue one paused chunk and confirm its one-based position."""
-        if not self.state.paused:
-            raise CommandError(
-                "pause_required", "Pause EVOKE before requesting a single step."
-            )
-        if self.state._step_requested:
-            raise CommandError("step_pending", "An EVOKE step is already queued.")
-        self.state._step_requested = True
-        message = self._confirmation("step", "One native chunk queued while paused")
-        await self._send_state_update()
-        return message
-
     @event(
         name="reset",
         description=(
             "Start a fresh rollout from the active image, video, or text conditioning. It "
-            "clears generated progress and all camera axes while preserving prompt and pause "
-            "state. Emits `command_applied` and broadcasts `state_update` on success, or "
+            "clears generated progress and all camera axes while preserving the prompt. "
+            "Emits `command_applied` and broadcasts `state_update` on success, or "
             "`command_error` if conditioning is missing."
         ),
     )
@@ -600,12 +541,9 @@ class Evoke(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[EvokeOutput | Idle, None]:
+    async def inference(self) -> AsyncGenerator[EvokeOutput | None, None]:
         """Generate and stream one native chunk at a time from the active rollout."""
         while True:
-            if self.state.paused and not self.state._step_requested:
-                yield Idle
-                continue
             backend = self._backend
             planner = self._planner
             if backend is None or planner is None:
@@ -637,16 +575,11 @@ class Evoke(ReactorPipeline):
                     roll=self.state.roll,
                     frame_count=CAMERA_POSES_PER_CHUNK,
                 )
-            self.state._step_requested = False
-            self._chunk_in_flight = True
-            try:
-                frames = backend.generate_chunk(
-                    trajectory,
-                    seed=self._seed,
-                    prompt=self.state.prompt,
-                )
-            finally:
-                self._chunk_in_flight = False
+            frames = backend.generate_chunk(
+                trajectory,
+                seed=self._seed,
+                prompt=self.state.prompt,
+            )
             frames = normalize_output_frames(frames)
             expected = 33 if self._mode == "t2v" and self._chunk_index == 0 else 36
             if int(frames.shape[0]) != expected:
@@ -673,9 +606,7 @@ class Evoke(ReactorPipeline):
     def _request_restart(self) -> None:
         self.output.flush()
         self.state._restart_requested = True
-        self.state._step_requested = False
         self._chunk_index = 0
-        self._chunk_in_flight = False
         self._clear_controls()
 
     def _clear_controls(self) -> None:
@@ -695,8 +626,6 @@ class Evoke(ReactorPipeline):
             input_name=self._input_name,
             pose_name=self._pose_name,
             seed=self._seed,
-            paused=self.state.paused,
-            step_queued=self.state._step_requested,
             completed_chunks=self._chunk_index,
             next_chunk=self._chunk_index + 1,
             max_chunks=config.max_chunks,

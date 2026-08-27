@@ -2,7 +2,7 @@ $schema: reactor/v1
 
 model:
   name: lingbot-world-v1-fast-camera
-  version: v0.0.1
+  version: v0.1.0
   description: |
     Explore LingBot-World v1 Fast from an image, prompt, and six-axis camera motion.
   resources:
@@ -20,31 +20,27 @@ runtime:
   import: lingbot_world_v1:LingBotWorldV1
   config: lingbot_world_v1.yaml
   weights_path: ~/.cache/reactor_registry/lingbot-world-v1-fast
+  recording:
+    enabled: true
+    chunk_seconds: 4
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
 
 build:
-  # Keep the Runtime release aligned with the adapter's public API usage.
-  runtime_version: "3.2.3"
+  runtime_version: "3.2.5"
   python_requirements: requirements.txt
-  # CUDA 12.8 wheels contain the kernels used by the B200 declared above and
-  # match the isolated upstream worker environment prepared on first load.
   cuda_version: "12.8.1"
   python_version: "3.12"
+  # First load clones the pinned public source and compiles FlashAttention 2
+  # in the persistent weights cache.
   system_packages:
-    # First load clones the pinned public source and compiles FlashAttention 2
-    # in the persistent weights cache.
     - build-essential
     - git
     - libgl1
     - libglib2.0-0
   runtime_env:
     TOKENIZERS_PARALLELISM: "false"
-
-recording:
-  enabled: true
-  chunk_seconds: 4
-  clip_max_seconds: 300
-  video_track: main_video
-  video:
-    codec: h264
-    preset: veryfast
-    crf: 23

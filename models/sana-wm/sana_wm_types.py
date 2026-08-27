@@ -46,7 +46,6 @@ class BuiltInScene:
     image: Path
     prompt: Path
     intrinsics: Path
-    trajectory: Path
 
 
 @dataclass(frozen=True)
@@ -84,25 +83,15 @@ class SanaWMState(InputState):
     prompt: str = InputField(
         default="",
         max_length=4096,
+        moderate=True,
         description=(
             "Scene description used for the next fresh rollout. SANA-WM encodes text once "
             "when its autoregressive caches are initialized."
         ),
     )
-    _paused: bool = False
+    _trajectory_exhausted: bool = False
     _held_controls: set[str] = field(default_factory=set)
-    _step_requested: bool = False
     _reset_requested: bool = False
-
-    @property
-    def paused(self) -> bool:
-        """Return whether automatic chunk generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether automatic chunk generation is paused."""
-        self._paused = value
 
 
 class StateUpdate(ModelMessage):
@@ -153,11 +142,12 @@ class StateUpdate(ModelMessage):
     seed: int = MessageField(
         description="Random seed used by the current or queued rollout."
     )
-    paused: bool = MessageField(
-        description="Whether automatic generation is paused before the next chunk."
-    )
-    step_queued: bool = MessageField(
-        description="Whether exactly one 24-frame chunk is queued while paused."
+    trajectory_exhausted: bool = MessageField(
+        description=(
+            "Whether the uploaded camera trajectory ran out of complete 24-frame chunks "
+            "and generation stopped. Selecting an image or calling `reset` starts a "
+            "fresh rollout."
+        )
     )
     reset_queued: bool = MessageField(
         description="Whether the selected image, prompt, and seed will initialize fresh caches."
@@ -184,9 +174,6 @@ class ImageSelected(ModelMessage):
     prompt: str = MessageField(description="Effective prompt for the fresh world.")
     intrinsics_source: IntrinsicsSource = MessageField(
         description="Calibration source used for the fresh world."
-    )
-    auto_step_queued: bool = MessageField(
-        description="Whether image selection queued the required first 24-frame chunk."
     )
 
 
@@ -234,21 +221,6 @@ class TrajectorySelected(ModelMessage):
     available_chunks: int = MessageField(
         description="Complete 24-frame chunks available after the initial pose."
     )
-
-
-class PauseChanged(ModelMessage):
-    """Emitted when automatic chunk generation starts or stops."""
-
-    paused: bool = MessageField(description="Resulting playback state.")
-    held_controls_released: bool = MessageField(
-        description="Whether pausing released one or more held controls."
-    )
-
-
-class StepQueued(ModelMessage):
-    """Emitted when one paused chunk is queued."""
-
-    chunk: int = MessageField(description="One-based chunk queued for generation.")
 
 
 class RolloutResetQueued(ModelMessage):

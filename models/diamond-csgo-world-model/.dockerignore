@@ -1,17 +1,11 @@
-# Python build and cache artifacts
+# Python caches and local environments
 __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
-.mypy_cache/
 .ruff_cache/
-
-# Local Python environments
 .venv/
 venv/
-
-# Development-only files
-tests/
 
 # Editor and operating-system state
 .vscode/
@@ -20,8 +14,7 @@ tests/
 .DS_Store
 Thumbs.db
 
-# Source control and Docker inputs already consumed by the build
+# Source-control metadata and local model assets
 .git/
 .gitignore
-Dockerfile
-.dockerignore
+weights/

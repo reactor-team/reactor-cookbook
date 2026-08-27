@@ -32,7 +32,7 @@ mounted weights cache; later containers reuse those files.
 ## Run
 
 This directory is a `reactor` workspace: `reactor.yaml` names the model and
-controls its Reactor Runtime 3.2.3 image, while `requirements.txt` lists
+controls its Reactor Runtime 3.2.5 image, while `requirements.txt` lists
 DIAMOND's serving dependencies. The host needs the CLI and Docker from the
 prerequisites above.
 
@@ -79,7 +79,7 @@ curl -s localhost:8080/health
 
 `diamond.py` is the complete model entrypoint: it owns model loading, lifecycle
 hooks, commands, and inference. `diamond_types.py` defines the Reactor contract,
-while `diamond_support.py` contains configuration, import, image, and tensor
+while `diamond_assets.py` contains configuration, import, image, and tensor
 helpers. These files remain independent from the upstream checkout.
 
 ## Controls
@@ -98,7 +98,7 @@ helpers. These files remain independent from the upstream checkout.
 Control events return an `ActionChanged` message containing the acknowledged
 controller, current held keys and mouse buttons, and any mouse delta accepted by
 that command. Commands that change durable controls also broadcast a
-`StateUpdate` snapshot containing controller, pause, keyboard, and mouse-button
+`StateUpdate` snapshot containing controller, keyboard, and mouse-button
 state. A newly connected viewer receives the same snapshot without reconstructing
 state from earlier events. Message delivery therefore stays outside the
 synchronous inference loop.
@@ -114,15 +114,14 @@ await sendCommand("set_spawn_image", { image });
 ```
 
 The next inference boundary resets the environment and emits the uploaded frame
-before consuming the first action. This frame is also emitted while paused,
-without running an expensive model step. A single image has no motion history,
+before consuming the first action. A single image has no motion history,
 so the adapter repeats it four times; arbitrary non-CSGO images are accepted but
 may produce unstable results because they are outside the model's training
 distribution.
 
-Use `random_scene` when the client should choose a dataset-backed initial
-condition instead. Both scene commands return `SceneChanged` with the selected
-source and filename or dataset scene identifier.
+Use `random_scene` when the client should choose a built-in initial condition
+instead. Both scene commands return `SceneChanged` with the selected source and
+filename or built-in scene identifier.
 
 ## Recording
 

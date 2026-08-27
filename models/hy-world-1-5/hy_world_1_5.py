@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import importlib
 import secrets
 import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 from reactor_runtime import (
     ClientInfo,
     CommandError,
-    Idle,
     InputField,
     ReactorPipeline,
     UploadedFile,
@@ -24,54 +22,34 @@ from reactor_runtime import (
 )
 from reactor_runtime.log import get_logger
 
+from hy_world_1_5_assets import (
+    ExampleImage,
+    HYWorld15Config,
+    load_examples,
+    prepare_runtime_assets,
+    read_config,
+)
+from hy_world_1_5_camera import CameraControl, NativeCameraPlanner
+from hy_world_1_5_images import (
+    FRAMES_PER_CHUNK,
+    load_reference_image,
+    normalize_output_frames,
+    validate_uploaded_image,
+)
+from hy_world_1_5_types import (
+    CameraMotionChanged,
+    ChunkCompleted,
+    HYWorld15Output,
+    HYWorld15State,
+    ImageSelected,
+    PromptQueued,
+    RolloutLimitReached,
+    RolloutResetQueued,
+    StateUpdate,
+)
+
 if TYPE_CHECKING:
-    from hy_world_1_5_assets import ExampleImage, HYWorld15Config
     from hy_world_1_5_backend import HYWorld15Backend
-    from hy_world_1_5_camera import CameraControl, NativeCameraPlanner
-    from hy_world_1_5_images import FRAMES_PER_CHUNK
-    from hy_world_1_5_schema import (
-        CameraMotionChanged,
-        ChunkCompleted,
-        HYWorld15Output,
-        HYWorld15State,
-        ImageSelected,
-        PauseChanged,
-        PromptQueued,
-        RolloutLimitReached,
-        RolloutResetQueued,
-        StateUpdate,
-        StepQueued,
-    )
-else:
-    module_prefix = f"{__package__}." if __package__ else ""
-    assets_module = importlib.import_module(f"{module_prefix}hy_world_1_5_assets")
-    backend_module = importlib.import_module(f"{module_prefix}hy_world_1_5_backend")
-    camera_module = importlib.import_module(f"{module_prefix}hy_world_1_5_camera")
-    images_module = importlib.import_module(f"{module_prefix}hy_world_1_5_images")
-    schema_module = importlib.import_module(f"{module_prefix}hy_world_1_5_schema")
-    ExampleImage = assets_module.ExampleImage
-    HYWorld15Config = assets_module.HYWorld15Config
-    load_examples = assets_module.load_examples
-    prepare_runtime_assets = assets_module.prepare_runtime_assets
-    read_config = assets_module.read_config
-    HYWorld15Backend = backend_module.HYWorld15Backend
-    CameraControl = camera_module.CameraControl
-    NativeCameraPlanner = camera_module.NativeCameraPlanner
-    FRAMES_PER_CHUNK = images_module.FRAMES_PER_CHUNK
-    load_reference_image = images_module.load_reference_image
-    normalize_output_frames = images_module.normalize_output_frames
-    validate_uploaded_image = images_module.validate_uploaded_image
-    CameraMotionChanged = schema_module.CameraMotionChanged
-    ChunkCompleted = schema_module.ChunkCompleted
-    HYWorld15Output = schema_module.HYWorld15Output
-    HYWorld15State = schema_module.HYWorld15State
-    ImageSelected = schema_module.ImageSelected
-    PauseChanged = schema_module.PauseChanged
-    PromptQueued = schema_module.PromptQueued
-    RolloutLimitReached = schema_module.RolloutLimitReached
-    RolloutResetQueued = schema_module.RolloutResetQueued
-    StateUpdate = schema_module.StateUpdate
-    StepQueued = schema_module.StepQueued
 
 logger = get_logger(__name__)
 
@@ -82,7 +60,6 @@ class HYWorld15(ReactorPipeline):
     """Generate an image-, prompt-, and camera-controllable HY-World 1.5 world."""
 
     state: HYWorld15State
-    output: HYWorld15Output
     buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
@@ -107,6 +84,8 @@ class HYWorld15(ReactorPipeline):
         """
         config = read_config(config_path)
         prepare_runtime_assets(config)
+        from hy_world_1_5_backend import HYWorld15Backend
+
         backend = HYWorld15Backend(config)
         backend.load()
         self._config = config
@@ -118,7 +97,6 @@ class HYWorld15(ReactorPipeline):
             "HY-World 1.5 model ready",
             examples=len(self._examples),
             max_chunks=config.max_chunks,
-            paused_by_default=False,
         )
 
     @session_started
@@ -133,8 +111,6 @@ class HYWorld15(ReactorPipeline):
         self._active_prompt = None
         self._generating = False
         self.state.prompt = ""
-        self.state.paused = False
-        self.state._step_requested = False
         self.state._restart_requested = False
         self.state._limit_reached = False
         self._release_camera()
@@ -162,7 +138,6 @@ class HYWorld15(ReactorPipeline):
         self._chunk_index = 0
         self._active_prompt = None
         self._generating = False
-        self.state._step_requested = False
         self.state._restart_requested = False
         self.state._limit_reached = False
         self._release_camera()
@@ -182,6 +157,7 @@ class HYWorld15(ReactorPipeline):
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Scene description, up to 4096 characters and non-empty after trimming. The "
                 "next generated chunk samples it; earlier latent memory remains intact."
@@ -264,44 +240,6 @@ class HYWorld15(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    # Keep pause available for future schema re-enablement without exposing it to clients.
-    async def set_paused(
-        self,
-        paused: bool = InputField(
-            default=False,
-            description=(
-                "True stops before the next chunk; false enables continuous chunks. The current "
-                "in-flight chunk, if any, can finish."
-            ),
-        ),
-    ) -> PauseChanged:
-        """Set playback state, release the camera, and report the result."""
-        if not paused:
-            self._require_image()
-            self._require_available_rollout()
-        self.state.paused = paused
-        self.state._step_requested = False
-        self._release_camera()
-        message = PauseChanged(paused=paused, camera_released=True)
-        await self._send_state_update()
-        return message
-
-    # Keep single-step generation available for future schema re-enablement.
-    async def step(self) -> StepQueued:
-        """Queue one paused chunk and report its expected frame count."""
-        self._require_image()
-        self._require_available_rollout()
-        if not self.state.paused:
-            raise CommandError("pause_required", "Pause HY-World 1.5 before stepping.")
-        self.state._step_requested = True
-        chunk = self._next_control_chunk()
-        message = StepQueued(
-            applies_to_chunk=chunk,
-            expected_frames=13 if chunk == 1 else 16,
-        )
-        await self._send_state_update()
-        return message
-
     @event(
         name="reset",
         description=(
@@ -328,13 +266,8 @@ class HYWorld15(ReactorPipeline):
         if seed >= 0:
             self._seed = seed
         replaced = self._chunk_index
-        self.state.paused = False
-        self._request_restart(auto_step=False)
-        message = RolloutResetQueued(
-            seed=self._seed,
-            replaced_chunks=replaced,
-            paused=self.state.paused,
-        )
+        self._request_restart()
+        message = RolloutResetQueued(seed=self._seed, replaced_chunks=replaced)
         await self._send_state_update()
         return message
 
@@ -350,14 +283,16 @@ class HYWorld15(ReactorPipeline):
     async def set_image(
         self,
         image: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
             description=(
                 "Reference image uploaded through Reactor. JPEG, PNG, WebP, or BMP up to 25 MiB "
                 "and 100 million pixels; EXIF orientation is applied before center cropping."
-            )
+            ),
         ),
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Optional prompt for the fresh world. An empty value preserves the current prompt "
                 "or uses a generic continuation prompt when none exists."
@@ -372,14 +307,11 @@ class HYWorld15(ReactorPipeline):
         self.state.prompt = (
             prompt.strip() or self.state.prompt.strip() or _DEFAULT_UPLOAD_PROMPT
         )
-        self.state.paused = False
-        self._request_restart(auto_step=True)
+        self._request_restart()
         message = ImageSelected(
             source="uploaded",
             filename=image.name,
             prompt=self.state.prompt,
-            paused=self.state.paused,
-            first_chunk_queued=True,
         )
         await self._send_state_update()
         return message
@@ -405,19 +337,16 @@ class HYWorld15(ReactorPipeline):
         self._image_source = "built_in"
         self._image_name = selected.path.name
         self.state.prompt = selected.prompt
-        self.state.paused = False
-        self._request_restart(auto_step=True)
+        self._request_restart()
         message = ImageSelected(
             source="built_in",
             filename=selected.path.name,
             prompt=selected.prompt,
-            paused=self.state.paused,
-            first_chunk_queued=True,
         )
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[Any, None]:
+    async def inference(self) -> AsyncGenerator[HYWorld15Output | None, None]:
         """Generate and emit one native causal chunk at a time."""
         backend = self._require_backend()
         planner = self._require_planner()
@@ -426,7 +355,7 @@ class HYWorld15(ReactorPipeline):
             if self.state._restart_requested:
                 selected = self._selected_input
                 if selected is None:
-                    yield Idle
+                    yield None
                     continue
                 prompt = self.state.prompt.strip()
                 if not prompt:
@@ -452,16 +381,12 @@ class HYWorld15(ReactorPipeline):
                 await self._send_state_update()
 
             if self.state._limit_reached:
-                yield Idle
+                yield None
                 continue
             if self._selected_input is None:
-                yield Idle
-                continue
-            if self.state.paused and not self.state._step_requested:
-                yield Idle
+                yield None
                 continue
 
-            self.state._step_requested = False
             prompt = self.state.prompt.strip()
             control = CameraControl(
                 forward=self.state._forward,
@@ -499,7 +424,6 @@ class HYWorld15(ReactorPipeline):
             )
             if self._chunk_index >= config.max_chunks:
                 self.state._limit_reached = True
-                self.state.paused = True
                 self._release_camera()
                 await self.send(
                     RolloutLimitReached(
@@ -511,11 +435,10 @@ class HYWorld15(ReactorPipeline):
 
             yield HYWorld15Output(main_video=frames)
 
-    def _request_restart(self, *, auto_step: bool) -> None:
-        """Queue a fresh causal world while preserving public playback state."""
+    def _request_restart(self) -> None:
+        """Queue a fresh causal world and clear prior playout, camera, and progress."""
         self.output.flush()
         self._release_camera()
-        self.state._step_requested = auto_step
         self.state._restart_requested = True
         self.state._limit_reached = False
         self._chunk_index = 0
@@ -559,8 +482,6 @@ class HYWorld15(ReactorPipeline):
             prompt=self.state.prompt.strip() or None,
             active_prompt=self._active_prompt,
             seed=self._seed,
-            paused=self.state.paused,
-            step_queued=self.state._step_requested,
             reset_queued=self.state._restart_requested,
             generating=self._generating,
             completed_chunks=self._chunk_index,

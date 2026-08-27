@@ -2,7 +2,7 @@ $schema: reactor/v1
 
 model:
   name: hy-world-1-5
-  version: v0.0.1
+  version: v0.1.0
   description: |
     Play HY-World 1.5 with image, prompt, and native four-axis camera controls.
   resources:
@@ -20,35 +20,28 @@ runtime:
   import: hy_world_1_5:HYWorld15
   config: hy_world_1_5.yaml
   weights_path: ~/.cache/reactor_registry/hy-world-1-5
+  recording:
+    enabled: true
+    chunk_seconds: 4
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
 
 build:
-  # Keep the runtime release aligned with the adapter's public API usage.
-  runtime_version: "3.2.3"
+  runtime_version: "3.2.5"
   python_requirements: requirements.txt
-  # CUDA 12.8 wheels contain the sm_100 kernels required by the B200 declared
-  # above.
   cuda_version: "12.8.1"
   python_version: "3.12"
   system_packages:
-    # The adapter checks out the pinned public HY-WorldPlay revision into the
-    # mounted weights directory during the first model load.
     - git
     - libgl1
     - libglib2.0-0
+  # The official CUDA wheel index also mirrors a small set of utility packages.
+  # Let uv compare those entries with PyPI while resolving the environment.
   build_env:
-    # The official CUDA wheel index also mirrors a small set of utility
-    # packages. Let uv compare those entries with PyPI while resolving the
-    # environment so non-Torch pins are not limited to that partial mirror.
     UV_INDEX_STRATEGY: unsafe-best-match
   runtime_env:
     TOKENIZERS_PARALLELISM: "false"
-
-recording:
-  enabled: true
-  chunk_seconds: 4
-  clip_max_seconds: 300
-  video_track: main_video
-  video:
-    codec: h264
-    preset: veryfast
-    crf: 23

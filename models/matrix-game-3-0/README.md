@@ -23,7 +23,7 @@ cache and calls the upstream interactive pipeline directly.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
-controls its Reactor Runtime 3.2.3, CUDA 12.8.1, Python 3.12, system packages,
+controls its Reactor Runtime 3.2.5, CUDA 12.8.1, Python 3.12, system packages,
 and Python dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -124,8 +124,8 @@ Commands return typed, command-correlated messages for the client timeline:
 
 - `controls_changed` contains the originating keyboard or camera command, the
   full held control state, and the chunk where it will apply.
-- `state_update` contains the selected image and prompt, seed, pause and restart
-  state, held controls, completed chunks, next chunk size, and rollout limit.
+- `state_update` contains the selected image and prompt, seed, restart state,
+  held controls, completed chunks, next chunk size, and rollout limit.
 - `rollout_limit_reached` marks completion of the final native chunk.
 
 A joining viewer receives a complete `state_update`, and successful state

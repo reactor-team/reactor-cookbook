@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,17 +11,16 @@ from PIL import Image
 from reactor_runtime import CommandError, UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
 
+from matrix_game_3_5 import MatrixGame35
+from matrix_game_3_5_types import MatrixGame35State
+
 MODEL_DIR = Path(__file__).parents[1]
-sys.path.insert(0, str(MODEL_DIR))
 
 GENERIC_PROMPT = (
     "An immersive first-person view that faithfully continues the input scene, "
     "preserving its existing environment, objects, geometry, materials, lighting, "
     "and visual style as the camera moves naturally through it."
 )
-
-from matrix_game_3_5 import MatrixGame35
-from matrix_schema import MatrixGame35State
 
 
 def _upload() -> UploadedFile:
@@ -45,7 +43,7 @@ def _model() -> MatrixGame35:
     return model
 
 
-def test_session_starts_unpaused_without_selecting_an_image() -> None:
+def test_session_waits_for_an_image_selection() -> None:
     """Wait for the viewer's anchor instead of generating from the demo image."""
     model = _model()
 
@@ -55,13 +53,19 @@ def test_session_starts_unpaused_without_selecting_an_image() -> None:
     assert model._selected_input is None
     assert state.image_source == "none"
     assert state.image_name == ""
-    assert state.paused is False
-    assert state.step_queued is False
     assert state.completed_chunks == 0
     assert state.next_chunk is None
-    commands = ModelContract.of(MatrixGame35).commands
-    assert "set_paused" not in commands
-    assert "step" not in commands
+    assert set(ModelContract.of(MatrixGame35).commands) == {
+        "reset",
+        "set_forward",
+        "set_image",
+        "set_pitch",
+        "set_prompt",
+        "set_roll",
+        "set_strafe",
+        "set_vertical",
+        "set_yaw",
+    }
 
 
 def test_first_upload_starts_continuous_generation() -> None:
@@ -71,33 +75,20 @@ def test_first_upload_starts_continuous_generation() -> None:
 
     state = model.set_image(_upload(), "")
 
-    assert state.image_source == "upload"
+    assert state.image_source == "uploaded"
     assert state.image_name == "anchor.png"
-    assert state.paused is False
-    assert state.step_queued is False
     assert state.completed_chunks == 0
     assert state.next_chunk == 1
     assert state.prompt == GENERIC_PROMPT
     assert model.state._restart_requested is True
 
 
-@pytest.mark.parametrize(
-    ("command", "arguments"),
-    [
-        ("set_forward", (1.0,)),
-        ("set_paused", (False,)),
-        ("step", ()),
-    ],
-)
-def test_generation_controls_require_an_uploaded_image(
-    command: str,
-    arguments: tuple[object, ...],
-) -> None:
+def test_generation_controls_require_an_uploaded_image() -> None:
     """Reject controls that cannot produce a chunk before anchor selection."""
     model = _model()
     model.on_session_started()
 
     with pytest.raises(CommandError) as error:
-        getattr(model, command)(*arguments)
+        model.set_forward(1.0)
 
     assert error.value.code == "image_required"

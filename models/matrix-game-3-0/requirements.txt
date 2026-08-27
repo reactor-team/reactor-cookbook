@@ -1,7 +1,7 @@
-# Matrix-Game 3.0 upstream inference dependencies.
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
 torch==2.10.0
 torchvision==0.25.0
-torchaudio==2.10.0
 opencv-python==4.10.0.84
 diffusers>=0.36.0
 transformers==4.57.3
@@ -15,10 +15,6 @@ imageio-ffmpeg
 numpy==2.2.6
 scipy
 einops
-pandas
-decord
-tensorboard
-trimesh
 safetensors==0.7.0
 huggingface-hub>=0.36.0
 Pillow>=10.1

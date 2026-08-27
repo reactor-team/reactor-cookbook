@@ -11,14 +11,13 @@ from __future__ import annotations
 import importlib
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, override
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 from numpy.typing import NDArray
 from reactor_runtime import (
     ClientInfo,
     CommandError,
-    Idle,
     InputField,
     ReactorPipeline,
     UploadedFile,
@@ -34,7 +33,7 @@ if TYPE_CHECKING:
     from matrix_game_3_0_assets import MatrixGame30Config
     from matrix_game_3_0_backend import NativeAction
     from matrix_game_3_0_images import FRAMES_PER_CHUNK
-    from matrix_game_3_0_schema import (
+    from matrix_game_3_0_types import (
         MOVEMENT_KEYS,
         ControlsChanged,
         MatrixGame30Output,
@@ -48,7 +47,7 @@ else:
     assets = importlib.import_module(f"{module_prefix}matrix_game_3_0_assets")
     backend_module = importlib.import_module(f"{module_prefix}matrix_game_3_0_backend")
     images = importlib.import_module(f"{module_prefix}matrix_game_3_0_images")
-    schema = importlib.import_module(f"{module_prefix}matrix_game_3_0_schema")
+    schema = importlib.import_module(f"{module_prefix}matrix_game_3_0_types")
     MatrixGame30Config = assets.MatrixGame30Config
     prepare_assets = assets.prepare_assets
     read_config = assets.read_config
@@ -91,7 +90,6 @@ class MatrixGame30(ReactorPipeline):
     """Generate an image-, prompt-, movement-, and view-controlled Matrix world."""
 
     state: MatrixGame30State
-    output: MatrixGame30Output
     buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
@@ -104,7 +102,6 @@ class MatrixGame30(ReactorPipeline):
         self._example_index = 0
         self._example_rng = np.random.default_rng()
 
-    @override
     def load(self, config_path: Path | None) -> None:
         """Prepare public assets and load the distilled upstream model once.
 
@@ -129,7 +126,7 @@ class MatrixGame30(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize an empty unpaused world that waits for an anchor image."""
+        """Initialize an empty world that waits for an anchor image."""
         config = self._require_config()
         self._selected_input = None
         self._example_index = -1
@@ -140,9 +137,7 @@ class MatrixGame30(ReactorPipeline):
         self.state._pressed_keys = frozenset()
         self.state.pitch = 0.0
         self.state.yaw = 0.0
-        self.state.paused = False
         self.state._restart_requested = False
-        self.state._step_requested = False
         self.state._limit_reached = False
 
     @connected
@@ -182,6 +177,7 @@ class MatrixGame30(ReactorPipeline):
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Non-empty scene description, up to 4096 characters. Matrix encodes it once "
                 "before autoregressive generation, so changing it restarts visual memory "
@@ -198,8 +194,7 @@ class MatrixGame30(ReactorPipeline):
                 "image_required", "Select an image before setting a prompt."
             )
         self.state.prompt = normalized
-        self.state.paused = False
-        self._request_fresh_rollout(auto_step=True)
+        self._request_fresh_rollout()
         return self._state_update()
 
     @event(
@@ -215,14 +210,16 @@ class MatrixGame30(ReactorPipeline):
     def set_image(
         self,
         image: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
             description=(
                 "Anchor image supplied through Reactor's upload protocol. JPEG, PNG, WebP, "
                 "or BMP; at most 25 MiB and 100 million pixels."
-            )
+            ),
         ),
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Optional scene description, up to 4096 characters, encoded for the fresh "
                 "rollout started from this uploaded image. Leave empty to condition only "
@@ -235,8 +232,7 @@ class MatrixGame30(ReactorPipeline):
         normalized = prompt.strip()
         self._selected_input = image
         self.state.prompt = normalized
-        self.state.paused = False
-        self._request_fresh_rollout(auto_step=True)
+        self._request_fresh_rollout()
         return self._state_update()
 
     @event(
@@ -261,15 +257,14 @@ class MatrixGame30(ReactorPipeline):
         example = config.examples[self._example_index]
         self._selected_input = example.image
         self.state.prompt = example.prompt
-        self.state.paused = False
-        self._request_fresh_rollout(auto_step=True)
+        self._request_fresh_rollout()
         return self._state_update()
 
     @event(
         name="set_key_state",
         description=(
             "Hold or release one native W/S/A/D keyboard token for subsequent chunks. Valid "
-            "before the 12-chunk rollout limit, including while paused; the complete binary "
+            "before the 12-chunk rollout limit; the complete binary "
             "key state is sampled at the next 57- or 40-frame chunk boundary. Emits "
             "`controls_changed` and broadcasts `state_update` on success, or `command_error` "
             "with `rollout_limit_reached` at the limit."
@@ -307,7 +302,7 @@ class MatrixGame30(ReactorPipeline):
         name="set_pitch",
         description=(
             "Set continuous camera pitch for subsequent native chunks. Valid before the "
-            "12-chunk rollout limit, including while paused; the normalized value is scaled "
+            "12-chunk rollout limit; the normalized value is scaled "
             "to Matrix's native mouse-x range and sampled at the next chunk boundary. Emits "
             "`controls_changed` and broadcasts `state_update` on success, or `command_error` "
             "with `rollout_limit_reached` at the limit."
@@ -336,7 +331,7 @@ class MatrixGame30(ReactorPipeline):
         name="set_yaw",
         description=(
             "Set continuous camera yaw for subsequent native chunks. Valid before the "
-            "12-chunk rollout limit, including while paused; the normalized value is scaled "
+            "12-chunk rollout limit; the normalized value is scaled "
             "to Matrix's native mouse-y range and sampled at the next chunk boundary. Emits "
             "`controls_changed` and broadcasts `state_update` on success, or `command_error` "
             "with `rollout_limit_reached` at the limit."
@@ -360,37 +355,6 @@ class MatrixGame30(ReactorPipeline):
         message = self._controls_changed("set_yaw")
         await self.send(self._state_update())
         return message
-
-    # Keep pause available for future schema re-enablement without exposing it to clients.
-    def set_paused(
-        self,
-        paused: bool = InputField(
-            default=False,
-            description=(
-                "Set true to stop before the next chunk, or false to generate continuously. "
-                "An in-progress native chunk and its remaining frames can finish. Both values "
-                "release W/S/A/D, pitch, and yaw controls."
-            ),
-        ),
-    ) -> StateUpdate:
-        """Set playback mode and return the complete shared state."""
-        if not paused:
-            self._require_available_rollout()
-        self.state.paused = paused
-        self.state._step_requested = False
-        self._clear_controls()
-        return self._state_update()
-
-    # Keep single-step generation available for future schema re-enablement.
-    def step(self) -> StateUpdate:
-        """Queue one paused native chunk and return the complete shared state."""
-        self._require_available_rollout()
-        if not self.state.paused:
-            raise CommandError(
-                "pause_required", "Pause Matrix-Game 3.0 before stepping."
-            )
-        self.state._step_requested = True
-        return self._state_update()
 
     @event(
         name="reset",
@@ -418,12 +382,10 @@ class MatrixGame30(ReactorPipeline):
             raise CommandError("image_required", "Select an image before resetting.")
         if seed >= 0:
             self._seed = seed
-        self.state.paused = False
-        self._request_fresh_rollout(auto_step=True)
+        self._request_fresh_rollout()
         return self._state_update()
 
-    @override
-    async def inference(self) -> AsyncGenerator[object, None]:
+    async def inference(self) -> AsyncGenerator[MatrixGame30Output | None, None]:
         """Generate one official Matrix iteration at a time and emit every RGB frame."""
         backend = self._backend
         config = self._config
@@ -434,7 +396,7 @@ class MatrixGame30(ReactorPipeline):
             if self.state._restart_requested:
                 selected = self._selected_input
                 if selected is None:
-                    yield Idle
+                    yield None
                     continue
                 prompt = self.state.prompt.strip()
                 self.state._restart_requested = False
@@ -442,18 +404,13 @@ class MatrixGame30(ReactorPipeline):
                 self._chunk_index = 0
 
             if self._selected_input is None:
-                yield Idle
+                yield None
                 continue
 
             if self.state._limit_reached:
-                yield Idle
+                yield None
                 continue
 
-            if self.state.paused and not self.state._step_requested:
-                yield Idle
-                continue
-
-            self.state._step_requested = False
             action = action_from_controls(
                 self.state._pressed_keys,
                 self.state.pitch,
@@ -465,7 +422,6 @@ class MatrixGame30(ReactorPipeline):
             self._chunk_index += 1
             if self._chunk_index >= config.max_chunks:
                 self.state._limit_reached = True
-                self.state.paused = True
                 self._clear_controls()
                 await self.send(
                     RolloutLimitReached(
@@ -477,12 +433,11 @@ class MatrixGame30(ReactorPipeline):
 
             yield MatrixGame30Output(main_video=frames)
 
-    def _request_fresh_rollout(self, *, auto_step: bool) -> None:
+    def _request_fresh_rollout(self) -> None:
         """Queue a fresh upstream rollout and clear controls and progress."""
         self.output.flush()
         self._clear_controls()
         self.state._restart_requested = True
-        self.state._step_requested = auto_step
         self.state._limit_reached = False
         self._chunk_index = 0
 
@@ -519,7 +474,7 @@ class MatrixGame30(ReactorPipeline):
         image_source = (
             "none"
             if selected is None
-            else "upload"
+            else "uploaded"
             if isinstance(selected, UploadedFile)
             else "built_in"
         )
@@ -533,8 +488,6 @@ class MatrixGame30(ReactorPipeline):
             image_source=image_source,
             image_name=selected.name if selected is not None else "",
             seed=self._seed,
-            paused=self.state.paused,
-            step_queued=self.state._step_requested,
             restart_queued=self.state._restart_requested,
             limit_reached=self.state._limit_reached,
             completed_chunks=self._chunk_index,

@@ -1,7 +1,5 @@
-# Python dependencies installed into the model image in the same resolution as
-# Reactor Runtime. `build.runtime_version` in reactor.yaml owns
-# the Runtime version; Matrix's upstream packages remain isolated in the
-# Python 3.10 worker environment prepared at model load.
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
 
 # Image validation and normalization in the serving process.
 Pillow>=10.1

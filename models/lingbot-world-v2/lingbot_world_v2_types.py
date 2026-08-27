@@ -45,18 +45,6 @@ class StateUpdate(ModelMessage):
             "seed replaces it when that reset begins."
         )
     )
-    paused: bool = MessageField(
-        description=(
-            "Whether continuous generation stops before the next chunk. An already generated "
-            "chunk can finish streaming after this becomes true."
-        )
-    )
-    step_queued: bool = MessageField(
-        description=(
-            "Whether `step` has queued exactly one chunk while paused. It returns to false "
-            "when that chunk starts or another playback command cancels it."
-        )
-    )
     reset_queued: bool = MessageField(
         description=(
             "Whether a fresh rollout from the selected image, prompt, and seed will begin "
@@ -173,25 +161,6 @@ class ImageSelected(ModelMessage):
     )
 
 
-class PauseChanged(ModelMessage):
-    """Emitted when continuous generation pauses or resumes successfully."""
-
-    paused: bool = MessageField(
-        description="Resulting continuous-generation pause state."
-    )
-    camera_motion_released: bool = MessageField(
-        description="Whether all six held camera axes were returned to neutral."
-    )
-
-
-class StepQueued(ModelMessage):
-    """Emitted when one paused chunk is queued successfully."""
-
-    applies_to_chunk: int = MessageField(
-        description="One-based chunk that the queued step will generate."
-    )
-
-
 class RolloutResetQueued(ModelMessage):
     """Emitted when a fresh causal rollout is queued successfully."""
 
@@ -232,7 +201,7 @@ class ChunkCompleted(ModelMessage):
 
 
 class RolloutLimitReached(ModelMessage):
-    """Emitted once when generation pauses after the last available chunk."""
+    """Emitted once when generation idles after the last available chunk."""
 
     completed_chunks: int = MessageField(
         description="Number of chunks completed when the rollout reached its limit."
@@ -243,32 +212,21 @@ class RolloutLimitReached(ModelMessage):
 
 
 class LingBotWorldV2State(InputState):
-    """Store shared prompt, camera, and playback state."""
+    """Store shared prompt and camera state."""
 
     prompt: str = InputField(
         default="",
         max_length=4096,
+        moderate=True,
         description=(
             "Active scene prompt, up to 4096 characters. A non-empty change is sampled at the "
             "next chunk boundary and preserves the current causal world."
         ),
     )
-    _paused: bool = False
     _forward: float = 0.0
     _strafe: float = 0.0
     _vertical: float = 0.0
     _pitch: float = 0.0
     _yaw: float = 0.0
     _roll: float = 0.0
-    _step_requested: bool = False
     _reset_requested: bool = False
-
-    @property
-    def paused(self) -> bool:
-        """Return whether continuous chunk generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether continuous chunk generation is paused."""
-        self._paused = value

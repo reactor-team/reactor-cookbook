@@ -85,18 +85,6 @@ class StateUpdate(ModelMessage):
     seed: int = MessageField(
         description="Random seed used when the current or queued rollout is initialized."
     )
-    paused: bool = MessageField(
-        description=(
-            "Whether continuous generation stops before the next chunk; an already running "
-            "chunk can still complete."
-        )
-    )
-    step_queued: bool = MessageField(
-        description=(
-            "Whether exactly one chunk is queued while generation is paused, either by `step` "
-            "or automatically after selecting a starting image."
-        )
-    )
     reset_queued: bool = MessageField(
         description=(
             "Whether the selected image, prompt, and seed will initialize a fresh rollout at "
@@ -186,12 +174,6 @@ class ImageSelected(ModelMessage):
     applies_to_chunk: int = MessageField(
         description="One-based chunk affected by the image selection; always 1."
     )
-    initial_chunk_queued: bool = MessageField(
-        description=(
-            "Whether image selection automatically queued chunk 1 because the world is paused. "
-            "The world remains paused after that chunk completes."
-        )
-    )
 
 
 class PromptQueued(ModelMessage):
@@ -204,25 +186,6 @@ class PromptQueued(ModelMessage):
         description=(
             "One-based chunk that will first use `prompt`, or null until an image is selected."
         )
-    )
-
-
-class PauseChanged(ModelMessage):
-    """Emitted when ``set_paused`` changes playback and releases native controls."""
-
-    paused: bool = MessageField(
-        description="Whether continuous chunk generation is paused after the command."
-    )
-    controls_released: bool = MessageField(
-        description="Whether held keys and queued taps were cleared; always true."
-    )
-
-
-class StepQueued(ModelMessage):
-    """Emitted when ``step`` queues one chunk while paused."""
-
-    applies_to_chunk: int = MessageField(
-        description="One-based chunk that the accepted step will generate."
     )
 
 
@@ -250,30 +213,19 @@ class RolloutLimitReached(ModelMessage):
 
 
 class ABotWorldState(InputState):
-    """Expose prompt and playback controls shared by one ABot-World session."""
+    """Expose the prompt shared by one ABot-World session."""
 
     prompt: str = InputField(
         default=DEFAULT_PROMPT,
         max_length=4096,
+        moderate=True,
         description=(
             "Scene prompt queued for the next generated chunk. Whitespace-only values are "
             "rejected by `set_prompt`."
         ),
     )
-    _paused: bool = False
     _pressed_keys: frozenset[str] = frozenset()
     _activated_keys: frozenset[str] = frozenset()
-    _step_requested: bool = False
     _reset_requested: bool = False
     _limit_reached: bool = False
     _seed: int = 0
-
-    @property
-    def paused(self) -> bool:
-        """Return whether continuous chunk generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether continuous chunk generation is paused."""
-        self._paused = value

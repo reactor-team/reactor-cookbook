@@ -36,7 +36,7 @@ class StateUpdate(ModelMessage):
     image_source: str = MessageField(
         description=(
             "Source of the selected anchor image: `none` before selection, `built_in` after "
-            "`random_image`, or `upload` after `set_image`."
+            "`random_image`, or `uploaded` after `set_image`."
         )
     )
     image_name: str = MessageField(
@@ -48,18 +48,6 @@ class StateUpdate(ModelMessage):
         description=(
             "Random seed used by the current or queued fresh rollout. A non-negative "
             "`reset.seed` replaces it."
-        )
-    )
-    paused: bool = MessageField(
-        description=(
-            "Whether continuous generation stops at chunk boundaries. A queued step still "
-            "generates one complete native chunk while this value remains true."
-        )
-    )
-    step_queued: bool = MessageField(
-        description=(
-            "Whether one native chunk is queued while paused. It becomes false when that "
-            "chunk begins or a playback command cancels it."
         )
     )
     restart_queued: bool = MessageField(
@@ -148,7 +136,7 @@ class ControlsChanged(ModelMessage):
 
 
 class RolloutLimitReached(ModelMessage):
-    """Emitted when the final native `main_video` chunk completes and playback pauses."""
+    """Emitted when the final native `main_video` chunk completes."""
 
     completed_chunks: int = MessageField(
         description="Number of native chunks completed when the rollout reached its limit."
@@ -167,6 +155,7 @@ class MatrixGame30State(InputState):
     prompt: str = InputField(
         default="",
         max_length=4096,
+        moderate=True,
         description=(
             "Scene description, up to 4096 characters. `set_prompt` requires non-empty text, "
             "restarts from the selected anchor, and queues the fresh 57-frame chunk because "
@@ -191,18 +180,6 @@ class MatrixGame30State(InputState):
             "held until changed or controls are released."
         ),
     )
-    _paused: bool = False
     _pressed_keys: frozenset[str] = frozenset()
-    _step_requested: bool = False
     _restart_requested: bool = True
     _limit_reached: bool = False
-
-    @property
-    def paused(self) -> bool:
-        """Return whether continuous chunk generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether continuous chunk generation is paused."""
-        self._paused = value

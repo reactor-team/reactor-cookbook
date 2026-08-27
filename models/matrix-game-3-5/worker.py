@@ -252,7 +252,7 @@ class MatrixRuntime:
     def generate(self, camera: Path, seed: int, prompt: str) -> Path:
         """Generate one chunk while preserving the active causal state."""
         if self._session is None or self._session_thread is None:
-            self.reset(seed, self._default_anchor, self._default_prompt)
+            raise RuntimeError("reset Matrix before generating a chunk")
         if seed != self._active_seed:
             raise ValueError("Matrix seed can change only at reset")
         prompt = prompt.strip()

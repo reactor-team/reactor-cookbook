@@ -35,7 +35,6 @@ def test_public_contract_is_atomic_and_audiovisual() -> None:
     }
     assert EchoWM.fps == 24
     assert EchoWM.buffer_size == 24
-    assert EchoWMState().paused is False
     assert set(EchoWMOutput.__tracks__) == {"main_video", "main_audio"}
     assert EchoWMOutput.__tracks__["main_audio"].rate == 48_000
 
@@ -181,8 +180,6 @@ def test_inference_yields_one_synchronized_native_chunk(tmp_path: Path) -> None:
     model._selected_image = tmp_path / "anchor.png"
     model.state.prompt = "A quiet room with distant music."
     model.state._reset_requested = True
-    model.state.paused = True
-    model.state._queued_steps = 2
     model._seed = 42
 
     async def generate() -> tuple[EchoWMOutput, EchoWMOutput]:
@@ -200,8 +197,6 @@ def test_inference_yields_one_synchronized_native_chunk(tmp_path: Path) -> None:
     assert audio.shape == (1, 50_000)
     assert model._backend.reset_calls == 1
     assert model._backend.chunk_calls == 2
-    assert model.state._queued_steps == 0
-    assert model.state.paused is True
 
 
 def test_rollout_reset_flushes_pending_media() -> None:
@@ -219,9 +214,8 @@ def test_rollout_reset_flushes_pending_media() -> None:
     output = FakeOutput()
     model.output = cast(Any, output)
 
-    model._request_reset(preview_steps=0)
+    model._request_reset()
 
-    assert model.state._queued_steps == 0
     assert model.state._reset_requested is True
     assert output.flushes == 1
 

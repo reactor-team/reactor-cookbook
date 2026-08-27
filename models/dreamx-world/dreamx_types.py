@@ -79,21 +79,12 @@ class StateUpdate(ModelMessage):
     )
     pressed_keys: list[str] = MessageField(
         description=(
-            "Native DreamX camera keys currently held for subsequent chunks. `set_paused`, "
-            "`reset`, and image-selection commands clear this list."
+            "Native DreamX camera keys currently held for subsequent chunks. `reset` and "
+            "image-selection commands clear this list."
         )
     )
     seed: int = MessageField(
         description="Random seed used when the current or queued rollout is initialized."
-    )
-    paused: bool = MessageField(
-        description="Whether automatic chunk generation is paused before the next chunk."
-    )
-    step_queued: bool = MessageField(
-        description=(
-            "Whether exactly one native chunk is queued while paused by `step` or image "
-            "selection's automatic preview."
-        )
     )
     reset_queued: bool = MessageField(
         description="Whether a fresh rollout will start before the next generated chunk."
@@ -149,41 +140,11 @@ class PromptQueued(ModelMessage):
 class ActionChanged(ModelMessage):
     """Emitted after a `set_key_state` command is processed."""
 
-    control: str = MessageField(
-        description=(
-            "Wire name of the command that produced this response; always `set_key_state`."
-        )
-    )
-    paused: bool = MessageField(
-        description=(
-            "Pause state after the command is processed. Held keys may be changed while true "
-            "and are sampled by the next `step` or resumed chunk."
-        )
-    )
     pressed_keys: list[str] = MessageField(
         description=(
             "Native camera keys held after the command is processed. Each key applies to "
             "subsequent chunks until `set_key_state` releases it or controls are cleared."
         )
-    )
-
-
-class PauseChanged(ModelMessage):
-    """Emitted when `set_paused` changes generation and releases held keys."""
-
-    paused: bool = MessageField(
-        description="Whether automatic generation will stop before the next native chunk."
-    )
-    keys_released: bool = MessageField(
-        description="Whether every held camera key was released; always true."
-    )
-
-
-class StepQueued(ModelMessage):
-    """Emitted when `step` queues one native chunk while paused."""
-
-    applies_to_chunk: int = MessageField(
-        description="One-based chunk that the queued paused step will generate."
     )
 
 
@@ -235,22 +196,11 @@ class DreamXWorldState(InputState):
     prompt: str = InputField(
         default="",
         max_length=4096,
+        moderate=True,
         description=(
             "Scene or event prompt queued for the next native chunk. Requires a selected "
             "image; whitespace-only values are rejected by `set_prompt`."
         ),
     )
-    _paused: bool = False
     _pressed_keys: frozenset[str] = frozenset()
-    _step_requested: bool = False
     _reset_requested: bool = False
-
-    @property
-    def paused(self) -> bool:
-        """Return whether automatic chunk generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether automatic chunk generation is paused."""
-        self._paused = value

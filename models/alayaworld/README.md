@@ -17,8 +17,8 @@ were produced, keeping the stream populated while the next turn runs.
 `buffer_size` bounds the queue at one chunk, so a camera change is answered by
 the next generated turn.
 
-A new session starts unpaused without choosing a scene for the user. Upload an
-image with `set_image`, or invoke `random_image` to select one of the public
+A new session starts without choosing a scene for the user. Upload an image
+with `set_image`, or invoke `random_image` to select one of the public
 AlayaWorld examples. Either command initializes the autoregressive cache and
 starts generation.
 
@@ -26,7 +26,7 @@ starts generation.
 
 This directory is a `reactor` workspace. The manifest names the model and its
 B200 resource, and its `build` block defines the complete Python 3.12 and CUDA
-12.8 image with Reactor Runtime 3.2.3. `requirements.txt` contains the model
+12.8 image with Reactor Runtime 3.2.5. `requirements.txt` contains the model
 dependencies. The host needs the
 [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
 the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. See Reactor's
@@ -156,9 +156,9 @@ Prompt and camera commands require a selected image. Prompts are stripped and
 must contain non-whitespace text. `ImageSelected` reports the effective prompt
 alongside the uploaded or built-in filename, so every state-changing control has
 a typed confirmation in the model-message timeline. Successful controls also
-broadcast a `StateUpdate` snapshot with the complete prompt, image, playback,
-rollout, and six-axis camera state. A newly connected viewer receives the same
-snapshot immediately.
+broadcast a `StateUpdate` snapshot with the complete prompt, image, rollout,
+and six-axis camera state. A newly connected viewer receives the same snapshot
+immediately.
 
 The frontend owns keyboard, pointer, joystick, sensitivity, and layout mapping.
 Key down sends `-1` or `1`; key up sends zero. [`demo/`](./demo) binds all six

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from reactor_runtime import (
     InputField,
     InputState,
@@ -31,7 +33,7 @@ class StateUpdate(ModelMessage):
     image_source: str = MessageField(
         description=(
             "Source of the active anchor image: `none` before selection, `built_in` after "
-            "`random_image`, and `upload` after `set_image`."
+            "`random_image`, and `uploaded` after `set_image`."
         )
     )
     image_name: str = MessageField(
@@ -41,18 +43,6 @@ class StateUpdate(ModelMessage):
         description=(
             "Non-negative random seed for the current or queued rollout. It changes only when "
             "`reset` receives a non-negative seed."
-        )
-    )
-    paused: bool = MessageField(
-        description=(
-            "Whether continuous generation stops before the next chunk. An in-flight GPU chunk "
-            "can finish before the pause takes effect."
-        )
-    )
-    step_queued: bool = MessageField(
-        description=(
-            "Whether one chunk is queued while paused. It becomes false when that chunk starts "
-            "or another playback command cancels it."
         )
     )
     limit_reached: bool = MessageField(
@@ -126,8 +116,53 @@ class StateUpdate(ModelMessage):
     )
 
 
+class ImageSelected(ModelMessage):
+    """Emitted when an uploaded or built-in image starts a fresh world."""
+
+    source: Literal["uploaded", "built_in"] = MessageField(
+        description="Image source accepted by the command."
+    )
+    filename: str = MessageField(description="Selected anchor-image filename.")
+    prompt: str = MessageField(description="Non-empty prompt for the fresh world.")
+    seed: int = MessageField(description="Random seed for the fresh world.")
+
+
+class PromptQueued(ModelMessage):
+    """Emitted when `set_prompt` queues text conditioning for the active world."""
+
+    prompt: str = MessageField(description="Trimmed prompt accepted by `set_prompt`.")
+    applies_to_chunk: int = MessageField(
+        description="One-based chunk that first encodes the new prompt."
+    )
+
+
+class CameraMotionChanged(ModelMessage):
+    """Emitted when one held camera axis changes."""
+
+    forward: float = MessageField(description="Active backward-to-forward motion.")
+    strafe: float = MessageField(description="Active left-to-right motion.")
+    vertical: float = MessageField(description="Active down-to-up motion.")
+    pitch: float = MessageField(description="Active downward-to-upward pitch motion.")
+    yaw: float = MessageField(description="Active left-to-right yaw motion.")
+    roll: float = MessageField(
+        description="Active counterclockwise-to-clockwise roll motion."
+    )
+    applies_to_chunk: int = MessageField(
+        description="One-based chunk expected to sample these values first."
+    )
+
+
+class RolloutResetQueued(ModelMessage):
+    """Emitted when `reset` queues a fresh world from the selected image."""
+
+    seed: int = MessageField(description="Random seed for the fresh world.")
+    replaced_chunks: int = MessageField(
+        description="Completed chunks discarded by the reset."
+    )
+
+
 class RolloutLimitReached(ModelMessage):
-    """Report that generation paused at the end of the safe timeline."""
+    """Emitted when the rollout reaches the end of its safe timeline."""
 
     completed_chunks: int = MessageField(
         description="Number of completed chunks when the rollout reached its configured limit."
@@ -141,11 +176,12 @@ class RolloutLimitReached(ModelMessage):
 
 
 class LingBotWorldState(InputState):
-    """Expose shared text, camera, and playback controls for one LingBot world."""
+    """Expose shared text and camera controls for one LingBot world."""
 
     prompt: str = InputField(
         default="",
         max_length=4096,
+        moderate=True,
         description=(
             "Active non-empty scene prompt, up to 4096 characters. A change is encoded at the "
             "next generated chunk boundary without clearing visual self-KV history."
@@ -205,17 +241,5 @@ class LingBotWorldState(InputState):
             "until changed or released."
         ),
     )
-    _paused: bool = False
-    _step_requested: bool = False
     _restart_requested: bool = True
     _limit_reached: bool = False
-
-    @property
-    def paused(self) -> bool:
-        """Return whether continuous chunk generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether continuous chunk generation is paused."""
-        self._paused = value

@@ -109,12 +109,12 @@ the most reliable results.
 
 Commands return typed, command-correlated messages for the client timeline:
 
-- `action_changed` contains the originating control, pause state, held keys and
+- `action_changed` contains the originating control, held keys and
   mouse buttons, and the mouse or wheel movement received.
 - `conditioning_changed` contains the selected demo or uploaded image
   filename.
 - `rollout_reset` contains the selected seed and retained conditioning source.
-- `state_update` is a complete snapshot of the pause state, held controls,
+- `state_update` is a complete snapshot of the held controls,
   seed, and conditioning selection. A joining viewer receives one immediately;
   successful state changes broadcast another.
 

@@ -24,7 +24,6 @@ import {
   type AlayaWorldSetPitchParams,
   type AlayaWorldSetYawParams,
   type AlayaWorldSetRollParams,
-  type AlayaWorldSetPausedParams,
   type AlayaWorldResetParams,
   type AlayaWorldSetImageParams,
   type AlayaWorldMessage,
@@ -32,8 +31,6 @@ import {
   type AlayaWorldImageSelectedMessage,
   type AlayaWorldPromptQueuedMessage,
   type AlayaWorldCameraMotionChangedMessage,
-  type AlayaWorldPauseChangedMessage,
-  type AlayaWorldStepQueuedMessage,
   type AlayaWorldRolloutResetQueuedMessage,
   type AlayaWorldRecvTrackName,
 } from "./client";
@@ -159,10 +156,6 @@ export function useAlayaWorld() {
       sendCommand("set_yaw", params),
     setRoll: (params: AlayaWorldSetRollParams): Promise<void> =>
       sendCommand("set_roll", params),
-    setPaused: (params: AlayaWorldSetPausedParams): Promise<void> =>
-      sendCommand("set_paused", params),
-    step: (): Promise<void> =>
-      sendCommand("step", {}),
     reset: (params: AlayaWorldResetParams): Promise<void> =>
       sendCommand("reset", params),
     setImage: (params: AlayaWorldSetImageParams): Promise<void> =>
@@ -240,36 +233,6 @@ export function useAlayaWorldCameraMotionChanged(
     const m = _unwrapMessage<AlayaWorldMessage>(msg);
     if (m.type === "camera_motion_changed") {
       handler(m as AlayaWorldCameraMotionChangedMessage);
-    }
-  });
-}
-
-/**
- * Subscribe to "pause_changed" messages only.
- * Handler receives a fully-typed AlayaWorldPauseChangedMessage.
- */
-export function useAlayaWorldPauseChanged(
-  handler: (message: AlayaWorldPauseChangedMessage) => void,
-): void {
-  useReactorMessage((msg: unknown) => {
-    const m = _unwrapMessage<AlayaWorldMessage>(msg);
-    if (m.type === "pause_changed") {
-      handler(m as AlayaWorldPauseChangedMessage);
-    }
-  });
-}
-
-/**
- * Subscribe to "step_queued" messages only.
- * Handler receives a fully-typed AlayaWorldStepQueuedMessage.
- */
-export function useAlayaWorldStepQueued(
-  handler: (message: AlayaWorldStepQueuedMessage) => void,
-): void {
-  useReactorMessage((msg: unknown) => {
-    const m = _unwrapMessage<AlayaWorldMessage>(msg);
-    if (m.type === "step_queued") {
-      handler(m as AlayaWorldStepQueuedMessage);
     }
   });
 }

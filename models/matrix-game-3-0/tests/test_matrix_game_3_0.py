@@ -8,12 +8,12 @@ from unittest.mock import AsyncMock
 
 import numpy as np
 from PIL import Image
-from reactor_runtime import Idle, UploadedFile
+from reactor_runtime import UploadedFile
 
 from matrix_game_3_0 import MatrixGame30
 from matrix_game_3_0_backend import MatrixGame30Backend, action_from_controls
 from matrix_game_3_0_images import normalize_output_frames
-from matrix_game_3_0_schema import MatrixGame30State
+from matrix_game_3_0_types import MatrixGame30State
 
 
 def _png_bytes() -> bytes:
@@ -37,7 +37,7 @@ def test_native_chunk_frame_counts_are_enforced() -> None:
     assert normalize_output_frames(later, 1).shape[0] == 40
 
 
-def test_session_waits_unpaused_for_explicit_image_selection() -> None:
+def test_session_waits_for_explicit_image_selection() -> None:
     model = MatrixGame30()
     model.state = MatrixGame30State()
     model._config = SimpleNamespace(seed=42, max_chunks=12)
@@ -58,13 +58,11 @@ def test_session_waits_unpaused_for_explicit_image_selection() -> None:
         return output
 
     assert model._selected_input is None
-    assert model.state.paused is False
     assert model.state._restart_requested is False
-    assert model.state._step_requested is False
     assert message.image_source == "none"
     assert message.next_chunk is None
     assert message.next_chunk_frames is None
-    assert asyncio.run(first_turn()) is Idle
+    assert asyncio.run(first_turn()) is None
 
 
 def test_uploaded_image_and_prompt_start_a_fresh_rollout(tmp_path: Path) -> None:
@@ -78,11 +76,9 @@ def test_uploaded_image_and_prompt_start_a_fresh_rollout(tmp_path: Path) -> None
         "replacement",
     )
 
-    assert model.state.paused is False
     assert model.state._restart_requested is True
-    assert model.state._step_requested is True
     assert message.prompt == "replacement"
-    assert message.image_source == "upload"
+    assert message.image_source == "uploaded"
     assert message.next_chunk_frames == 57
 
 
@@ -99,11 +95,9 @@ def test_uploaded_image_without_prompt_starts_a_fresh_rollout(
         "",
     )
 
-    assert model.state.paused is False
     assert model.state._restart_requested is True
-    assert model.state._step_requested is True
     assert message.prompt == ""
-    assert message.image_source == "upload"
+    assert message.image_source == "uploaded"
     assert message.next_chunk_frames == 57
 
 

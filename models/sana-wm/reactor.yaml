@@ -2,7 +2,7 @@ $schema: reactor/v1
 
 model:
   name: sana-wm-streaming
-  version: v0.0.1
+  version: v0.1.0
   description: |
     Explore SANA-WM's distilled autoregressive video world from an image,
     a prompt, and native camera controls.
@@ -21,9 +21,18 @@ runtime:
   import: sana_wm:SanaWM
   config: sana_wm.yaml
   weights_path: ~/.cache/reactor_registry/sana-wm-streaming-reactor
+  recording:
+    enabled: true
+    chunk_seconds: 4
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
 
 build:
-  runtime_version: "3.2.3"
+  runtime_version: "3.2.5"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"
@@ -38,13 +47,3 @@ build:
     TOKENIZERS_PARALLELISM: "false"
   run:
     - python -m pip install --no-build-isolation mmcv==1.7.2
-
-recording:
-  enabled: true
-  chunk_seconds: 4
-  clip_max_seconds: 300
-  video_track: main_video
-  video:
-    codec: h264
-    preset: veryfast
-    crf: 23

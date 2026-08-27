@@ -23,7 +23,7 @@ chunk boundary.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model,
-controls its Reactor Runtime 3.2.3, CUDA 12.8.1, Python 3.12, system packages,
+controls its Reactor Runtime 3.2.5, CUDA 12.8.1, Python 3.12, system packages,
 and Python dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -93,14 +93,14 @@ combined in the same chunk.
 ## Start from an image
 
 `set_image` uses Reactor's upload protocol and accepts decoded JPEG, PNG, WebP,
-or BMP files up to 25 MiB and 100 million pixels. Uploading an image preserves
-the pause setting and automatically queues its first chunk.
+or BMP files up to 25 MiB and 100 million pixels. Uploading an image starts a
+fresh world and continuous generation from its first chunk.
 
 LingBot-World's camera path expects calibrated intrinsics. An uploaded image
 uses the first public sample's calibration until `random_image` selects another
 one, matching the upstream fixed 480×832 inference path. The public lakeside
 and Great Wall anchors arrive in the pinned source checkout; their locations
-are documented in [`example_image`](example_image).
+are documented in [`example_images`](example_images).
 
 ## Runtime boundary
 
@@ -123,13 +123,15 @@ text while preserving generated visual history.
 
 ## Model messages
 
-Every accepted command returns a typed `state_update` and broadcasts a complete
-snapshot for the client timeline. It contains the active image, prompt, seed,
-pause and step state, all six camera axes, completed chunk count, next affected
-chunk, frame count, rollout limit, and most recent generation time. A joining
-viewer receives the same state immediately.
+Every accepted command returns its own typed result — `image_selected`,
+`prompt_queued`, `camera_motion_changed`, or `rollout_reset_queued` — and
+broadcasts a complete `state_update` snapshot for the client timeline. The
+snapshot contains the active image, prompt, seed, all six camera axes,
+completed chunk count, next affected chunk, frame count, rollout limit, and
+most recent generation time. A joining viewer receives the same state
+immediately.
 
-`rollout_limit_reached` reports when generation pauses at the configured safe
+`rollout_limit_reached` reports when generation stops at the configured safe
 RoPE boundary. `reset`, `set_image`, or `random_image` starts a fresh timeline.
 Message delivery remains outside the synchronous inference loop.
 

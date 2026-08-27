@@ -15,7 +15,7 @@ measured inference throughput, and the output queue holds one complete 12-frame
 chunk. Prompt and held-key state are sampled at the chunk boundary, so a command
 received during an in-flight turn applies to the following one.
 
-A new session starts unpaused without choosing a scene. Upload an image with
+A new session starts without choosing a scene. Upload an image with
 `set_image`, or call `random_image` to select one of the public DreamX examples.
 Either command resets the autoregressive state and starts continuous generation
 from chunk 1.
@@ -35,7 +35,7 @@ from chunk 1.
 ## Run
 
 The `build` block in `reactor.yaml` controls the model image: Reactor Runtime
-3.2.3, Python 3.12, CUDA 12.8.1, system packages, and `requirements.txt`. See
+3.2.5, Python 3.12, CUDA 12.8.1, system packages, and `requirements.txt`. See
 Reactor's [build configuration](https://docs.reactor.inc/deploy/platform/build)
 for the supported fields. The host needs only the prerequisites above.
 
@@ -139,18 +139,17 @@ prompts from the pinned source checkout.
 
 Commands return typed, command-correlated messages for the client timeline:
 
-- `image_selected` identifies the uploaded or built-in image, effective
-  prompt, and preview chunk.
+- `image_selected` identifies the uploaded or built-in image and the effective
+  prompt for the fresh rollout.
 - `prompt_queued` reports the normalized prompt and first chunk expected to use
   it.
-- `action_changed` contains the originating control, pause state, and complete
-  held-key set.
+- `action_changed` contains the complete held-key set.
 - `rollout_reset_queued` confirms rollout transitions before inference consumes them.
 - `chunk_generated` reports the sampled prompt and keys, frame count, chunk
   number, and wall-clock inference time.
-- `state_update` is a complete snapshot of image, prompt, pause state, held
-  keys, seed, chunk progress, and generation state. A joining viewer receives
-  one immediately; successful state changes broadcast another.
+- `state_update` is a complete snapshot of image, prompt, held keys, seed,
+  chunk progress, and generation state. A joining viewer receives one
+  immediately; successful state changes broadcast another.
 
 Message delivery stays outside the blocking GPU inference call.
 

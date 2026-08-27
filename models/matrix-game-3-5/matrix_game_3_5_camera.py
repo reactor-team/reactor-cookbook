@@ -25,11 +25,6 @@ class CameraMotionPlanner:
         self._current_c2w = self._initial_c2w.copy()
         self._config = config
 
-    @property
-    def current_c2w(self) -> np.ndarray:
-        """Return a copy of the current camera-to-world pose."""
-        return self._current_c2w.copy()
-
     def reset(self) -> None:
         """Return the camera to its configured anchor pose."""
         self._current_c2w = self._initial_c2w.copy()

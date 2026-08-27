@@ -97,12 +97,6 @@ class StateUpdate(ModelMessage):
     seed: int = MessageField(
         description="Random seed used when the current rollout is initialized or reset."
     )
-    paused: bool = MessageField(
-        description="Whether automatic chunk generation is paused before the next chunk."
-    )
-    step_queued: bool = MessageField(
-        description="Whether `step` has queued one 32-frame chunk while paused."
-    )
     reset_queued: bool = MessageField(
         description="Whether the selected image, prompt, and seed will start a fresh rollout."
     )
@@ -166,8 +160,6 @@ class StateUpdate(ModelMessage):
             prompt=state.prompt.strip() or None,
             active_prompt=active_prompt,
             seed=seed,
-            paused=state.paused,
-            step_queued=state._step_requested,
             reset_queued=state._reset_requested,
             generating=generating,
             completed_chunks=completed_chunks,
@@ -247,25 +239,6 @@ class CameraMotionChanged(ModelMessage):
     )
 
 
-class PauseChanged(ModelMessage):
-    """Emitted when `set_paused` changes playback and releases camera motion."""
-
-    paused: bool = MessageField(
-        description="Whether automatic generation will stop before the next chunk."
-    )
-    camera_motion_released: bool = MessageField(
-        description="Whether all six persistent camera velocities were reset to zero; always true."
-    )
-
-
-class StepQueued(ModelMessage):
-    """Emitted when `step` queues one chunk while generation is paused."""
-
-    applies_to_chunk: int = MessageField(
-        description="One-based chunk in the active rollout that the queued step will generate."
-    )
-
-
 class RolloutResetQueued(ModelMessage):
     """Emitted when a manual or automatic reset queues a fresh rollout."""
 
@@ -292,6 +265,7 @@ class AlayaWorldState(InputState):
     prompt: str = InputField(
         default="",
         max_length=4096,
+        moderate=True,
         description=(
             "Scene prompt queued for the next 32-frame chunk. Requires a selected image; "
             "whitespace-only values are rejected by `set_prompt`."
@@ -351,16 +325,4 @@ class AlayaWorldState(InputState):
             "and held until changed; zero is neutral."
         ),
     )
-    _paused: bool = False
-    _step_requested: bool = False
     _reset_requested: bool = False
-
-    @property
-    def paused(self) -> bool:
-        """Return whether continuous chunk generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether continuous chunk generation is paused."""
-        self._paused = value

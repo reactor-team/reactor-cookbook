@@ -26,7 +26,7 @@ controls the host directory mounted for source and checkpoints.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model,
-configures its Reactor Runtime 3.2.3 image, mounts the persistent weights cache,
+configures its Reactor Runtime 3.2.5 image, mounts the persistent weights cache,
 and enables recording. `requirements.txt` contains the inference dependencies.
 See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
@@ -41,7 +41,7 @@ reactor build
 reactor run --gpus device=0 --port 8080
 ```
 
-The configured image contains Reactor Runtime 3.2.3, Python 3.12, CUDA 12.8,
+The configured image contains Reactor Runtime 3.2.5, Python 3.12, CUDA 12.8,
 the model dependencies, and the required system packages. `reactor run` reuses
 the local image, building it automatically when its tag is absent.
 
@@ -65,7 +65,7 @@ reactor build && reactor run --gpus device=0 --port 8080
 
 ## Controls
 
-A session starts unpaused with no scene selected. Selecting an image starts
+A session starts with no scene selected. Selecting an image starts
 continuous generation from the first chunk.
 
 - `set_key_state(key, pressed)` holds or releases `w`, `a`, `s`, or `d` for
@@ -117,7 +117,7 @@ horizon remain unchanged.
 The first causal decode emits 9 RGB frames and each later decode emits 12.
 Playback adapts to measured inference throughput, and the output queue holds
 one complete 12-frame chunk. One rollout therefore provides 120 interactive
-chunks before the adapter pauses and requires `reset`, `set_image`, or
+chunks before the adapter idles and requires `reset`, `set_image`, or
 `random_image`.
 
 ## Model messages
@@ -128,9 +128,9 @@ Commands and generation publish typed messages for the client timeline:
   held-key set, and the first chunk that will sample it.
 - `camera_motion_changed` contains both camera axes and the first chunk that will
   sample them.
-- `state_update` is a complete snapshot of image selection, pause and queue
-  state, rollout progress, seed, and active controls. A joining viewer receives
-  one immediately; successful state changes broadcast another.
+- `state_update` is a complete snapshot of image selection, rollout progress,
+  seed, and active controls. A joining viewer receives one immediately;
+  successful state changes broadcast another.
 - `chunk_complete` contains the chunk index, decoded frame count, sampled
   controls, and measured inference time.
 - `rollout_limit_reached` reports the exhausted official chunk horizon.

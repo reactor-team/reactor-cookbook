@@ -49,8 +49,8 @@ downloads persist across image rebuilds. A liveness check is available at
 - `release_controls` returns every action channel to neutral.
 - `reset` restarts the selected image with the current prompt and an optional new seed.
 
-Sessions start unpaused. Selecting an uploaded or built-in image starts
-continuous generation from chunk 1.
+Selecting an uploaded or built-in image starts continuous generation from
+chunk 1.
 
 The public messages report the accepted action, the chunk it will affect, the
 last sampled keys, prompt application, rollout progress, and reset or limit

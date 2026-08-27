@@ -2,7 +2,7 @@ $schema: reactor/v1
 
 model:
   name: lingbot-world-v2-14b-causal-fast
-  version: v0.0.1
+  version: v0.1.0
   description: |
     Explore a causal LingBot world from an image, a prompt, and six-axis camera motion.
   resources:
@@ -20,9 +20,18 @@ runtime:
   import: lingbot_world_v2:LingBotWorldV2
   config: lingbot_world_v2.yaml
   weights_path: ~/.cache/reactor_registry/lingbot-world-v2
+  recording:
+    enabled: true
+    chunk_seconds: 4
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
 
 build:
-  runtime_version: "3.2.3"
+  runtime_version: "3.2.5"
   python_requirements: requirements.txt
   cuda_version: "12.9.1"
   python_version: "3.12"
@@ -30,13 +39,3 @@ build:
     - git
   runtime_env:
     TOKENIZERS_PARALLELISM: "false"
-
-recording:
-  enabled: true
-  chunk_seconds: 4
-  clip_max_seconds: 300
-  video_track: main_video
-  video:
-    codec: h264
-    preset: veryfast
-    crf: 23

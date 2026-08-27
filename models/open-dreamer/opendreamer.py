@@ -39,7 +39,6 @@ from opendreamer_utils import (
 from reactor_runtime import (
     ClientInfo,
     CommandError,
-    Idle,
     InputField,
     ReactorPipeline,
     UploadedFile,
@@ -48,7 +47,6 @@ from reactor_runtime import (
     session_ended,
     session_started,
 )
-from reactor_runtime.interface.pipeline.idle import _IdleType
 from reactor_runtime.log import get_logger
 from reactor_runtime.paths import get_weights_path
 
@@ -115,7 +113,6 @@ class OpenDreamer(ReactorPipeline):
     """Stream an interactive Minecraft rollout from a dataset demo or uploaded image."""
 
     state: OpenDreamerState
-    output: OpenDreamerOutput
     buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
@@ -125,7 +122,6 @@ class OpenDreamer(ReactorPipeline):
         self._mesh: Any = None
         self._tokenizer: Any = None
         self._dynamics: Any = None
-        self._schedule: Any = None
         self._latent_shape: tuple[int, int, int, int] | None = None
         self._model_frame_shape: tuple[int, int, int] | None = None
         self._empty_dynamics_cache: Any = None
@@ -221,7 +217,7 @@ class OpenDreamer(ReactorPipeline):
 
         dynamics_config = self._dynamics.cfg
         tokenizer_config = self._tokenizer.cfg
-        self._schedule = schedule_type.init(
+        schedule = schedule_type.init(
             num_steps=config.num_steps,
             k_max=dynamics_config.k_max,
             tau_ctx_target=config.tau_ctx_target,
@@ -248,7 +244,6 @@ class OpenDreamer(ReactorPipeline):
             window_size=int(tokenizer_config.decoder.context_length),
             dtype=tokenizer_config.decoder.dtype,
         )
-        schedule = self._schedule
 
         def compiled_next_frame(
             tokenizer: Any,
@@ -386,8 +381,7 @@ class OpenDreamer(ReactorPipeline):
         name="set_key_state",
         description=(
             "Hold or release one Minecraft keyboard key for subsequent frames. Valid while the "
-            "session is active; while `paused` is true, the request is acknowledged without "
-            "changing held controls. Emits `action_changed`; accepted control changes also emit "
+            "session is active. Emits `action_changed` and "
             "`state_update`. Unsupported values are rejected before state changes."
         ),
     )
@@ -397,7 +391,7 @@ class OpenDreamer(ReactorPipeline):
             default="w",
             choices=_KEYS,
             description=(
-                "Minecraft keyboard key to hold or release. When accepted, the key state starts "
+                "Minecraft keyboard key to hold or release. The key state starts "
                 "with the next generated frame and persists until another `set_key_state` "
                 "changes it or controls are cleared."
             ),
@@ -405,26 +399,23 @@ class OpenDreamer(ReactorPipeline):
         pressed: bool = InputField(
             default=True,
             description=(
-                "Set true to hold `key` on subsequent generated frames or false to release it. "
-                "Ignored while `paused` is true."
+                "Set true to hold `key` on subsequent generated frames or false to release it."
             ),
         ),
     ) -> ActionChanged:
         """Update one held keyboard key and report the controls now in effect."""
-        if not self.state.paused:
-            if pressed:
-                self.state._pressed_keys = self.state._pressed_keys.union((key,))
-            else:
-                self.state._pressed_keys = self.state._pressed_keys.difference((key,))
-            await self._send_state_update()
+        if pressed:
+            self.state._pressed_keys = self.state._pressed_keys.union((key,))
+        else:
+            self.state._pressed_keys = self.state._pressed_keys.difference((key,))
+        await self._send_state_update()
         return self._action_changed(control="set_key_state")
 
     @event(
         name="set_mouse_button_state",
         description=(
             "Hold or release one Minecraft mouse button for subsequent frames. Valid while the "
-            "session is active; while `paused` is true, the request is acknowledged without "
-            "changing held controls. Emits `action_changed`; accepted control changes also emit "
+            "session is active. Emits `action_changed` and "
             "`state_update`. Unsupported values are rejected before state changes."
         ),
     )
@@ -434,7 +425,7 @@ class OpenDreamer(ReactorPipeline):
             default="left",
             choices=_MOUSE_BUTTONS,
             description=(
-                "Minecraft mouse button to hold or release. When accepted, the button state "
+                "Minecraft mouse button to hold or release. The button state "
                 "starts with the next generated frame and persists until another "
                 "`set_mouse_button_state` changes it or controls are cleared."
             ),
@@ -443,21 +434,20 @@ class OpenDreamer(ReactorPipeline):
             default=True,
             description=(
                 "Set true to hold `button` on subsequent generated frames or false to release "
-                "it. Ignored while `paused` is true."
+                "it."
             ),
         ),
     ) -> ActionChanged:
         """Update one held mouse button and report the controls now in effect."""
-        if not self.state.paused:
-            if pressed:
-                self.state._pressed_mouse_buttons = (
-                    self.state._pressed_mouse_buttons.union((button,))
-                )
-            else:
-                self.state._pressed_mouse_buttons = (
-                    self.state._pressed_mouse_buttons.difference((button,))
-                )
-            await self._send_state_update()
+        if pressed:
+            self.state._pressed_mouse_buttons = self.state._pressed_mouse_buttons.union(
+                (button,)
+            )
+        else:
+            self.state._pressed_mouse_buttons = (
+                self.state._pressed_mouse_buttons.difference((button,))
+            )
+        await self._send_state_update()
         return self._action_changed(control="set_mouse_button_state")
 
     @event(
@@ -465,9 +455,8 @@ class OpenDreamer(ReactorPipeline):
         description=(
             "Queue relative camera movement for the next generated frame. Valid while the "
             "session is active; calls before that frame accumulate within [-200, 200] on each "
-            "axis, and movement is consumed after one frame. While `paused` is true, the request "
-            "is acknowledged without changing queued movement. Emits `action_changed`; accepted "
-            "movement also emits `state_update`. Out-of-range values are rejected before state "
+            "axis, and movement is consumed after one frame. Emits `action_changed` and "
+            "`state_update`. Out-of-range values are rejected before state "
             "changes."
         ),
     )
@@ -479,8 +468,7 @@ class OpenDreamer(ReactorPipeline):
             le=_CAMERA_DELTA_MAX,
             description=(
                 "Relative horizontal mouse movement in [-200, 200] to add to the next generated "
-                "frame. Multiple accepted calls accumulate and clamp to that range; the value "
-                "is ignored while `paused` is true."
+                "frame. Multiple calls accumulate and clamp to that range."
             ),
         ),
         delta_y: float = InputField(
@@ -489,38 +477,30 @@ class OpenDreamer(ReactorPipeline):
             le=_CAMERA_DELTA_MAX,
             description=(
                 "Relative vertical mouse movement in [-200, 200] to add to the next generated "
-                "frame. Multiple accepted calls accumulate and clamp to that range; the value "
-                "is ignored while `paused` is true."
+                "frame. Multiple calls accumulate and clamp to that range."
             ),
         ),
     ) -> ActionChanged:
         """Queue camera motion and report the movement accepted for the next frame."""
-        if not self.state.paused:
-            self.state._delta_x = float(
-                np.clip(
-                    self.state._delta_x + delta_x, _CAMERA_DELTA_MIN, _CAMERA_DELTA_MAX
-                )
-            )
-            self.state._delta_y = float(
-                np.clip(
-                    self.state._delta_y + delta_y, _CAMERA_DELTA_MIN, _CAMERA_DELTA_MAX
-                )
-            )
-            await self._send_state_update()
-            return self._action_changed(
-                control="mouse_move",
-                delta_x=delta_x,
-                delta_y=delta_y,
-            )
-        return self._action_changed(control="mouse_move")
+        self.state._delta_x = float(
+            np.clip(self.state._delta_x + delta_x, _CAMERA_DELTA_MIN, _CAMERA_DELTA_MAX)
+        )
+        self.state._delta_y = float(
+            np.clip(self.state._delta_y + delta_y, _CAMERA_DELTA_MIN, _CAMERA_DELTA_MAX)
+        )
+        await self._send_state_update()
+        return self._action_changed(
+            control="mouse_move",
+            delta_x=delta_x,
+            delta_y=delta_y,
+        )
 
     @event(
         name="mouse_wheel",
         description=(
             "Queue a Minecraft hotbar scroll for the next generated frame. Valid while the "
             "session is active; calls before that frame accumulate and only the resulting "
-            "direction is applied. While `paused` is true, the request is acknowledged without "
-            "changing queued movement. Emits `action_changed`; accepted movement also emits "
+            "direction is applied. Emits `action_changed` and "
             "`state_update`. Values outside [-1, 1] are rejected before state changes."
         ),
     )
@@ -532,40 +512,21 @@ class OpenDreamer(ReactorPipeline):
             le=1,
             description=(
                 "Hotbar movement for the next generated frame: -1 scrolls down, 1 scrolls up, "
-                "and 0 leaves the selection unchanged. Ignored while `paused` is true."
+                "and 0 leaves the selection unchanged."
             ),
         ),
     ) -> ActionChanged:
         """Queue a hotbar scroll and report the movement accepted for the next frame."""
-        if not self.state.paused:
-            self.state._wheel_delta += delta
-            await self._send_state_update()
-            return self._action_changed(control="mouse_wheel", wheel_delta=delta)
-        return self._action_changed(control="mouse_wheel")
-
-    # Keep pause available for future schema re-enablement without exposing it to clients.
-    async def set_paused(
-        self,
-        paused: bool = InputField(
-            default=False,
-            description=(
-                "Set true to stop before the next generated `main_video` frame or false to "
-                "resume from the preserved world. Applying either value clears all controls."
-            ),
-        ),
-    ) -> ActionChanged:
-        """Set the pause state, release held controls, and report the resulting state."""
-        self.state.paused = paused
-        self._clear_controls()
+        self.state._wheel_delta += delta
         await self._send_state_update()
-        return self._action_changed(control="set_paused")
+        return self._action_changed(control="mouse_wheel", wheel_delta=delta)
 
     @event(
         name="reset",
         description=(
             "Restart the selected starting scene from its conditioning frames. Valid any time "
-            "during a session; the reset takes effect at the next inference boundary, retains "
-            "the current pause state, and clears all controls. Emits `rollout_reset` and "
+            "during a session; the reset takes effect at the next inference boundary "
+            "and clears all controls. Emits `rollout_reset` and "
             "`state_update` on success; out-of-range seeds are rejected before state changes."
         ),
     )
@@ -616,8 +577,7 @@ class OpenDreamer(ReactorPipeline):
         if demo not in self._demos:
             raise CommandError("demo_unavailable", f"{demo} is not configured.")
         self._conditioning_source = demo
-        if self.state is not None:
-            self._queue_rollout_reset()
+        self._queue_rollout_reset()
         await self._send_state_update()
         return ConditioningChanged(source="demo", selection=demo)
 
@@ -634,8 +594,7 @@ class OpenDreamer(ReactorPipeline):
         """Select a random dataset demo and report the chosen starting scene."""
         demo = self._random_demo_name()
         self._conditioning_source = demo
-        if self.state is not None:
-            self._queue_rollout_reset()
+        self._queue_rollout_reset()
         await self._send_state_update()
         logger.info("selected random conditioning demo", demo=demo)
         return ConditioningChanged(source="demo", selection=demo)
@@ -653,12 +612,13 @@ class OpenDreamer(ReactorPipeline):
     async def set_conditioning_image(
         self,
         image: UploadedFile = InputField(  # noqa: B008  # Reactor reads this schema metadata.
+            moderate=True,
             description=(
                 "Minecraft screenshot uploaded through Reactor's file-upload flow. The file "
                 "must have an `image/*` media type and decode successfully; it is "
                 "orientation-corrected, center-cropped, and resized to the model resolution "
                 "before the next rollout starts."
-            )
+            ),
         ),
     ) -> ConditioningChanged:
         """Use one image as the starting scene and report the accepted filename."""
@@ -679,8 +639,7 @@ class OpenDreamer(ReactorPipeline):
             actions=self._repeated_noop_actions(self._config.conditioning_frames),
         )
         self._conditioning_source = "uploaded"
-        if self.state is not None:
-            self._queue_rollout_reset()
+        self._queue_rollout_reset()
         await self._send_state_update()
         return ConditioningChanged(source="upload", selection=image.name)
 
@@ -690,7 +649,7 @@ class OpenDreamer(ReactorPipeline):
         self.state._reset_requested = True
         self._clear_controls()
 
-    def inference(self) -> Iterator[OpenDreamerOutput | _IdleType]:
+    def inference(self) -> Iterator[OpenDreamerOutput | None]:
         """Generate Minecraft frames from the current starting scene and player controls."""
         if (
             self._config is None
@@ -720,7 +679,7 @@ class OpenDreamer(ReactorPipeline):
                     observation_index = 0
 
                 if conditioning is None:
-                    yield Idle
+                    yield None
                     continue
 
                 if observation_index < conditioning.frames.shape[0]:
@@ -734,11 +693,7 @@ class OpenDreamer(ReactorPipeline):
                     )
                     jax.block_until_ready((dynamics_cache, tokenizer_cache))
                     observation_index += 1
-                    yield Idle
-                    continue
-
-                if self.state.paused:
-                    yield Idle
+                    yield None
                     continue
 
                 action = self._build_action()
@@ -792,7 +747,6 @@ class OpenDreamer(ReactorPipeline):
         """Describe the current native input state for an event response."""
         return ActionChanged(
             control=control,
-            paused=self.state.paused,
             pressed_keys=[key for key in _KEYS if key in self.state._pressed_keys],
             pressed_mouse_buttons=[
                 button
@@ -907,16 +861,12 @@ class OpenDreamer(ReactorPipeline):
 
     def _consume_transient_controls(self) -> None:
         """Consume camera and wheel deltas after one generated frame."""
-        if self.state is None:
-            return
         self.state._delta_x = 0.0
         self.state._delta_y = 0.0
         self.state._wheel_delta = 0
 
     def _clear_controls(self) -> None:
         """Release held controls and discard transient input."""
-        if self.state is None:
-            return
         self.state._pressed_keys = frozenset()
         self.state._pressed_mouse_buttons = frozenset()
         self._consume_transient_controls()

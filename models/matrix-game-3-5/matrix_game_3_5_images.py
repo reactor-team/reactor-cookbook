@@ -20,7 +20,9 @@ def normalize_output_frames(value: np.ndarray) -> np.ndarray:
     """Return exactly one contiguous uint8 RGB Matrix output chunk."""
     frames = np.asarray(value)
     if frames.ndim != 4 or frames.shape[-1] != 3:
-        raise RuntimeError(f"Matrix output must have shape (T, H, W, 3), got {frames.shape}")
+        raise RuntimeError(
+            f"Matrix output must have shape (T, H, W, 3), got {frames.shape}"
+        )
     if int(frames.shape[0]) != OUTPUT_FRAMES_PER_CHUNK:
         raise RuntimeError(
             f"Matrix output must contain {OUTPUT_FRAMES_PER_CHUNK} frames, "
@@ -45,7 +47,9 @@ def validate_uploaded_image(image: UploadedFile) -> None:
     try:
         with av.open(io.BytesIO(image.data), mode="r") as container:
             if not container.streams.video:
-                raise CommandError("invalid_image", f"{image.name} has no image stream.")
+                raise CommandError(
+                    "invalid_image", f"{image.name} has no image stream."
+                )
             stream = container.streams.video[0]
             codec = stream.codec_context.name
             width = int(stream.codec_context.width)
@@ -66,4 +70,6 @@ def validate_uploaded_image(image: UploadedFile) -> None:
     except CommandError:
         raise
     except (av.FFmpegError, EOFError, OSError, ValueError) as error:
-        raise CommandError("invalid_image", f"{image.name} cannot be decoded.") from error
+        raise CommandError(
+            "invalid_image", f"{image.name} cannot be decoded."
+        ) from error

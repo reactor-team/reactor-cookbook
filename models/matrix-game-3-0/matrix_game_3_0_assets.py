@@ -35,7 +35,6 @@ _MODEL_ALLOW_PATTERNS = (
 class ExampleScene:
     """Describe one public image and prompt available as a rollout anchor."""
 
-    name: str
     image: Path
     prompt: str
 
@@ -225,16 +224,13 @@ def ensure_checkpoint(config: MatrixGame30Config) -> None:
 def _example(root: Path, value: object, index: int) -> ExampleScene:
     """Return one validated built-in scene from the YAML document."""
     document = _mapping(value, f"examples[{index}]")
-    name = str(document.get("name", "")).strip()
-    if not name:
-        raise ValueError(f"examples[{index}].name must be non-empty")
     image = (root / str(document.get("image", ""))).resolve()
     if not image.is_file():
         raise FileNotFoundError(f"examples[{index}].image does not exist: {image}")
     prompt = str(document.get("prompt", "")).strip()
     if not prompt:
         raise ValueError(f"examples[{index}].prompt must be non-empty")
-    return ExampleScene(name=name, image=image, prompt=prompt)
+    return ExampleScene(image=image, prompt=prompt)
 
 
 def _source_path(value: object) -> Path:

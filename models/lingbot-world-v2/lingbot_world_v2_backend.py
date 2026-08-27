@@ -16,10 +16,7 @@ from PIL import Image, ImageOps
 from reactor_runtime import UploadedFile
 from reactor_runtime.log import get_logger
 
-try:
-    from .lingbot_world_v2_assets import LingBotConfig
-except ImportError:
-    from lingbot_world_v2_assets import LingBotConfig
+from lingbot_world_v2_assets import LingBotConfig
 
 logger = get_logger(__name__)
 
@@ -206,12 +203,6 @@ class LingBotBackend:
             self._set_prompt(prompt)
 
         torch = self._torch
-        assert self._base_noise is not None
-        assert self._seed_generator is not None
-        assert self._timesteps is not None
-        assert self._self_kv is not None
-        assert self._cross_kv is not None
-        assert self._context is not None
         start = self._chunk_index * self._config.chunk_latents
         current_latent = self._base_noise[
             :, start : start + self._config.chunk_latents
@@ -293,10 +284,9 @@ class LingBotBackend:
         self._seed_generator = None
         self._anchor = None
         self._intrinsics = None
-        if hasattr(self, "_pipe"):
-            self._pipe._cross_attn_initialized = False
-            self._pipe.vae.model.clear_cache()
-        if hasattr(self, "_torch") and self._torch.cuda.is_available():
+        self._pipe._cross_attn_initialized = False
+        self._pipe.vae.model.clear_cache()
+        if self._torch.cuda.is_available():
             self._torch.cuda.empty_cache()
 
     def _set_prompt(self, prompt: str) -> None:
@@ -324,7 +314,6 @@ class LingBotBackend:
     def _next_condition(self) -> Any:
         """Encode the anchor or causal zero continuation into four VAE latents."""
         torch = self._torch
-        assert self._anchor is not None
         outputs = []
         first_chunk = self._chunk_index == 0
         if first_chunk:
@@ -410,7 +399,6 @@ class LingBotBackend:
         expected = (self._config.chunk_latents, 4, 4)
         if poses.shape != expected or not np.isfinite(poses).all():
             raise ValueError(f"relative camera poses must have shape {expected}")
-        assert self._intrinsics is not None
         intrinsics = torch.from_numpy(self._intrinsics[None]).float()
         intrinsics = self._get_ks_transformed(
             intrinsics,

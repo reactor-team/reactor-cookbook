@@ -1,13 +1,5 @@
-# Python dependencies installed into the model image in the same resolution as
-# Reactor Runtime, so a conflict fails during the build. `build.runtime_version`
-# in reactor.yaml owns the Runtime version, while `build.cuda_version` selects
-# PyTorch's CUDA 12.8 package index for Blackwell support.
-
-# DIAMOND imports its inference environment through the public CSGO source
-# checkout installed by `build.run` in reactor.yaml. The adapter stubs ale-py
-# and wandb because their APIs are unused by CSGO inference; the packages below
-# are still needed to import and run the model. NumPy follows Runtime's floor,
-# and h5py uses a Python 3.12 Linux ARM64 wheel.
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
 gymnasium==0.29.1
 h5py==3.12.1
 huggingface-hub==0.17.2

@@ -46,7 +46,6 @@ class LingBotWorkerBackend:
     """Run the NumPy-1 upstream stack without duplicating its model process."""
 
     def __init__(self, settings: WorkerSettings) -> None:
-        self._settings = settings
         settings.runtime_root.mkdir(parents=True, exist_ok=True)
         self._temporary = tempfile.TemporaryDirectory(
             prefix="reactor-lingbot-world-v1-",
@@ -152,7 +151,7 @@ class LingBotWorkerBackend:
 
     def close(self) -> None:
         """Stop the worker and remove its NVMe request workspace."""
-        process = getattr(self, "_process", None)
+        process = self._process
         if process is None:
             return
         self._process = None

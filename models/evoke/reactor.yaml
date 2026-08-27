@@ -1,21 +1,11 @@
-# Reactor model spec for the EVOKE recipe.
-#
-# `$schema` pins the schema this file is written against — reactor/v1 is the
-# current one. Keep it as the first line.
+# Reactor model specification for the EVOKE recipe.
 $schema: reactor/v1
 
 model:
-  # Change this to a name unique to your account before publishing. Release
-  # tags are immutable, so bump version after every successful publish.
   name: evoke-post-distillation
-  version: v0.0.1
+  version: v0.1.0
   description: |
     Explore an autoregressive world through text, media, and six-axis camera motion.
-
-  # EVOKE keeps its transformer, text encoder, VAE, ViGeo estimator, geometric
-  # bank, and streaming caches resident for the session. The distilled model
-  # needs a Hopper or Blackwell accelerator with enough memory for the full
-  # release inference path.
   resources:
     gpu:
       type: NVIDIA_B200
@@ -30,15 +20,23 @@ model:
 runtime:
   import: evoke:Evoke
   config: evoke.yaml
-  # Source, the isolated Python 3.10 worker, model snapshots, and compiler
-  # caches live beneath this persistent mount. Change it to a large local disk
-  # before the first run when the home filesystem is space constrained.
+  # Source, the Python 3.10 worker, model snapshots, and compiler caches stay here.
   weights_path: ~/.cache/reactor_registry/evoke
+  recording:
+    enabled: true
+    chunk_seconds: 6
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
 
 build:
+  runtime_version: "3.2.5"
+  python_requirements: requirements.txt
   # EVOKE's v2v reader links to the X11/audio libraries bundled by these Debian
   # runtime packages.
-  runtime_version: "3.2.3"
   system_packages:
     - ffmpeg
     - git
@@ -47,13 +45,3 @@ build:
     - libxcb1
     - libxdmcp6
     - libxext6
-
-recording:
-  enabled: true
-  chunk_seconds: 6
-  clip_max_seconds: 300
-  video_track: main_video
-  video:
-    codec: h264
-    preset: veryfast
-    crf: 23

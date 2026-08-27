@@ -1,87 +1,43 @@
-# Reactor model spec for the Matrix-Game-3.5 recipe.
-#
-# `$schema` pins the schema this file is written against — reactor/v1 is the
-# current one. Keep it as the first line.
+# Reactor model specification for the Matrix-Game-3.5 recipe.
 $schema: reactor/v1
 
-# The `model:` block is read by `reactor model register/publish/deploy` and
-# describes the model to the platform. The `runtime:` block is read by the
-# runtime and names the class to serve. To deploy this recipe under your own
-# account, edit `model.name` and the resources below, then:
-#
-#   reactor run --gpus device=0   # serve locally
-#   reactor model publish         # build the image and prepare a release
-#   reactor model deploy          # activate that release for traffic
 model:
-  # Model name used in CLI args and API responses. Change it to something
-  # unique to your account before publishing — a name already registered by
-  # someone else is rejected. Segments must be lowercase [a-z0-9] runs
-  # separated by '.', '_' or '-'.
   name: matrix-game-3-5-distilled-first-person
-
-  # The release tag `reactor model publish` / `reactor model deploy` use when
-  # no `<model>:<release>` is passed on the command line. Releases are
-  # immutable, so bump this after every successful publish.
-  version: v0.0.1
-
+  version: v0.1.0
   description: |
     Explore an autoregressive world from an image, a prompt, and six-axis camera motion.
-
-  # A new model registers private. Leave this key out and `reactor model
-  # update` will not touch the setting. Write it to make this file
-  # authoritative: true makes the model discoverable by every Reactor account.
-  # public: false
-
-  # Scheduler resources for a deployed instance. Declare all three keys:
-  # `reactor model update` replaces the model's mutable fields with what is in
-  # this file, so a key left out is cleared server-side rather than kept.
-  #
-  # The `gpu:` key is what marks a model as needing an accelerator. Without it
-  # the model registers as CPU-only, and a CUDA model scheduled onto a CPU node
-  # fails at startup — so this block is not optional for this recipe.
+  # Matrix needs roughly 40 GB of VRAM at 704x1280; the 5B model, its rolling
+  # KV cache, and Patch Memory stay resident for the life of the session.
   resources:
-    # `reactor gpu ls` lists every accelerator type the platform accepts.
-    # Matrix needs roughly 40 GB of VRAM at 704x1280, and the 5B model stays
-    # loaded in a persistent worker for the life of the session along with its
-    # rolling KV cache and Patch Memory. Pick a type with the headroom to hold
-    # all of it; a card under 40 GB will not serve this recipe.
     gpu:
       type: NVIDIA_B200
       count: 1
-    # Host CPU, as Kubernetes quantities. Generation runs on the GPU; these
-    # cores carry the worker process, the chunk loop, frame encoding, and
-    # WebRTC. The request guarantees the cores, and the higher limit leaves
-    # headroom so the container is not CFS-throttled.
     cpu:
       request: "4"
       limit: "8"
-    # Host memory. Three checkpoints load here — the distilled Matrix model,
-    # the Wan2.2 TI2V-5B base, and Depth-Anything-3 — each staged through host
-    # RAM on the way to the device, and the worker runs as a second process.
-    # The platform's 4Gi default request will not load it. Sized with margin
-    # for the load peak; narrow the limit once you have measured yours.
     memory:
       request: 8Gi
       limit: 64Gi
 
 runtime:
   import: matrix_game_3_5:MatrixGame35
-
-  # Path to the model hyperparameters file, relative to this reactor.yaml. The
-  # runtime resolves it and hands the path to `load()`; this model reads the
-  # upstream revision, checkpoint set, rollout bound, and motion scaling from
-  # it.
   config: matrix_game_3_5.yaml
-
-  # Root directory the runtime resolves via `get_weights_path()`. `reactor run`
-  # mounts it into the container so checkpoints survive between runs; a
-  # deployed instance reads the release's uploaded weights from the same path.
+  # Source, checkpoints, the isolated worker, and download caches stay here.
   weights_path: ~/.cache/reactor_registry/matrix-game-3-5
+  recording:
+    enabled: true
+    chunk_seconds: 4
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
 
 build:
-  # Keep the Runtime release aligned with the adapter's public API usage.
-  runtime_version: "3.2.3"
+  runtime_version: "3.2.5"
   python_requirements: requirements.txt
+  cuda_version: "12.8.1"
   python_version: "3.12"
   system_packages:
     - build-essential
@@ -91,15 +47,3 @@ build:
     - libglib2.0-0
   runtime_env:
     PYTORCH_ALLOC_CONF: expandable_segments:True
-
-# Session recording. The runtime records the named video track in chunks and
-# serves clips up to `clip_max_seconds`. Matrix emits no audio.
-recording:
-  enabled: true
-  chunk_seconds: 4
-  clip_max_seconds: 300
-  video_track: main_video
-  video:
-    codec: h264
-    preset: veryfast
-    crf: 23

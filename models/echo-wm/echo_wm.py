@@ -6,15 +6,13 @@ import secrets
 import time
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol
 
 import numpy as np
 from reactor_runtime import (
     ClientInfo,
     CommandError,
-    Idle,
     InputField,
-    OutputStream,
     ReactorPipeline,
     UploadedFile,
     connected,
@@ -43,11 +41,9 @@ from echo_wm_schema import (
     EchoWMOutput,
     EchoWMState,
     ImageSelected,
-    PauseChanged,
     PromptQueued,
     RolloutResetQueued,
     StateUpdate,
-    StepQueued,
 )
 
 logger = get_logger(__name__)
@@ -79,7 +75,6 @@ class EchoWM(ReactorPipeline):
     """Generate a prompt-, image-, and pure-camera-controlled audiovisual world."""
 
     state: EchoWMState
-    output: EchoWMOutput
     # Keep the generated 48 kHz audio aligned with Echo-WM's native video time.
     fps = 24
     buffer_size = 24
@@ -155,8 +150,6 @@ class EchoWM(ReactorPipeline):
         """Initialize an empty continuous world before the first viewer connects."""
         config = self._require_loaded()
         self.state.prompt = ""
-        self.state.paused = False
-        self.state._queued_steps = 0
         self.state._reset_requested = False
         self.state._fov_degrees = config.fov_degrees
         self._clear_camera()
@@ -172,7 +165,6 @@ class EchoWM(ReactorPipeline):
     def on_session_ended(self) -> None:
         """Release causal state when the shared session ends."""
         self._clear_camera()
-        self.state._queued_steps = 0
         self.state._reset_requested = False
         self._selected_image = None
         self._image_source = None
@@ -207,13 +199,15 @@ class EchoWM(ReactorPipeline):
     async def set_image(
         self,
         image: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
             description=(
                 "JPEG, PNG, WebP, or BMP first frame, up to 25 MiB and 100 million pixels."
-            )
+            ),
         ),
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Scene, motion, sound, music, and speech description. An empty value uses the "
                 "configured image-neutral default for the new scene."
@@ -236,15 +230,12 @@ class EchoWM(ReactorPipeline):
         self._image_source = "uploaded"
         self._image_name = image.name
         self.state.prompt = normalized
-        self._request_reset(preview_steps=2)
-        preview_chunks = 2 if self.state.paused else 0
+        self._request_reset()
         message = ImageSelected(
             source="uploaded",
             filename=image.name,
             prompt=normalized,
             seed=self._seed,
-            first_chunk_queued=preview_chunks > 0,
-            preview_chunks_queued=preview_chunks,
         )
         await self.send(self._state_update())
         return message
@@ -274,15 +265,12 @@ class EchoWM(ReactorPipeline):
         self.state.prompt = scene.prompt
         self.state._fov_degrees = scene.fov_degrees
         self._seed = scene.seed
-        self._request_reset(preview_steps=2)
-        preview_chunks = 2 if self.state.paused else 0
+        self._request_reset()
         message = ImageSelected(
             source="built_in",
             filename=scene.image.name,
             prompt=scene.prompt,
             seed=scene.seed,
-            first_chunk_queued=preview_chunks > 0,
-            preview_chunks_queued=preview_chunks,
         )
         await self.send(self._state_update())
         return message
@@ -302,6 +290,7 @@ class EchoWM(ReactorPipeline):
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Non-empty scene, character, perspective, sound, music, and speech description."
             ),
@@ -315,7 +304,7 @@ class EchoWM(ReactorPipeline):
                 "prompt_required", "Echo-WM requires a non-empty prompt."
             )
         self.state.prompt = normalized
-        self._request_reset(preview_steps=1)
+        self._request_reset()
         message = PromptQueued(prompt=normalized, applies_to_chunk=1)
         await self.send(self._state_update())
         return message
@@ -407,41 +396,6 @@ class EchoWM(ReactorPipeline):
         await self.send(self._state_update())
         return message
 
-    # Pause remains an internal control and is excluded from the public schema.
-    async def set_paused(
-        self,
-        paused: bool = InputField(
-            default=False,
-            description="True pauses before the next chunk; false resumes generation.",
-        ),
-    ) -> PauseChanged:
-        """Set playback state and release camera motion."""
-        if not paused:
-            self._require_selected()
-        self.state.paused = paused
-        self.state._queued_steps = 0
-        self._clear_camera()
-        message = PauseChanged(paused=paused, next_chunk=self._next_chunk())
-        await self.send(self._state_update())
-        return message
-
-    # Single-step generation remains internal and is excluded from the public schema.
-    async def step(self) -> StepQueued:
-        """Queue one paused causal block and report its rollout position."""
-        self._require_selected()
-        if not self.state.paused:
-            raise CommandError("pause_required", "Pause Echo-WM before stepping.")
-        next_chunk = self._next_unqueued_chunk()
-        if next_chunk is None:
-            raise RuntimeError("Echo-WM selected image has no available next chunk")
-        self.state._queued_steps += 1
-        message = StepQueued(
-            applies_to_chunk=next_chunk,
-            expected_video_frames=25 if next_chunk == 1 else 24,
-        )
-        await self.send(self._state_update())
-        return message
-
     @event(
         name="reset",
         description=(
@@ -465,16 +419,12 @@ class EchoWM(ReactorPipeline):
         if seed >= 0:
             self._seed = seed
         replaced = self._chunk_index
-        self._request_reset(preview_steps=1)
-        message = RolloutResetQueued(
-            seed=self._seed,
-            replaced_chunks=replaced,
-            first_chunk_queued=self.state.paused,
-        )
+        self._request_reset()
+        message = RolloutResetQueued(seed=self._seed, replaced_chunks=replaced)
         await self.send(self._state_update())
         return message
 
-    async def inference(self) -> AsyncGenerator[EchoWMOutput | object, None]:
+    async def inference(self) -> AsyncGenerator[EchoWMOutput | None, None]:
         """Generate and emit one native causal audio-video block per turn."""
         config = self._require_loaded()
         backend = self._backend
@@ -486,7 +436,7 @@ class EchoWM(ReactorPipeline):
             if self.state._reset_requested:
                 selected = self._selected_image
                 if selected is None:
-                    yield Idle
+                    yield None
                     continue
                 prompt = self.state.prompt.strip()
                 if not prompt:
@@ -510,14 +460,9 @@ class EchoWM(ReactorPipeline):
                 await self.send(self._state_update())
 
             if self._selected_image is None:
-                yield Idle
-                continue
-            if self.state.paused and self.state._queued_steps == 0:
-                yield Idle
+                yield None
                 continue
 
-            if self.state._queued_steps > 0:
-                self.state._queued_steps -= 1
             sampled_prompt = self._active_prompt
             if sampled_prompt is None:
                 raise RuntimeError("Echo-WM rollout has no active prompt")
@@ -624,13 +569,10 @@ class EchoWM(ReactorPipeline):
             seconds=round(time.perf_counter() - started, 3),
         )
 
-    def _request_reset(self, *, preview_steps: int) -> None:
+    def _request_reset(self) -> None:
         """Queue a clean rollout and clear prior playout, controls, and progress."""
-        if preview_steps < 0:
-            raise ValueError("preview_steps must be zero or more")
-        cast(OutputStream, self.output).flush()
+        self.output.flush()
         self._clear_camera()
-        self.state._queued_steps = preview_steps if self.state.paused else 0
         self.state._reset_requested = True
         self._chunk_index = 0
 
@@ -674,14 +616,6 @@ class EchoWM(ReactorPipeline):
             return 1
         return self._chunk_index + 1 + int(self._generating)
 
-    def _next_unqueued_chunk(self) -> int | None:
-        """Return the chunk claimed by one additional paused step."""
-        if self._selected_image is None:
-            return None
-        if self.state._reset_requested:
-            return self.state._queued_steps + 1
-        return self._chunk_index + int(self._generating) + self.state._queued_steps + 1
-
     def _state_update(self) -> StateUpdate:
         """Return a complete client-visible snapshot of the shared world."""
         config = self._config
@@ -691,9 +625,6 @@ class EchoWM(ReactorPipeline):
             prompt=self.state.prompt or None,
             active_prompt=self._active_prompt,
             seed=self._seed,
-            paused=self.state.paused,
-            step_queued=self.state._queued_steps > 0,
-            queued_steps=self.state._queued_steps,
             reset_queued=self.state._reset_requested,
             generating=self._generating,
             completed_chunks=self._chunk_index,

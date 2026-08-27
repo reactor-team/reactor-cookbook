@@ -2,7 +2,7 @@ $schema: reactor/v1
 
 model:
   name: abot-world
-  version: v0.0.1
+  version: v0.1.0
   description: |
     Play the distilled ABot-World model with uploaded images, prompts, and native keyboard controls.
   resources:
@@ -20,22 +20,21 @@ runtime:
   import: abot_world:ABotWorld
   config: abot_world.yaml
   weights_path: ~/.cache/reactor_registry/abot-world
+  recording:
+    enabled: true
+    chunk_seconds: 4
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
 
 build:
-  runtime_version: "3.2.3"
+  runtime_version: "3.2.5"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"
   system_packages:
     - ffmpeg
     - git
-
-recording:
-  enabled: true
-  chunk_seconds: 4
-  clip_max_seconds: 300
-  video_track: main_video
-  video:
-    codec: h264
-    preset: veryfast
-    crf: 23

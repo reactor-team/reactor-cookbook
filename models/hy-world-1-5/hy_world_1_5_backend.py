@@ -37,9 +37,6 @@ class HYWorld15Backend:
         self._generator: Any = None
         self._kv_cache: Any = None
         self._vision_states: Any = None
-        self._prompt_embeds: Any = None
-        self._prompt_mask: Any = None
-        self._extra_kwargs: dict[str, Any] = {}
         self._initial_cond_chunk: Any = None
         self._latent_history: Any = None
         self._viewmat_history = np.empty((0, 4, 4), dtype=np.float32)
@@ -225,9 +222,6 @@ class HYWorld15Backend:
         self._generator = None
         self._kv_cache = None
         self._vision_states = None
-        self._prompt_embeds = None
-        self._prompt_mask = None
-        self._extra_kwargs = {}
         self._initial_cond_chunk = None
         self._latent_history = None
         self._points_local = None
@@ -304,9 +298,6 @@ class HYWorld15Backend:
                 cache_txt=True,
             )
         pipe._kv_cache = self._kv_cache
-        self._prompt_embeds = prompt_embeds
-        self._prompt_mask = prompt_mask
-        self._extra_kwargs = extra_kwargs
 
     def _current_condition(self, current_start: int) -> Any:
         """Return the image/mask condition for the next four latent positions."""

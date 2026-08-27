@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from reactor_runtime import (
     InputField,
@@ -88,9 +88,9 @@ class ActionChanged(ModelMessage):
 class SceneChanged(ModelMessage):
     """Emitted when a command queues a scene for the next model-step boundary."""
 
-    source: str = MessageField(
+    source: Literal["uploaded", "built_in"] = MessageField(
         description=(
-            'Queued scene source: "upload" for `set_spawn_image` or "dataset" for '
+            'Queued scene source: "uploaded" for `set_spawn_image` or "built_in" for '
             "`random_scene`."
         )
     )
@@ -108,12 +108,6 @@ class StateUpdate(ModelMessage):
             "built-in scene's recorded actions."
         )
     )
-    paused: bool = MessageField(
-        description=(
-            "Whether continuous generation is paused before the next model step; `step` "
-            "can request one frame without resuming."
-        )
-    )
     pressed_keys: list[str] = MessageField(
         description="Native keyboard keys held for forthcoming human-controlled frames."
     )
@@ -126,7 +120,6 @@ class StateUpdate(ModelMessage):
         """Build a client snapshot from the session's durable controls."""
         return cls(
             controller=state.controller,
-            paused=state.paused,
             pressed_keys=[key for key in KEYS if key in state._pressed_keys],
             pressed_mouse_buttons=[
                 button
@@ -148,19 +141,7 @@ class DiamondState(InputState):
             "actions. Changing it queues a fresh world and releases held controls."
         ),
     )
-    _paused: bool = False
     _pressed_keys: frozenset[str] = frozenset()
     _pressed_mouse_buttons: frozenset[str] = frozenset()
     _delta_x: float = 0.0
     _delta_y: float = 0.0
-    _step_requested: bool = False
-
-    @property
-    def paused(self) -> bool:
-        """Return whether continuous model generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether continuous model generation is paused."""
-        self._paused = value

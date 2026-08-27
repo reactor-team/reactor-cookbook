@@ -50,8 +50,7 @@ class _Stop:
 class _InteractiveSession:
     """Bridge JSON requests into one live EVOKE pipeline call."""
 
-    def __init__(self, max_chunks: int, pose_base: np.ndarray | None) -> None:
-        self.max_chunks = max_chunks
+    def __init__(self, pose_base: np.ndarray | None) -> None:
         self._pose_base = pose_base
         self._inputs: queue.Queue[_ChunkInput | _Stop] = queue.Queue(maxsize=1)
         self._results: queue.Queue[_GeneratedChunk | Exception] = queue.Queue(maxsize=1)
@@ -158,7 +157,6 @@ class EvokeRuntime:
             raise RuntimeError(
                 "EVOKE source is missing the Reactor stateful rollout patch"
             )
-        self._infer_single = infer_single
         self._pipe = pipe
         self._transformer = transformer
         self._vae = vae
@@ -201,7 +199,7 @@ class EvokeRuntime:
             source_height,
             source_width,
         )
-        session = _InteractiveSession(self._max_chunks, prepared["pose_base"])
+        session = _InteractiveSession(prepared["pose_base"])
         self._session = session
 
         def run() -> None:
