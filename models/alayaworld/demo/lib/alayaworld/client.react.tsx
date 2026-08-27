@@ -103,7 +103,7 @@ export function AlayaWorldProvider({
  * Fields are pulled off the store one at a time so Zustand's
  * shallow-equality selector keeps each subscription scoped — a
  * component reading only `status` doesn't re-render when
- * `sessionExpiration` changes. Future SDK releases that add new
+ * `sessionId` changes. Future SDK releases that add new
  * store fields flow into this hook on the next codegen run with no
  * hand-edit (the field list is derived from `js-sdk`'s d.ts via
  * `loadReactorStoreFieldsFromDts` in `sdk-surface.ts`).
@@ -120,7 +120,6 @@ export function useAlayaWorld() {
   const requestClip = useReactor((s) => s.requestClip);
   const requestRecording = useReactor((s) => s.requestRecording);
   const sendCommand = useReactor((s) => s.sendCommand);
-  const sessionExpiration = useReactor((s) => s.sessionExpiration);
   const sessionId = useReactor((s) => s.sessionId);
   const status = useReactor((s) => s.status);
   const tracks = useReactor((s) => s.tracks);
@@ -139,36 +138,49 @@ export function useAlayaWorld() {
     requestClip,
     requestRecording,
     sendCommand,
-    sessionExpiration,
     sessionId,
     status,
     tracks,
     unpublish,
     uploadFile,
-    setPrompt: (params: AlayaWorldSetPromptParams): Promise<void> =>
-      sendCommand("set_prompt", params),
-    setForward: (params: AlayaWorldSetForwardParams): Promise<void> =>
-      sendCommand("set_forward", params),
-    setStrafe: (params: AlayaWorldSetStrafeParams): Promise<void> =>
-      sendCommand("set_strafe", params),
-    setVertical: (params: AlayaWorldSetVerticalParams): Promise<void> =>
-      sendCommand("set_vertical", params),
-    setPitch: (params: AlayaWorldSetPitchParams): Promise<void> =>
-      sendCommand("set_pitch", params),
-    setYaw: (params: AlayaWorldSetYawParams): Promise<void> =>
-      sendCommand("set_yaw", params),
-    setRoll: (params: AlayaWorldSetRollParams): Promise<void> =>
-      sendCommand("set_roll", params),
-    setPaused: (params: AlayaWorldSetPausedParams): Promise<void> =>
-      sendCommand("set_paused", params),
-    step: (): Promise<void> =>
-      sendCommand("step", {}),
-    reset: (params: AlayaWorldResetParams): Promise<void> =>
-      sendCommand("reset", params),
-    setImage: (params: AlayaWorldSetImageParams): Promise<void> =>
-      sendCommand("set_image", params),
-    randomImage: (): Promise<void> =>
-      sendCommand("random_image", {}),
+    setPrompt: async (params: AlayaWorldSetPromptParams): Promise<void> => {
+      await sendCommand("set_prompt", params);
+    },
+    setForward: async (params: AlayaWorldSetForwardParams): Promise<void> => {
+      await sendCommand("set_forward", params);
+    },
+    setStrafe: async (params: AlayaWorldSetStrafeParams): Promise<void> => {
+      await sendCommand("set_strafe", params);
+    },
+    setVertical: async (
+      params: AlayaWorldSetVerticalParams,
+    ): Promise<void> => {
+      await sendCommand("set_vertical", params);
+    },
+    setPitch: async (params: AlayaWorldSetPitchParams): Promise<void> => {
+      await sendCommand("set_pitch", params);
+    },
+    setYaw: async (params: AlayaWorldSetYawParams): Promise<void> => {
+      await sendCommand("set_yaw", params);
+    },
+    setRoll: async (params: AlayaWorldSetRollParams): Promise<void> => {
+      await sendCommand("set_roll", params);
+    },
+    setPaused: async (params: AlayaWorldSetPausedParams): Promise<void> => {
+      await sendCommand("set_paused", params);
+    },
+    step: async (): Promise<void> => {
+      await sendCommand("step", {});
+    },
+    reset: async (params: AlayaWorldResetParams): Promise<void> => {
+      await sendCommand("reset", params);
+    },
+    setImage: async (params: AlayaWorldSetImageParams): Promise<void> => {
+      await sendCommand("set_image", params);
+    },
+    randomImage: async (): Promise<void> => {
+      await sendCommand("random_image", {});
+    },
   };
 }
 

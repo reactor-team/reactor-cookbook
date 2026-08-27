@@ -80,7 +80,6 @@ export function useEchoWmFlash() {
   const requestClip = useReactor((state) => state.requestClip);
   const requestRecording = useReactor((state) => state.requestRecording);
   const sendCommand = useReactor((state) => state.sendCommand);
-  const sessionExpiration = useReactor((state) => state.sessionExpiration);
   const sessionId = useReactor((state) => state.sessionId);
   const status = useReactor((state) => state.status);
   const tracks = useReactor((state) => state.tracks);
@@ -99,25 +98,34 @@ export function useEchoWmFlash() {
     requestClip,
     requestRecording,
     sendCommand,
-    sessionExpiration,
     sessionId,
     status,
     tracks,
     unpublish,
     uploadFile,
-    setImage: (params: EchoWmFlashSetImageParams): Promise<void> =>
-      sendCommand("set_image", params),
-    randomImage: (): Promise<void> => sendCommand("random_image", {}),
-    setPrompt: (params: EchoWmFlashSetPromptParams): Promise<void> =>
-      sendCommand("set_prompt", params),
-    setCameraMotion: (
+    setImage: async (params: EchoWmFlashSetImageParams): Promise<void> => {
+      await sendCommand("set_image", params);
+    },
+    randomImage: async (): Promise<void> => {
+      await sendCommand("random_image", {});
+    },
+    setPrompt: async (params: EchoWmFlashSetPromptParams): Promise<void> => {
+      await sendCommand("set_prompt", params);
+    },
+    setCameraMotion: async (
       params: EchoWmFlashSetCameraMotionParams,
-    ): Promise<void> => sendCommand("set_camera_motion", params),
-    releaseCamera: (): Promise<void> => sendCommand("release_camera", {}),
-    setFov: (params: EchoWmFlashSetFovParams): Promise<void> =>
-      sendCommand("set_fov", params),
-    reset: (params: EchoWmFlashResetParams): Promise<void> =>
-      sendCommand("reset", params),
+    ): Promise<void> => {
+      await sendCommand("set_camera_motion", params);
+    },
+    releaseCamera: async (): Promise<void> => {
+      await sendCommand("release_camera", {});
+    },
+    setFov: async (params: EchoWmFlashSetFovParams): Promise<void> => {
+      await sendCommand("set_fov", params);
+    },
+    reset: async (params: EchoWmFlashResetParams): Promise<void> => {
+      await sendCommand("reset", params);
+    },
   };
 }
 

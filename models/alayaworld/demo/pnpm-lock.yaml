@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@reactor-team/js-sdk':
-        specifier: 2.12.3
-        version: 2.12.3(hls.js@1.7.0)(react@19.1.0)(zustand@5.0.15(@types/react@19.2.18)(react@19.1.0))
+        specifier: ^3.0.0
+        version: 3.0.0(react@19.1.0)
       hls.js:
         specifier: ^1.6.15
         version: 1.7.0
@@ -276,16 +276,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@reactor-team/js-sdk@2.12.3':
-    resolution: {integrity: sha512-W1wussFAlKqrBPXyqVZHLg6dkDorjRVzu8/4aKdFdZtrPSbmN7uYIwcWK73chMGu8Chp/Xgc3QC2FVbDLEj7JA==}
+  '@reactor-team/js-sdk@3.0.0':
+    resolution: {integrity: sha512-B3bTP62td3jMiTbYU7DHUFtH9PNbbE9YtV41TEXv/w5Wlurdh+kAMSYq0mx2R+ctY/CTgX/VnLp4Jd6AHG+O5A==}
     engines: {node: '>=18'}
     peerDependencies:
-      hls.js: ^1.6.0
-      react: ^17.0.0 || ^18.0.0 || ^19.0.0
-      zustand: ^5.0.6
-    peerDependenciesMeta:
-      hls.js:
-        optional: true
+      react: ^18.0.0 || ^19.0.0
 
   '@swc/helpers@0.5.15':
     resolution: {integrity: sha512-JQ5TuMi45Owi4/BIMAJBoSQoOJu12oOk/gADqlcUL9JEdHB8vyjUSsxqeNXnmXHjYKMi2WcYtezGEEhqUI/E2g==}
@@ -566,10 +561,6 @@ packages:
   scheduler@0.26.0:
     resolution: {integrity: sha512-NlHwttCI/l5gCPR3D1nNXtWABUmBwvZpEQiD4IXSbIDq8BzLIK/7Ir5gTFSGZDUu37K5cMNp0hFtzO38sC7gWA==}
 
-  sdp-transform@3.0.0:
-    resolution: {integrity: sha512-gfYVRGxjHkGF2NPeUWHw5u6T/KGFtS5/drPms73gaSuMaVHKCY3lpLnGDfswVQO0kddeePoti09AwhYP4zA8dQ==}
-    hasBin: true
-
   semver@7.8.5:
     resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
     engines: {node: '>=10'}
@@ -613,27 +604,6 @@ packages:
 
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
-
-  zod@4.4.3:
-    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
-
-  zustand@5.0.15:
-    resolution: {integrity: sha512-MpSEjRiBkA9crSYeOUH32rJC7SVqAbm0Fqcqge/bUi2PPoLcBWKOsG+C8mevmpr8TwXHBVkChbbJiyvkE+i/3A==}
-    engines: {node: '>=12.20.0'}
-    peerDependencies:
-      '@types/react': '>=18.0.0'
-      immer: '>=9.0.6'
-      react: '>=18.0.0'
-      use-sync-external-store: '>=1.2.0'
-    peerDependenciesMeta:
-      '@types/react':
-        optional: true
-      immer:
-        optional: true
-      react:
-        optional: true
-      use-sync-external-store:
-        optional: true
 
 snapshots:
 
@@ -786,18 +756,12 @@ snapshots:
   '@next/swc-win32-x64-msvc@15.5.18':
     optional: true
 
-  '@reactor-team/js-sdk@2.12.3(hls.js@1.7.0)(react@19.1.0)(zustand@5.0.15(@types/react@19.2.18)(react@19.1.0))':
+  '@reactor-team/js-sdk@3.0.0(react@19.1.0)':
     dependencies:
       awaitqueue: 3.3.1
+      hls.js: 1.7.0
       mp4box: 2.4.1
       react: 19.1.0
-      sdp-transform: 3.0.0
-      zod: 4.4.3
-      zustand: 5.0.15(@types/react@19.2.18)(react@19.1.0)
-    optionalDependencies:
-      hls.js: 1.7.0
-    transitivePeerDependencies:
-      - supports-color
 
   '@swc/helpers@0.5.15':
     dependencies:
@@ -887,8 +851,6 @@ snapshots:
   awaitqueue@3.3.1:
     dependencies:
       debug: 4.4.3
-    transitivePeerDependencies:
-      - supports-color
 
   caniuse-lite@1.0.30001809: {}
 
@@ -1018,8 +980,6 @@ snapshots:
 
   scheduler@0.26.0: {}
 
-  sdp-transform@3.0.0: {}
-
   semver@7.8.5:
     optional: true
 
@@ -1071,10 +1031,3 @@ snapshots:
   typescript@5.9.3: {}
 
   undici-types@6.21.0: {}
-
-  zod@4.4.3: {}
-
-  zustand@5.0.15(@types/react@19.2.18)(react@19.1.0):
-    optionalDependencies:
-      '@types/react': 19.2.18
-      react: 19.1.0
