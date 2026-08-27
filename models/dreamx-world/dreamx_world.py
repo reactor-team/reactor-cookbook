@@ -354,8 +354,6 @@ class DreamXWorld(ReactorPipeline):
                     backend.reset(self._seed, selected)
                 finally:
                     self._generating = False
-                if self.state._reset_requested or selected is not self._selected_input:
-                    continue
                 self._chunk_index = 0
                 self._active_prompt = ""
 
@@ -371,8 +369,6 @@ class DreamXWorld(ReactorPipeline):
                 )
             finally:
                 self._generating = False
-            if self.state._reset_requested or selected is not self._selected_input:
-                continue
 
             self._chunk_index += 1
             self._active_prompt = prompt

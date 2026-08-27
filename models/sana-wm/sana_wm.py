@@ -271,7 +271,6 @@ class SanaWM(ReactorPipeline):
         self._trajectory = None
         self._trajectory_name = None
         self.state.prompt = effective_prompt
-        self.state._trajectory_exhausted = False
         self._queue_reset()
         message = ImageSelected(
             source="uploaded",
@@ -312,7 +311,6 @@ class SanaWM(ReactorPipeline):
         self._trajectory = None
         self._trajectory_name = None
         self.state.prompt = prompt
-        self.state._trajectory_exhausted = False
         self._queue_reset()
         message = ImageSelected(
             source="built_in",
@@ -527,7 +525,6 @@ class SanaWM(ReactorPipeline):
         if seed >= 0:
             self._seed = seed
         replaced = self._chunk_index
-        self.state._trajectory_exhausted = False
         self._queue_reset()
         message = RolloutResetQueued(
             trigger="manual", seed=self._seed, replaced_chunks=replaced
@@ -580,8 +577,6 @@ class SanaWM(ReactorPipeline):
                     self._generating = False
                 await self._send_state_update()
 
-            if self.state._reset_requested:
-                continue
             if self.state._trajectory_exhausted:
                 yield None
                 continue
@@ -610,8 +605,6 @@ class SanaWM(ReactorPipeline):
                 await self._send_state_update()
                 yield None
                 continue
-            if self.state._reset_requested:
-                continue
             self._chunk_index = backend.chunk_index
             await self._send_state_update()
             yield SanaWMOutput(main_video=frames)
@@ -630,6 +623,7 @@ class SanaWM(ReactorPipeline):
     def _queue_reset(self) -> None:
         """Queue fresh upstream caches for the next inference boundary."""
         self._clear_controls()
+        self.state._trajectory_exhausted = False
         self.state._reset_requested = True
         self._active_prompt = None
         self._chunk_index = 0

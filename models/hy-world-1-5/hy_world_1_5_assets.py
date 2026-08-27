@@ -89,19 +89,19 @@ def read_config(config_path: Path | None) -> HYWorld15Config:
     stream = _mapping(document.get("stream"), "stream")
 
     source_path = Path(
-        os.environ.get(SOURCE_ENV, weights / str(source_raw["path"]))
+        os.environ.get(SOURCE_ENV) or weights / str(source_raw["path"])
     ).expanduser()
     base_raw = _mapping(assets.get("base_model"), "assets.base_model")
     action_raw = _mapping(assets.get("action_model"), "assets.action_model")
     base_path = Path(
-        os.environ.get(BASE_MODEL_ENV, weights / str(base_raw["path"]))
+        os.environ.get(BASE_MODEL_ENV) or weights / str(base_raw["path"])
     ).expanduser()
     action_path = Path(
-        os.environ.get(ACTION_MODEL_ENV, weights / str(action_raw["path"]))
+        os.environ.get(ACTION_MODEL_ENV) or weights / str(action_raw["path"])
     ).expanduser()
     vision_raw = _mapping(assets["flux_vision"], "assets.flux_vision")
     vision_path = Path(
-        os.environ.get(VISION_MODEL_ENV, weights / str(vision_raw["path"]))
+        os.environ.get(VISION_MODEL_ENV) or weights / str(vision_raw["path"])
     ).expanduser()
 
     inference_steps = int(inference.get("steps", 4))

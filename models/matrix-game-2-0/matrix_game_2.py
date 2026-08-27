@@ -328,8 +328,6 @@ class MatrixGame2(ReactorPipeline):
                 self.state._restart_requested = False
                 image = load_input_image(selected_input)
                 backend.reset(image, self._seed)
-                if self.state._restart_requested:
-                    continue
                 self._chunk_index = 0
                 self._last_chunk_frames = 0
                 self.state._limit_reached = False
@@ -351,8 +349,6 @@ class MatrixGame2(ReactorPipeline):
             finally:
                 self._chunk_in_flight = False
             inference_seconds = time.perf_counter() - started_at
-            if self.state._restart_requested:
-                continue
 
             self._chunk_index += 1
             self._last_chunk_frames = int(frames.shape[0])

@@ -109,7 +109,7 @@ class ConditioningChanged(ModelMessage):
     source: str = MessageField(
         description=(
             "Source selected for the next rollout: `demo` for a configured dataset sample or "
-            "`upload` for an image accepted by `set_conditioning_image`."
+            "`uploaded` for an image accepted by `set_conditioning_image`."
         )
     )
     selection: str = MessageField(

@@ -8,10 +8,9 @@ latents, full action and pose history, denoising state, and streaming VAE cache.
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
@@ -29,41 +28,26 @@ from reactor_runtime import (
 )
 from reactor_runtime.log import get_logger
 
-if TYPE_CHECKING:
-    from matrix_game_3_0_assets import MatrixGame30Config
-    from matrix_game_3_0_backend import NativeAction
-    from matrix_game_3_0_images import FRAMES_PER_CHUNK
-    from matrix_game_3_0_types import (
-        MOVEMENT_KEYS,
-        ControlsChanged,
-        MatrixGame30Output,
-        MatrixGame30State,
-        MovementKey,
-        RolloutLimitReached,
-        StateUpdate,
-    )
-else:
-    module_prefix = f"{__package__}." if __package__ else ""
-    assets = importlib.import_module(f"{module_prefix}matrix_game_3_0_assets")
-    backend_module = importlib.import_module(f"{module_prefix}matrix_game_3_0_backend")
-    images = importlib.import_module(f"{module_prefix}matrix_game_3_0_images")
-    schema = importlib.import_module(f"{module_prefix}matrix_game_3_0_types")
-    MatrixGame30Config = assets.MatrixGame30Config
-    prepare_assets = assets.prepare_assets
-    read_config = assets.read_config
-    MatrixGame30Backend = backend_module.MatrixGame30Backend
-    NativeAction = backend_module.NativeAction
-    action_from_controls = backend_module.action_from_controls
-    FRAMES_PER_CHUNK = images.FRAMES_PER_CHUNK
-    normalize_output_frames = images.normalize_output_frames
-    validate_uploaded_image = images.validate_uploaded_image
-    MOVEMENT_KEYS = schema.MOVEMENT_KEYS
-    ControlsChanged = schema.ControlsChanged
-    MatrixGame30Output = schema.MatrixGame30Output
-    MatrixGame30State = schema.MatrixGame30State
-    MovementKey = schema.MovementKey
-    RolloutLimitReached = schema.RolloutLimitReached
-    StateUpdate = schema.StateUpdate
+from matrix_game_3_0_assets import MatrixGame30Config, prepare_assets, read_config
+from matrix_game_3_0_backend import (
+    MatrixGame30Backend,
+    NativeAction,
+    action_from_controls,
+)
+from matrix_game_3_0_images import (
+    FRAMES_PER_CHUNK,
+    normalize_output_frames,
+    validate_uploaded_image,
+)
+from matrix_game_3_0_types import (
+    MOVEMENT_KEYS,
+    ControlsChanged,
+    MatrixGame30Output,
+    MatrixGame30State,
+    MovementKey,
+    RolloutLimitReached,
+    StateUpdate,
+)
 
 logger = get_logger(__name__)
 

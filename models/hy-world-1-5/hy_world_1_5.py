@@ -372,8 +372,6 @@ class HYWorld15(ReactorPipeline):
                     )
                 finally:
                     self._generating = False
-                if self.state._restart_requested:
-                    continue
                 planner.reset()
                 self._chunk_index = 0
                 self._active_prompt = None
@@ -405,8 +403,6 @@ class HYWorld15(ReactorPipeline):
                 self._generating = False
             generation_seconds = time.perf_counter() - started
             frames = normalize_output_frames(frames, first_chunk=chunk == 1)
-            if self.state._restart_requested:
-                continue
 
             self._chunk_index = chunk
             self._active_prompt = prompt

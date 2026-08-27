@@ -641,7 +641,7 @@ class OpenDreamer(ReactorPipeline):
         self._conditioning_source = "uploaded"
         self._queue_rollout_reset()
         await self._send_state_update()
-        return ConditioningChanged(source="upload", selection=image.name)
+        return ConditioningChanged(source="uploaded", selection=image.name)
 
     def _queue_rollout_reset(self) -> None:
         """Queue fresh autoregressive state and discard pending media."""

@@ -460,8 +460,6 @@ class MatrixGame35(ReactorPipeline):
                     selected_input,
                     prompt,
                 )
-                if self.state._restart_requested:
-                    continue
                 planner.reset()
                 self._chunk_index = 0
 
@@ -488,8 +486,6 @@ class MatrixGame35(ReactorPipeline):
             finally:
                 self._chunk_in_flight = False
             frames = normalize_output_frames(frames)
-            if self.state._restart_requested:
-                continue
             self._chunk_index += 1
             if self._chunk_index >= config.max_chunks:
                 self.state._limit_reached = True
