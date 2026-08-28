@@ -50,9 +50,6 @@ export interface EchoWmFlashStateUpdateMessage {
   prompt: string | null;
   active_prompt: string | null;
   seed: number;
-  paused: boolean;
-  step_queued: boolean;
-  queued_steps: number;
   reset_queued: boolean;
   generating: boolean;
   completed_chunks: number;
@@ -71,8 +68,6 @@ export interface EchoWmFlashImageSelectedMessage {
   filename: string;
   prompt: string;
   seed: number;
-  first_chunk_queued: boolean;
-  preview_chunks_queued: number;
 }
 
 export interface EchoWmFlashPromptQueuedMessage {
@@ -95,7 +90,6 @@ export interface EchoWmFlashRolloutResetQueuedMessage {
   type: "rollout_reset_queued";
   seed: number;
   replaced_chunks: number;
-  first_chunk_queued: boolean;
 }
 
 export interface EchoWmFlashChunkCompletedMessage {

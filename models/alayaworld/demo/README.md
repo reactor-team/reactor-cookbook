@@ -84,9 +84,9 @@ await model.setImage({ image: reference });
 
 The model broadcasts a complete snapshot of everything a client can observe
 whenever anything changes, and sends one to each viewer as it joins. The app
-treats that snapshot as its only source of truth, which is why the axis meters,
-the chunk counter, and the pause state all agree with what the model will
-actually do next — even when a second tab is driving:
+treats that snapshot as its only source of truth, which is why the axis meters
+and the chunk counter all agree with what the model will actually do next —
+even when a second tab is driving:
 
 ```tsx
 useAlayaWorldStateUpdate((state) => {

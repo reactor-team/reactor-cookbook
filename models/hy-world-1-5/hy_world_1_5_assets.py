@@ -89,15 +89,19 @@ def read_config(config_path: Path | None) -> HYWorld15Config:
     stream = _mapping(document.get("stream"), "stream")
 
     source_path = Path(
-        os.environ.get(SOURCE_ENV, weights / str(source_raw["path"]))
+        os.environ.get(SOURCE_ENV) or weights / str(source_raw["path"])
     ).expanduser()
     base_raw = _mapping(assets.get("base_model"), "assets.base_model")
     action_raw = _mapping(assets.get("action_model"), "assets.action_model")
     base_path = Path(
-        os.environ.get(BASE_MODEL_ENV, weights / str(base_raw["path"]))
+        os.environ.get(BASE_MODEL_ENV) or weights / str(base_raw["path"])
     ).expanduser()
     action_path = Path(
-        os.environ.get(ACTION_MODEL_ENV, weights / str(action_raw["path"]))
+        os.environ.get(ACTION_MODEL_ENV) or weights / str(action_raw["path"])
+    ).expanduser()
+    vision_raw = _mapping(assets["flux_vision"], "assets.flux_vision")
+    vision_path = Path(
+        os.environ.get(VISION_MODEL_ENV) or weights / str(vision_raw["path"])
     ).expanduser()
 
     inference_steps = int(inference.get("steps", 4))
@@ -148,12 +152,7 @@ def read_config(config_path: Path | None) -> HYWorld15Config:
             assets["glyph"],
             "assets.glyph",
         ),
-        flux_vision=_asset(
-            weights
-            / str(_mapping(assets["flux_vision"], "assets.flux_vision")["path"]),
-            assets["flux_vision"],
-            "assets.flux_vision",
-        ),
+        flux_vision=_asset(vision_path, vision_raw, "assets.flux_vision"),
         public_vision_fallback=_asset(
             weights
             / str(
@@ -387,14 +386,14 @@ def _ensure_modelscope_snapshot(asset: HubAsset) -> None:
 
 def _ensure_vision_encoder(config: HYWorld15Config) -> None:
     """Prepare the official gated SigLIP encoder or its public architecture match."""
-    explicit = os.environ.get(VISION_MODEL_ENV)
-    if explicit:
-        path = Path(explicit).expanduser()
-        if not (path / "image_encoder/config.json").is_file():
+    if os.environ.get(VISION_MODEL_ENV):
+        # read_config resolved the override into config.flux_vision.path already;
+        # an explicit path must be a complete layout, so downloads never run.
+        if not (config.flux_vision.path / "image_encoder/config.json").is_file():
             raise FileNotFoundError(
-                f"{VISION_MODEL_ENV} is not a HY-World SigLIP layout: {path}"
+                f"{VISION_MODEL_ENV} is not a HY-World SigLIP layout: "
+                f"{config.flux_vision.path}"
             )
-        object.__setattr__(config.flux_vision, "path", path)
         return
     if (config.flux_vision.path / "image_encoder/config.json").is_file():
         return

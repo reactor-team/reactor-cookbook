@@ -8,17 +8,19 @@ for every world-model step.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from reactor_runtime import (
     ClientInfo,
+    CommandError,
     InputField,
     ReactorPipeline,
     UploadedFile,
     connected,
+    disconnected,
     event,
     get_weights_path,
     session_ended,
@@ -26,7 +28,7 @@ from reactor_runtime import (
 )
 from reactor_runtime.log import get_logger
 
-from diamond_support import (
+from diamond_assets import (
     decode_spawn_image,
     load_adapter_dependencies,
     load_upstream_modules,
@@ -57,11 +59,12 @@ logger = get_logger(__name__)
 PLAYBACK_FPS = 15
 PLAYBACK_BUFFER_FRAMES = 4
 _SPAWN_IMAGE_FIELD = InputField(
+    moderate=True,
     description=(
         "Image uploaded through the Reactor upload protocol. Must contain decodable image "
         "bytes with an `image/*` MIME type; it is center-cropped to the native aspect ratio, "
         "resized, and applied when the fresh world starts at the next model-step boundary."
-    )
+    ),
 )
 
 
@@ -94,7 +97,6 @@ class Diamond(ReactorPipeline):
         self._initial_observation: Any | None = None
         self._reset_requested = True
         self._controller = "human"
-        self._paused = False
         self._replay_step = 0
 
     def load(self, config_path: Path | None) -> None:
@@ -205,7 +207,6 @@ class Diamond(ReactorPipeline):
         self._pending_scene = None
         self._initial_observation = None
         self._controller = "human"
-        self._paused = False
         self._replay_step = 0
         self._rng = np.random.default_rng(self._seed)
         self._reset_requested = True
@@ -218,7 +219,6 @@ class Diamond(ReactorPipeline):
         self._initial_observation = None
         self._reset_requested = False
         self._controller = "human"
-        self._paused = False
         self._replay_step = 0
         self._clear_controls()
 
@@ -226,6 +226,12 @@ class Diamond(ReactorPipeline):
     async def _connected(self, client: ClientInfo) -> None:
         """Send the complete durable control state to one joining viewer."""
         await client.send(StateUpdate.from_state(self.state))
+
+    @disconnected
+    async def _disconnected(self) -> None:
+        """Release held controls when a viewer leaves the live session."""
+        self._clear_controls()
+        await self._send_state_update()
 
     @event(
         name="reset",
@@ -255,13 +261,15 @@ class Diamond(ReactorPipeline):
     async def random_scene(self) -> SceneChanged:
         """Queue a random official spawn and return its identifier."""
         if not self._spawn_dirs:
-            raise RuntimeError("DIAMOND spawn scenes were not loaded")
+            raise CommandError(
+                "scene_unavailable", "No built-in DIAMOND spawn scenes are available."
+            )
         scene_index = int(self._rng.integers(len(self._spawn_dirs)))
         scene_dir = self._spawn_dirs[scene_index]
         self._pending_scene = self._prepare_dataset_scene(scene_dir)
         self._queue_scene_reset()
-        logger.info("dataset scene selected", scene=scene_dir.name)
-        message = SceneChanged(source="dataset", scene=scene_dir.name)
+        logger.info("built-in scene selected", scene=scene_dir.name)
+        message = SceneChanged(source="built_in", scene=scene_dir.name)
         await self._send_state_update()
         return message
 
@@ -284,10 +292,13 @@ class Diamond(ReactorPipeline):
             image: Uploaded CSGO image fetched by Reactor Runtime.
 
         Raises:
-            ValueError: If the upload is not a decodable image.
+            CommandError: If the upload is not labeled as an image.
         """
         if not image.mime_type.startswith("image/"):
-            raise ValueError(f"expected an image upload, got {image.mime_type!r}")
+            raise CommandError(
+                "invalid_image",
+                f"expected an image upload, got {image.mime_type!r}",
+            )
         full_res, low_res = decode_spawn_image(
             image.data,
             full_resolution=self._full_resolution,
@@ -298,7 +309,7 @@ class Diamond(ReactorPipeline):
         self.state.controller = self._controller
         self._queue_scene_reset()
         logger.info("uploaded scene selected", name=image.name, size=len(image.data))
-        message = SceneChanged(source="upload", scene=image.name)
+        message = SceneChanged(source="uploaded", scene=image.name)
         await self._send_state_update()
         return message
 
@@ -338,32 +349,6 @@ class Diamond(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    # Keep pause available for future schema re-enablement without exposing it to clients.
-    async def set_paused(
-        self,
-        paused: bool = InputField(
-            default=False,
-            description=(
-                "True pauses continuous generation before the next model step; false resumes "
-                "it. Both values release all held keyboard and mouse controls."
-            ),
-        ),
-    ) -> ActionChanged:
-        """Pause or resume and return the released native input state."""
-        self._paused = paused
-        self.state.paused = paused
-        self.state._step_requested = False
-        self._clear_controls()
-        message = self._action_changed()
-        await self._send_state_update()
-        return message
-
-    # Keep single-step generation available for future schema re-enablement.
-    def step(self) -> None:
-        """Request one inference step without leaving paused mode."""
-        if self.state is not None and self._paused:
-            self.state._step_requested = True
-
     @event(
         name="set_key_state",
         description=(
@@ -388,7 +373,7 @@ class Diamond(ReactorPipeline):
             default=True,
             description=(
                 "True holds `key` from the next generated frame until released; false releases "
-                "it. Resetting, pausing, or changing controller releases every key."
+                "it. Resetting or changing controller releases every key."
             ),
         ),
     ) -> ActionChanged:
@@ -426,7 +411,7 @@ class Diamond(ReactorPipeline):
             default=True,
             description=(
                 "True holds `button` from the next generated frame until released; false "
-                "releases it. Resetting, pausing, or changing controller releases every button."
+                "releases it. Resetting or changing controller releases every button."
             ),
         ),
     ) -> ActionChanged:
@@ -481,13 +466,12 @@ class Diamond(ReactorPipeline):
             return self._action_changed(delta_x=delta_x, delta_y=delta_y)
         return self._action_changed()
 
-    def inference(self) -> Generator[DiamondOutput | None, None, None]:
+    def inference(self) -> Iterator[DiamondOutput | None]:
         """Generate CSGO frames while applying the latest client controls."""
         if self._world is None or self._agent is None or self._encode_action is None:
             raise RuntimeError("DIAMOND model was not loaded")
 
         self.state.controller = self._controller
-        self.state.paused = self._paused
         while True:
             if self._reset_requested:
                 self._reset_world()
@@ -497,11 +481,6 @@ class Diamond(ReactorPipeline):
                 self._initial_observation = None
                 yield DiamondOutput(main_video=to_video_frame(observation))
                 continue
-
-            if self._paused and not self.state._step_requested:
-                yield None
-                continue
-            self.state._step_requested = False
 
             action = self._next_action()
             observation, _reward, ended, truncated, _info = self._world.step(action)
@@ -591,7 +570,6 @@ class Diamond(ReactorPipeline):
         """Reset controls and request application of the queued scene."""
         self.output.flush()
         self._reset_requested = True
-        self.state._step_requested = False
         self._replay_step = 0
         self._clear_controls()
 
@@ -662,8 +640,6 @@ class Diamond(ReactorPipeline):
 
     def _clear_controls(self) -> None:
         """Release held controls and discard pending mouse movement."""
-        if self.state is None:
-            return
         self.state._pressed_keys = frozenset()
         self.state._pressed_mouse_buttons = frozenset()
         self.state._delta_x = 0.0

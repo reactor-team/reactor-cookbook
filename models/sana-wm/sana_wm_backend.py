@@ -114,20 +114,7 @@ class SanaStreamingBackend:
         )
         self._base_forward_long = self._pipeline.model.forward_long
 
-        self._params = self._wm.GenerationParams(
-            num_frames=1 + config.max_chunks * PIXEL_FRAMES_PER_CHUNK,
-            fps=FPS,
-            step=4,
-            cfg_scale=1.0,
-            flow_shift=8.0,
-            seed=config.seed,
-            negative_prompt="",
-            sampling_algo="self_forcing",
-            num_cached_blocks=config.num_cached_blocks,
-            sink_token=True,
-            num_frame_per_block=LATENT_FRAMES_PER_CHUNK,
-            denoising_step_list=list(_DENOISING_STEPS),
-        )
+        self._total_frames = 1 + config.max_chunks * PIXEL_FRAMES_PER_CHUNK
         self._stage1_iter: Any = None
         self._refiner_runner: Any = None
         self._vae_decoder: Any = None
@@ -225,8 +212,7 @@ class SanaStreamingBackend:
             resized_size,
             crop_offset,
         )
-        total_frames = self._params.num_frames
-        self._intrinsics = self._fit_intrinsics(intrinsics, total_frames)
+        self._intrinsics = self._fit_intrinsics(intrinsics, self._total_frames)
         self._trajectory = self._normalize_trajectory(trajectory)
         self._trajectory_cursor = 1
         self._poses = [np.eye(4, dtype=np.float32)]
@@ -236,7 +222,6 @@ class SanaStreamingBackend:
         self._velocity = self._camera_control.VelocityState()
         self._last_controls = set()
         self._chunk_index = 0
-        self._params.seed = seed
 
         refiner_prompt, refiner_mask = self._pipeline._get_streaming_refiner_prompt(
             prompt
@@ -458,16 +443,10 @@ class SanaStreamingBackend:
         return np.array([[fx, fy, cx, cy]], dtype=np.float32)
 
     def _normalize_trajectory(self, trajectory: np.ndarray | None) -> np.ndarray | None:
-        """Validate and express a native camera trajectory relative to its first pose."""
+        """Express a command-validated camera trajectory relative to its first pose."""
         if trajectory is None:
             return None
         values = np.asarray(trajectory, dtype=np.float32)
-        if values.ndim != 3 or values.shape[1:] != (4, 4):
-            raise ValueError(
-                f"camera trajectory must have shape (F,4,4); got {values.shape}"
-            )
-        if values.shape[0] < PIXEL_FRAMES_PER_CHUNK + 1:
-            raise ValueError("camera trajectory must contain at least 25 poses")
         first_inverse = np.linalg.inv(values[0]).astype(np.float32)
         return np.matmul(first_inverse[None], values).astype(np.float32)
 
@@ -613,8 +592,7 @@ class SanaStreamingBackend:
         iterator = self._stage1_iter
         if iterator is not None and hasattr(iterator, "close"):
             iterator.close()
-        if hasattr(self, "_pipeline"):
-            self._pipeline.model.forward_long = self._base_forward_long
+        self._pipeline.model.forward_long = self._base_forward_long
         self._stage1_iter = None
         self._refiner_runner = None
         if self._vae_decoder is not None:
@@ -624,8 +602,7 @@ class SanaStreamingBackend:
         self._raymap = None
         self._chunk_plucker = None
         gc.collect()
-        if hasattr(self, "_torch"):
-            self._torch.cuda.empty_cache()
+        self._torch.cuda.empty_cache()
 
     def end_session(self) -> None:
         """Release the active rollout's autoregressive state."""

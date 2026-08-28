@@ -20,7 +20,7 @@ weights cache and calls its streaming inference components directly.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` controls its Reactor
-Runtime 3.2.3, CUDA 12.8, Python 3.12, system packages, and Python dependencies.
+Runtime 3.2.5, CUDA 12.8, Python 3.12, system packages, and Python dependencies.
 `requirements.txt` contains the model's inference dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -91,7 +91,7 @@ configure that storage on the large volume when the system disk is small.
   held live controls on a fresh rollout.
 - `reset(seed)` clears the incremental caches and optionally changes the seed.
 
-A session starts unpaused without selecting an image. `set_image` and
+A session starts without a selected image. `set_image` and
 `random_image` start continuous generation from the selected first frame.
 
 When uploaded intrinsics are omitted, the pinned public Pi3X model estimates
@@ -129,14 +129,14 @@ storage while allowing the Runtime process to remain long-lived.
 Commands return typed, command-correlated messages for the client timeline:
 
 - `image_selected` identifies the uploaded or built-in image, effective prompt,
-  calibration source, and first generated chunk.
+  and calibration source.
 - `prompt_changed`, `control_changed`, `controls_released`,
   and `trajectory_selected` confirm their resulting state and
   affected chunk.
 - `rollout_reset_queued` identifies the fresh rollout.
 - `trajectory_exhausted` reports the end of finite trajectory playback.
 - `state_update` is a complete snapshot of image, calibration, prompt, camera
-  mode, held controls, seed, pause state, generation state, and chunk position.
+  mode, held controls, seed, generation state, and chunk position.
   A joining viewer receives one immediately, and successful state changes
   broadcast another.
 

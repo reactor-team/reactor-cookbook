@@ -1,5 +1,5 @@
-# reactor.yaml's build.runtime_version installs Reactor Runtime in the same
-# resolution as these adapter dependencies.
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
 numpy>=2.0
 pillow>=11.0
 pyyaml>=6.0

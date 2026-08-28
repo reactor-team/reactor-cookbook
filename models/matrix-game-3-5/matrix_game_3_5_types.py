@@ -30,7 +30,7 @@ class StateUpdate(ModelMessage):
     image_source: str = MessageField(
         description=(
             "Source of the active anchor image: `none` while waiting for the first upload, "
-            "`upload` after `set_image`, or `built_in` for a programmatic fallback."
+            "`uploaded` after `set_image`, or `built_in` for a programmatic fallback."
         )
     )
     image_name: str = MessageField(
@@ -42,18 +42,6 @@ class StateUpdate(ModelMessage):
         description=(
             "Random seed selected for the current or queued fresh world. Changes when `reset` "
             "receives a non-negative `seed`."
-        )
-    )
-    paused: bool = MessageField(
-        description=(
-            "Whether continuous generation will stop before the next chunk; an in-flight chunk "
-            "can still finish."
-        )
-    )
-    step_queued: bool = MessageField(
-        description=(
-            "Whether `step` has queued one chunk while paused. Returns to false when generation "
-            "of that chunk begins or another playback command cancels it."
         )
     )
     limit_reached: bool = MessageField(
@@ -119,7 +107,7 @@ class StateUpdate(ModelMessage):
 
 
 class RolloutLimitReached(ModelMessage):
-    """Emitted once when `main_video` pauses after the final available chunk."""
+    """Emitted once when `main_video` stops after the final available chunk."""
 
     completed_chunks: int = MessageField(
         description="Number of 12-frame chunks completed when the world reached its limit."
@@ -133,11 +121,12 @@ class RolloutLimitReached(ModelMessage):
 
 
 class MatrixGame35State(InputState):
-    """Expose shared text, camera, and playback controls for one Matrix world."""
+    """Expose shared text and camera controls for one Matrix world."""
 
     prompt: str = InputField(
         default="",
         max_length=4096,
+        moderate=True,
         description=(
             "Active scene prompt, up to 4096 characters. Changes are sampled at the next "
             "generated 12-frame chunk boundary and persist across `reset`."
@@ -197,17 +186,5 @@ class MatrixGame35State(InputState):
             "until the camera axes are changed or released."
         ),
     )
-    _paused: bool = False
-    _step_requested: bool = False
     _restart_requested: bool = True
     _limit_reached: bool = False
-
-    @property
-    def paused(self) -> bool:
-        """Return whether continuous chunk generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether continuous chunk generation is paused."""
-        self._paused = value

@@ -88,7 +88,6 @@ export function Stage({
             />
             chunk {world?.completed_chunks ?? 0}
           </span>
-          {world?.paused ? <span className="text-pending">paused</span> : null}
         </div>
       ) : null}
     </div>

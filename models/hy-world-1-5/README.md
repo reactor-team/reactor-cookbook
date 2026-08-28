@@ -13,14 +13,14 @@ to 13 RGB frames because its first latent is the image anchor; every later turn
 decodes to 16 frames. Playback on `main_video` adapts to measured inference
 throughput, with one complete model turn in the 16-frame output queue.
 
-A new session starts unpaused and without choosing a scene for the user. Upload
+A new session starts without choosing a scene for the user. Upload
 an image with `set_image`, or invoke `random_image` to select an official
 example. Either command starts continuous generation from the first chunk.
 
 ## Run
 
 This directory is a `reactor` workspace. Its `reactor.yaml` declares the model,
-runtime entry point, Reactor Runtime 3.2.3, CUDA and Python versions, system
+runtime entry point, Reactor Runtime 3.2.5, CUDA and Python versions, system
 packages, and Python requirements. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -190,7 +190,7 @@ changing them would alter memory evaluation.
 Inference uses the upstream PyTorch attention path and eager execution from the
 pinned model source.
 
-`stream.max_chunks` defaults to 512. At the limit, generation pauses and emits
+`stream.max_chunks` defaults to 512. At the limit, generation idles and emits
 `RolloutLimitReached`; `reset`, `set_image`, or `random_image` starts a fresh
 world without reloading model weights. Ending a session releases its causal KV
 cache, VAE cache, latent history, camera history, and geometric memory while

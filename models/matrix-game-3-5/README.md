@@ -21,7 +21,7 @@ keeps each interactive request at one native chunk.
 
 The anchor image initializes Matrix's causal visual state, so `set_image` starts
 a fresh rollout at chunk 1 while keeping model weights loaded. A new session
-starts unpaused and waits for an image. Each successful upload starts continuous
+waits for an image. Each successful upload starts continuous
 generation. Text conditioning
 is sampled per causal chunk. `set_prompt` re-encodes only the text context for
 the next chunk while retaining the current camera pose, rolling KV cache,
@@ -37,7 +37,7 @@ while camera axes are sampled again before the next expensive turn begins.
 
 This directory is a `reactor` workspace. The manifest names the model and its
 B200 resource, and its `build` block defines the complete Python 3.12 serving
-image with Reactor Runtime 3.2.3. `requirements.txt` contains the model
+image with Reactor Runtime 3.2.5. `requirements.txt` contains the model
 dependencies. The host needs the
 [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
 the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. Matrix requires
@@ -113,7 +113,7 @@ that one root. To relocate everything, change only `runtime.weights_path` in
 
 The adapter provides a scene-neutral generic default prompt, so users can leave
 the prompt empty. The default intrinsics and camera pose arrive in the pinned
-source checkout. The demo image is copied into `example_image` for convenient
+source checkout. The demo image is copied into `example_images` for convenient
 manual upload. Every new session waits for the client to upload its anchor
 image.
 
@@ -145,8 +145,8 @@ vertical and roll can use additional keys or analog controls. Simultaneous
 translation and rotation axes are normalized independently.
 
 Every command returns `StateUpdate`, a complete snapshot containing the prompt,
-anchor image, seed, pause and step state, six axes, completed chunk count, next
-control boundary, and configured limit. A joining viewer receives the same
+anchor image, seed, six axes, completed chunk count, next control boundary,
+and configured limit. A joining viewer receives the same
 snapshot, and the model broadcasts another after every completed chunk. Clients
 can consume each complete snapshot directly.
 
@@ -159,7 +159,7 @@ the following chunk. An in-flight CUDA chunk cannot be interrupted; reset and
 disconnect take effect when inference returns to Runtime.
 
 `stream.max_chunks` bounds the preallocated PRoPE camera timeline. The default
-512 chunks cover 6.4 minutes. After the final chunk, generation pauses and emits
+512 chunks cover 6.4 minutes. After the final chunk, generation stops and emits
 `RolloutLimitReached` followed by a `StateUpdate` with `limit_reached: true` and
 `next_chunk: null`. Camera commands then return `rollout_limit_reached` until
 `reset` or `set_image` starts a fresh timeline.
@@ -181,7 +181,7 @@ Each session waits for `set_image`. A successful upload starts continuous
 generation and broadcasts completion after each 12-frame chunk.
 
 A ready-to-upload copy of the public first-person demo input lives in
-[`example_image`](example_image).
+[`example_images`](example_images).
 
 Uploads are limited to 25 MiB and 100 million pixels. Runtime verifies the
 declared media type, actual JPEG/PNG/WebP/BMP codec, dimensions, and decodability

@@ -1,3 +1,5 @@
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
 torch>=2.4.0
 torchvision>=0.19.0
 diffusers==0.33.1

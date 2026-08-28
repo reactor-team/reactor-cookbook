@@ -28,7 +28,7 @@ license before commercial use.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
-controls its Reactor Runtime 3.2.3 image, while `requirements.txt` lists the
+controls its Reactor Runtime 3.2.5 image, while `requirements.txt` lists the
 adapter's serving dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -138,7 +138,7 @@ queue holds one complete 36-frame chunk.
 
 ## Start from an image
 
-[`example_image`](example_image) contains a public image suitable for testing
+[`example_images`](example_images) contains a public image suitable for testing
 the upload path. Upload it through the client, then invoke `set_image` with its
 upload reference and an optional prompt. Arbitrary images are accepted, but
 images far outside the model's distribution may produce unstable rollouts.
@@ -158,9 +158,9 @@ next chunk boundary.
 
 Every successful command returns `command_applied` to its requester and
 broadcasts `state_update`. The complete state snapshot includes conditioning
-mode and filenames, prompt, seed, pause and step state, completed and next
-chunk, and all six camera axes. A newly connected viewer and every completed
-chunk receive the same snapshot.
+mode and filenames, prompt, seed, completed and next chunk, and all six
+camera axes. A newly connected viewer and every completed chunk receive the
+same snapshot.
 
 After 512 chunks, the adapter starts a fresh rollout from the active condition
 and emits `rollout_restarted`. This bounds the preallocated pose timeline while

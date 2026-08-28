@@ -20,7 +20,6 @@ import numpy as np
 from reactor_runtime import (
     ClientInfo,
     CommandError,
-    Idle,
     InputField,
     ReactorPipeline,
     UploadedFile,
@@ -33,7 +32,7 @@ from reactor_runtime import (
 from reactor_runtime.log import get_logger
 
 if TYPE_CHECKING:
-    from examples.alayaworld.alayaworld_assets import (
+    from alayaworld_assets import (
         load_scene_metadata,
         prepare_runtime_assets,
         read_config,
@@ -41,20 +40,18 @@ if TYPE_CHECKING:
         scene_prompt_path,
         validate_runtime_paths,
     )
-    from examples.alayaworld.alayaworld_camera import CameraMotionPlanner, MotionConfig
-    from examples.alayaworld.alayaworld_types import (
+    from alayaworld_camera import CameraMotionPlanner, MotionConfig
+    from alayaworld_types import (
         AlayaWorldConfig,
         AlayaWorldOutput,
         AlayaWorldState,
         CameraMotionChanged,
         ImageSelected,
-        PauseChanged,
         PromptQueued,
         RolloutResetQueued,
         StateUpdate,
-        StepQueued,
     )
-    from examples.alayaworld.alayaworld_utils import (
+    from alayaworld_utils import (
         camera_frames,
         compact_rollout_cache,
         ensure_camera_capacity,
@@ -83,11 +80,9 @@ else:
     AlayaWorldState = types_module.AlayaWorldState
     CameraMotionChanged = types_module.CameraMotionChanged
     ImageSelected = types_module.ImageSelected
-    PauseChanged = types_module.PauseChanged
     PromptQueued = types_module.PromptQueued
     RolloutResetQueued = types_module.RolloutResetQueued
     StateUpdate = types_module.StateUpdate
-    StepQueued = types_module.StepQueued
     camera_frames = utils_module.camera_frames
     compact_rollout_cache = utils_module.compact_rollout_cache
     ensure_camera_capacity = utils_module.ensure_camera_capacity
@@ -108,13 +103,8 @@ class AlayaWorld(ReactorPipeline):
     """Run AlayaWorld with live prompt and six-axis camera controls."""
 
     state: AlayaWorldState
-    output: AlayaWorldOutput
-    # Declaring no `fps` hands pacing to the measured cost of each chunk, which
-    # is what the client should see: a turn is expensive and its length varies,
-    # so a fixed rate would drain the queue and stall between turns. One chunk
-    # of queued frames is the smallest bound that still holds a whole turn, so a
-    # command lands on the next turn generated rather than waiting behind frames
-    # already queued.
+    # No `fps` pin: playout follows the measured cost of each variable-length
+    # turn, and one chunk of queued frames is the smallest bound holding a turn.
     buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
@@ -129,7 +119,6 @@ class AlayaWorld(ReactorPipeline):
         self._plan_rollout: Any = None
         self._cache: Any = None
         self._selected_input: Path | UploadedFile | None = None
-        self._needed_latents = 0
         self._chunk_latents = 0
         self._history_latents = 0
         self._gap_steps = 0
@@ -243,15 +232,7 @@ class AlayaWorld(ReactorPipeline):
         )
 
     def _warmup(self) -> None:
-        """Generate throwaway turns so the first client does not pay for them.
-
-        Compiled kernels are built on the first turn that reaches them, not when
-        the engine is constructed, so without this the cost lands on whoever
-        selects the first image. Running the same path here moves it inside
-        model load, where the runtime keeps the model unavailable until it
-        finishes. A built-in scene supplies the image, and the rollout it builds
-        is discarded so a session still starts with nothing selected.
-        """
+        """Pay first-turn kernel compilation during load, then discard the rollout."""
         config = self._config
         if config is None:
             raise RuntimeError("AlayaWorld was not loaded")
@@ -284,8 +265,6 @@ class AlayaWorld(ReactorPipeline):
             raise RuntimeError("AlayaWorld was not loaded")
         self.state.prompt = ""
         self._clear_camera_controls()
-        self.state.paused = False
-        self.state._step_requested = False
         self.state._reset_requested = False
         self._seed = config.seed
         self._selected_input = None
@@ -300,7 +279,6 @@ class AlayaWorld(ReactorPipeline):
     def on_session_ended(self) -> None:
         """Release the selected image and rollout at session end."""
         self._clear_camera_controls()
-        self.state._step_requested = False
         self.state._reset_requested = False
         self._selected_input = None
         self._cache = None
@@ -334,6 +312,7 @@ class AlayaWorld(ReactorPipeline):
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Non-empty scene prompt, trimmed and sampled when the next 32-frame chunk "
                 "starts. Requires an image selected by `set_image` or `random_image`."
@@ -512,38 +491,6 @@ class AlayaWorld(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    # Keep pause available for future schema re-enablement without exposing it to clients.
-    async def set_paused(
-        self,
-        paused: bool = InputField(
-            default=False,
-            description=(
-                "True pauses before the next chunk; false resumes continuous generation. "
-                "Both values reset all camera velocities to zero."
-            ),
-        ),
-    ) -> PauseChanged:
-        """Set pause state, release camera motion, and report the result."""
-        if not paused:
-            self._require_selected_image()
-        self.state.paused = paused
-        self.state._step_requested = False
-        self._clear_camera_controls()
-        message = PauseChanged(paused=paused, camera_motion_released=True)
-        await self._send_state_update()
-        return message
-
-    # Keep single-step generation available for future schema re-enablement.
-    async def step(self) -> StepQueued:
-        """Request one complete chunk and report its position in the rollout."""
-        self._require_selected_image()
-        if not self.state.paused:
-            raise CommandError("pause_required", "Pause AlayaWorld before requesting one step.")
-        self.state._step_requested = True
-        message = StepQueued(applies_to_chunk=self._next_control_chunk())
-        await self._send_state_update()
-        return message
-
     @event(
         name="reset",
         description=(
@@ -570,7 +517,6 @@ class AlayaWorld(ReactorPipeline):
             self._seed = seed
         completed_chunks = self._ar_index
         self._clear_camera_controls()
-        self.state._step_requested = False
         self.state._reset_requested = True
         message = RolloutResetQueued(
             trigger="manual",
@@ -593,6 +539,7 @@ class AlayaWorld(ReactorPipeline):
     async def set_image(
         self,
         image: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
             description=(
                 "Reference image uploaded through the Reactor upload protocol. JPEG, PNG, WebP, "
                 "or BMP up to 25 MiB and 100 million pixels; EXIF orientation is applied before "
@@ -602,6 +549,7 @@ class AlayaWorld(ReactorPipeline):
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Optional scene prompt for the fresh rollout. Whitespace is trimmed; an empty "
                 "value retains the current prompt or uses a generic continuation prompt when "
@@ -612,14 +560,11 @@ class AlayaWorld(ReactorPipeline):
         """Validate uploaded image bytes and select them for the next rollout."""
         validate_uploaded_image(image)
         self._selected_input = image
-        if self.state is not None:
-            self.state.prompt = (
-                prompt.strip() or self.state.prompt.strip() or _UPLOAD_DEFAULT_PROMPT
-            )
-            self.state.paused = False
-            self.state._step_requested = False
-            self.state._reset_requested = True
-            self._clear_camera_controls()
+        self.state.prompt = (
+            prompt.strip() or self.state.prompt.strip() or _UPLOAD_DEFAULT_PROMPT
+        )
+        self.state._reset_requested = True
+        self._clear_camera_controls()
         message = ImageSelected(
             source="uploaded",
             filename=image.name,
@@ -649,12 +594,9 @@ class AlayaWorld(ReactorPipeline):
         prompt = scene_prompt_path(selected).read_text(encoding="utf-8").strip()
         if not prompt:
             raise CommandError("prompt_unavailable", "The selected built-in image has no prompt.")
-        if self.state is not None:
-            self.state.prompt = prompt
-            self.state.paused = False
-            self.state._step_requested = False
-            self.state._reset_requested = True
-            self._clear_camera_controls()
+        self.state.prompt = prompt
+        self.state._reset_requested = True
+        self._clear_camera_controls()
         message = ImageSelected(
             source="built_in",
             filename=scene_image_path(selected).name,
@@ -664,12 +606,12 @@ class AlayaWorld(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[Any, None]:
-        """Generate chunks and emit their RGB frames at 24 FPS."""
+    async def inference(self) -> AsyncGenerator[AlayaWorldOutput | None, None]:
+        """Generate chunks and emit each one's RGB frames as a single batch."""
         while True:
             selected_input = self._selected_input
             if selected_input is None:
-                yield Idle
+                yield None
                 continue
 
             config = self._config
@@ -678,7 +620,6 @@ class AlayaWorld(ReactorPipeline):
             if self._ar_index >= config.max_chunks_per_rollout and not self.state._reset_requested:
                 completed_chunks = self._ar_index
                 self._clear_camera_controls()
-                self.state._step_requested = False
                 self.state._reset_requested = True
                 await self.send(
                     RolloutResetQueued(
@@ -698,8 +639,7 @@ class AlayaWorld(ReactorPipeline):
             if self.state._reset_requested:
                 self.state._reset_requested = False
                 self._reset_in_flight = True
-                # Cut playout at the boundary so queued frames from the world
-                # being replaced never play after the new one starts.
+                # Cut playout so frames from the replaced world never play.
                 self.output.flush()
                 try:
                     self._reset_rollout(
@@ -714,11 +654,6 @@ class AlayaWorld(ReactorPipeline):
             if self.state._reset_requested:
                 continue
 
-            if self.state.paused and not self.state._step_requested:
-                yield Idle
-                continue
-
-            self.state._step_requested = False
             prompt = self.state.prompt
             strafe = self.state.strafe
             vertical = self.state.vertical
@@ -742,9 +677,7 @@ class AlayaWorld(ReactorPipeline):
             await self._send_state_update()
             if self.state._reset_requested:
                 continue
-            # One batched output per turn, so the runtime pairs all 32 frames
-            # with the time they took and plays them at the rate they were
-            # produced.
+            # One batched output per turn pairs all 32 frames with their cost.
             yield AlayaWorldOutput(main_video=frames)
 
     def _reset_rollout(
@@ -788,7 +721,6 @@ class AlayaWorld(ReactorPipeline):
             ),
         )
         self._cache = cache
-        self._needed_latents = needed_latents
         self._ar_index = 0
         self._active_prompt = prompt
 
@@ -868,8 +800,6 @@ class AlayaWorld(ReactorPipeline):
             raise RuntimeError("AlayaWorld interactive decode requires history latents")
         started = time.perf_counter()
         pred = pipeline.generate(self._ar_index, cache)
-        # Generation dominates the turn and its cost tracks how much the camera
-        # moves, so it is reported apart from the fixed cost of decoding.
         generated = time.perf_counter()
         pipeline.finalize(self._ar_index, cache, pred)
         compact_rollout_cache(
@@ -887,13 +817,6 @@ class AlayaWorld(ReactorPipeline):
             seconds=round(time.perf_counter() - started, 3),
             generate_seconds=round(generated - started, 3),
             decode_seconds=round(time.perf_counter() - decode_started, 3),
-            prompt=prompt[:80],
-            strafe=strafe,
-            vertical=vertical,
-            forward=forward,
-            pitch=pitch,
-            yaw=yaw,
-            roll=roll,
         )
         return frames
 
@@ -1000,7 +923,7 @@ class AlayaWorld(ReactorPipeline):
         starts_new_rollout = (
             self._selected_input is None
             or self._reset_in_flight
-            or (self.state is not None and self.state._reset_requested)
+            or self.state._reset_requested
         )
         if starts_new_rollout:
             return 1
@@ -1020,8 +943,6 @@ class AlayaWorld(ReactorPipeline):
 
     def _clear_camera_controls(self) -> None:
         """Return all camera controls to neutral."""
-        if self.state is None:
-            return
         self.state.strafe = 0.0
         self.state.vertical = 0.0
         self.state.forward = 0.0

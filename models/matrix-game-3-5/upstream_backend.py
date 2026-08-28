@@ -185,7 +185,7 @@ class MatrixWorkerBackend:
 
     def close(self) -> None:
         """Stop the worker and remove its temporary request workspace."""
-        process = getattr(self, "_process", None)
+        process = self._process
         if process is None:
             return
         self._process = None

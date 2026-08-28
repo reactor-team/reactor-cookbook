@@ -28,7 +28,6 @@ class ModelAsset:
 class ExampleScene:
     """Describe one upstream image, prompt, field of view, and seed."""
 
-    name: str
     image: Path
     prompt: str
     fov_degrees: float
@@ -293,7 +292,6 @@ def load_examples(config: EchoWMConfig) -> tuple[ExampleScene, ...]:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         scenes.append(
             ExampleScene(
-                name=name,
                 image=image,
                 prompt=str(metadata["prompt"]),
                 fov_degrees=float(metadata.get("fov_deg", config.fov_degrees)),

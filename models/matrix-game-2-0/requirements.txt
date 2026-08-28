@@ -1,5 +1,5 @@
-# `build.cuda_version` supplies the CUDA 12.8 wheel index. The Runtime is
-# installed from `build.runtime_version` in reactor.yaml in the same uv pass.
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
 torch==2.8.0
 torchvision==0.23.0
 

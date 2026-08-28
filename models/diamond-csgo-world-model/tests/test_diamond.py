@@ -20,7 +20,7 @@ EXAMPLE_DIR = Path(__file__).parents[1]
 sys.path.insert(0, str(EXAMPLE_DIR))
 
 pipeline_module = importlib.import_module("diamond")
-support_module = importlib.import_module("diamond_support")
+assets_module = importlib.import_module("diamond_assets")
 types_module = importlib.import_module("diamond_types")
 Diamond = pipeline_module.Diamond
 DiamondOutput = types_module.DiamondOutput
@@ -106,7 +106,7 @@ def test_contract_uses_session_hooks_and_documents_side_effects() -> None:
     assert contract.lifecycle.session_started is not None
     assert contract.lifecycle.session_ended is not None
     assert contract.lifecycle.connected is not None
-    assert contract.lifecycle.disconnected is None
+    assert contract.lifecycle.disconnected is not None
     assert all("Emits" in command.description for command in contract.commands.values())
     assert all(
         field.info.description
@@ -137,7 +137,6 @@ def test_connect_sends_one_complete_state_snapshot() -> None:
     """Give a joining viewer the durable controls without replaying events."""
     model = _ready_model()
     model.state.controller = "human"
-    model.state.paused = True
     model.state._pressed_keys = frozenset({"w", "space"})
     model.state._pressed_mouse_buttons = frozenset({"left"})
     client = _Client()
@@ -147,7 +146,6 @@ def test_connect_sends_one_complete_state_snapshot() -> None:
     assert client.messages == [
         StateUpdate(
             controller="human",
-            paused=True,
             pressed_keys=["w", "space"],
             pressed_mouse_buttons=["left"],
         )
@@ -169,7 +167,6 @@ def test_durable_control_change_broadcasts_a_state_snapshot() -> None:
     assert messages == [
         StateUpdate(
             controller="human",
-            paused=False,
             pressed_keys=["w"],
             pressed_mouse_buttons=[],
         )
@@ -241,30 +238,32 @@ def test_queued_scene_is_emitted_before_the_first_action(
     assert world.actions == []
 
 
-def test_paused_scene_upload_emits_without_a_model_step(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Display a queued frame while paused without spending inference compute."""
+def test_disconnect_releases_controls_and_broadcasts_state() -> None:
+    """Return controls to neutral and inform remaining viewers on disconnect."""
     model = _ready_model()
-    world = model._world
-    model._paused = True
-    model.state.paused = True
-    uploaded = np.full((1, 4, 3, 2, 2), 8.0)
-    model._pending_scene = PreparedScene(
-        obs=np.full((1, 4, 3, 1, 1), 7.0),
-        obs_full_res=uploaded,
-        act=world.act_buffer,
-        next_act=None,
-    )
-    observed: list[np.ndarray] = []
-    _stub_video(monkeypatch, observed)
+    model.state._pressed_keys = frozenset({"w"})
+    model.state._pressed_mouse_buttons = frozenset({"left"})
+    model.state._delta_x = 4.0
+    model.state._delta_y = -2.0
+    messages: list[Any] = []
 
-    inference = model.inference()
+    async def record(message: Any) -> None:
+        messages.append(message)
 
-    assert isinstance(next(inference), DiamondOutput)
-    np.testing.assert_array_equal(observed, [uploaded[:, -1]])
-    assert next(inference) is None
-    assert world.actions == []
+    model.send = record
+    asyncio.run(model._disconnected())
+
+    assert model.state._pressed_keys == frozenset()
+    assert model.state._pressed_mouse_buttons == frozenset()
+    assert model.state._delta_x == 0.0
+    assert model.state._delta_y == 0.0
+    assert messages == [
+        StateUpdate(
+            controller="human",
+            pressed_keys=[],
+            pressed_mouse_buttons=[],
+        )
+    ]
 
 
 def test_scene_reset_flushes_pending_media(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -286,7 +285,7 @@ def test_manifest_defines_the_runtime_entrypoint_and_generated_image() -> None:
     build = manifest["build"]
 
     assert config.model_ref == "diamond:Diamond"
-    assert build["runtime_version"] == "3.2.3"
+    assert build["runtime_version"] == "3.2.5"
     assert build["python_requirements"] == "requirements.txt"
     assert build["cuda_version"] == "12.8.1"
     assert build["python_version"] == "3.12"
@@ -313,11 +312,11 @@ def test_inference_import_scope_stubs_training_dependencies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Avoid serving-only conflicts from DIAMOND's eager training imports."""
-    names = support_module._INFERENCE_IMPORT_STUBS
+    names = assets_module._INFERENCE_IMPORT_STUBS
     for name in names:
         monkeypatch.delitem(sys.modules, name, raising=False)
 
-    with support_module._inference_import_scope():
+    with assets_module._inference_import_scope():
         assert all(sys.modules[name].__name__ == name for name in names)
 
     assert all(name not in sys.modules for name in names)

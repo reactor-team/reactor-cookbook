@@ -25,18 +25,8 @@ class CameraMotionPlanner:
     """Integrate six-axis controls into camera-to-world poses."""
 
     def __init__(self, initial_c2w: np.ndarray, config: MotionConfig) -> None:
-        self._initial_c2w = _validate_pose(initial_c2w).copy()
-        self._current_c2w = self._initial_c2w.copy()
+        self._current_c2w = _validate_pose(initial_c2w).copy()
         self._config = config
-
-    @property
-    def current_c2w(self) -> np.ndarray:
-        """Return the current camera-to-world pose."""
-        return self._current_c2w.copy()
-
-    def reset(self) -> None:
-        """Restore the initial camera pose."""
-        self._current_c2w = self._initial_c2w.copy()
 
     def plan(
         self,

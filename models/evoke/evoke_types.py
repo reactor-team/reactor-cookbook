@@ -36,7 +36,7 @@ class StateUpdate(ModelMessage):
     )
     input_source: str = MessageField(
         description=(
-            "Source of the active conditioning media: `built_in`, `upload`, or `none` in "
+            "Source of the active conditioning media: `built_in`, `uploaded`, or `none` in "
             "prompt-only mode."
         )
     )
@@ -56,19 +56,6 @@ class StateUpdate(ModelMessage):
         description=(
             "Random seed selected for the active or queued fresh rollout. It changes only "
             "when a conditioning command or `reset` supplies a non-negative seed."
-        )
-    )
-    paused: bool = MessageField(
-        description=(
-            "Whether continuous generation stops before the next chunk. A chunk already on "
-            "the GPU may still finish."
-        )
-    )
-    step_queued: bool = MessageField(
-        description=(
-            "Whether `step` has queued one chunk while paused. It returns to false when that "
-            "chunk starts or another playback command cancels it. A paused `set_image` queues "
-            "the first preview chunk automatically."
         )
     )
     completed_chunks: int = MessageField(
@@ -132,7 +119,7 @@ class CommandApplied(ModelMessage):
 
     action: str = MessageField(
         description=(
-            "Command name that changed the world, such as `set_prompt`, `set_yaw`, `step`, "
+            "Command name that changed the world, such as `set_prompt`, `set_yaw`, "
             "or `reset`."
         )
     )
@@ -145,7 +132,7 @@ class CommandApplied(ModelMessage):
     detail: str = MessageField(
         description=(
             "Human-readable successful result, including the selected mode, filename, prompt, "
-            "seed, playback state, or complete six-axis camera state as appropriate."
+            "seed, or complete six-axis camera state as appropriate."
         )
     )
 
@@ -165,11 +152,12 @@ class RolloutRestarted(ModelMessage):
 
 
 class EvokeState(InputState):
-    """Expose shared text, camera, and playback controls for one EVOKE world."""
+    """Expose shared text and camera controls for one EVOKE world."""
 
     prompt: str = InputField(
         default="",
         max_length=4096,
+        moderate=True,
         description=(
             "Active scene prompt, up to 4096 characters. Empty user text selects the "
             "configured scene-neutral stability prompt. Changes are sampled at the next "
@@ -230,16 +218,4 @@ class EvokeState(InputState):
             "and held until changed or released. Valid only in camera-controlled modes."
         ),
     )
-    _paused: bool = False
-    _step_requested: bool = False
     _restart_requested: bool = True
-
-    @property
-    def paused(self) -> bool:
-        """Return whether continuous chunk generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether continuous chunk generation is paused."""
-        self._paused = value

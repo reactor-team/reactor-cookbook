@@ -8,10 +8,7 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 from reactor_runtime import UploadedFile
 
-try:
-    from .lingbot_world_v2_assets import BuiltInScene
-except ImportError:
-    from lingbot_world_v2_assets import BuiltInScene
+from lingbot_world_v2_assets import BuiltInScene
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_IMAGE_PIXELS = 100_000_000

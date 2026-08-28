@@ -16,7 +16,7 @@ from reactor_runtime import get_weights_path
 from reactor_runtime.log import get_logger
 
 if TYPE_CHECKING:
-    from examples.alayaworld.alayaworld_types import AlayaWorldConfig, Asset
+    from alayaworld_types import AlayaWorldConfig, Asset
 else:
     module_prefix = f"{__package__}." if __package__ else ""
     types_module = importlib.import_module(f"{module_prefix}alayaworld_types")

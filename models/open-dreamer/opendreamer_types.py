@@ -60,19 +60,13 @@ class OpenDreamerOutput(Output):
 
 
 class ActionChanged(ModelMessage):
-    """Emitted after a player-control or `set_paused` command is processed."""
+    """Emitted after a player-control command is processed."""
 
     control: str = MessageField(
         description=(
             "Wire name of the command that produced this response. Use it to associate the "
-            "snapshot with `set_key_state`, `set_mouse_button_state`, `mouse_move`, "
-            "`mouse_wheel`, or `set_paused`."
-        )
-    )
-    paused: bool = MessageField(
-        description=(
-            "Pause state after the command is processed. While true, control commands are "
-            "acknowledged but do not change the controls applied to generated frames."
+            "snapshot with `set_key_state`, `set_mouse_button_state`, `mouse_move`, or "
+            "`mouse_wheel`."
         )
     )
     pressed_keys: list[str] = MessageField(
@@ -92,19 +86,19 @@ class ActionChanged(ModelMessage):
     delta_x: float = MessageField(
         description=(
             "Horizontal movement accepted from this `mouse_move` command for the next "
-            "generated frame. Zero for other commands and for requests ignored while paused."
+            "generated frame. Zero for other commands."
         )
     )
     delta_y: float = MessageField(
         description=(
             "Vertical movement accepted from this `mouse_move` command for the next generated "
-            "frame. Zero for other commands and for requests ignored while paused."
+            "frame. Zero for other commands."
         )
     )
     wheel_delta: int = MessageField(
         description=(
             "Hotbar movement accepted from this `mouse_wheel` command for the next generated "
-            "frame. Zero for other commands and for requests ignored while paused."
+            "frame. Zero for other commands."
         )
     )
 
@@ -115,7 +109,7 @@ class ConditioningChanged(ModelMessage):
     source: str = MessageField(
         description=(
             "Source selected for the next rollout: `demo` for a configured dataset sample or "
-            "`upload` for an image accepted by `set_conditioning_image`."
+            "`uploaded` for an image accepted by `set_conditioning_image`."
         )
     )
     selection: str = MessageField(
@@ -147,22 +141,16 @@ class RolloutReset(ModelMessage):
 class StateUpdate(ModelMessage):
     """Emitted when a viewer connects and after observable OpenDreamer state changes."""
 
-    paused: bool = MessageField(
-        description=(
-            "Current pause state. While true, OpenDreamer preserves the current world and does "
-            "not generate new `main_video` frames after conditioning completes."
-        )
-    )
     pressed_keys: list[str] = MessageField(
         description=(
-            "Keyboard keys currently held for subsequent generated frames. `set_paused`, "
-            "`reset`, and starting-scene commands clear this list."
+            "Keyboard keys currently held for subsequent generated frames. "
+            "`reset` and starting-scene commands clear this list."
         )
     )
     pressed_mouse_buttons: list[str] = MessageField(
         description=(
-            "Mouse buttons currently held for subsequent generated frames. `set_paused`, "
-            "`reset`, and starting-scene commands clear this list."
+            "Mouse buttons currently held for subsequent generated frames. "
+            "`reset` and starting-scene commands clear this list."
         )
     )
     seed: int = MessageField(
@@ -187,7 +175,6 @@ class StateUpdate(ModelMessage):
     ) -> StateUpdate:
         """Build a complete client-facing snapshot from the shared world state."""
         return cls(
-            paused=state.paused,
             pressed_keys=sorted(state._pressed_keys),
             pressed_mouse_buttons=sorted(state._pressed_mouse_buttons),
             seed=state._seed,
@@ -198,7 +185,6 @@ class StateUpdate(ModelMessage):
 class OpenDreamerState(InputState):
     """Expose the controls shared by one playable OpenDreamer world."""
 
-    _paused: bool = False
     _pressed_keys: frozenset[str] = frozenset()
     _pressed_mouse_buttons: frozenset[str] = frozenset()
     _delta_x: float = 0.0
@@ -206,13 +192,3 @@ class OpenDreamerState(InputState):
     _wheel_delta: int = 0
     _reset_requested: bool = True
     _seed: int = 0
-
-    @property
-    def paused(self) -> bool:
-        """Return whether continuous frame generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether continuous frame generation is paused."""
-        self._paused = value

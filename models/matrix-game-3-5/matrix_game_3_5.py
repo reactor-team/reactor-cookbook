@@ -9,16 +9,14 @@ reusing the rollout's KV cache, dynamic visual context, and Patch Memory.
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 import numpy as np
 from reactor_runtime import (
     ClientInfo,
     CommandError,
-    Idle,
     InputField,
     ReactorPipeline,
     UploadedFile,
@@ -30,52 +28,20 @@ from reactor_runtime import (
 )
 from reactor_runtime.log import get_logger
 
-if TYPE_CHECKING:
-    from examples.matrix_game_3_5.camera_motion import (
-        CameraMotionPlanner,
-        MotionConfig,
-    )
-    from examples.matrix_game_3_5.matrix_config import (
-        MatrixConfig,
-        prepare_runtime,
-        read_config,
-    )
-    from examples.matrix_game_3_5.matrix_images import (
-        OUTPUT_FRAMES_PER_CHUNK,
-        normalize_output_frames,
-        validate_uploaded_image,
-    )
-    from examples.matrix_game_3_5.matrix_schema import (
-        MatrixGame35Output,
-        MatrixGame35State,
-        RolloutLimitReached,
-        StateUpdate,
-    )
-    from examples.matrix_game_3_5.upstream_backend import (
-        MatrixWorkerBackend,
-        WorkerSettings,
-    )
-else:
-    module_prefix = f"{__package__}." if __package__ else ""
-    camera_motion = importlib.import_module(f"{module_prefix}camera_motion")
-    matrix_config = importlib.import_module(f"{module_prefix}matrix_config")
-    matrix_images = importlib.import_module(f"{module_prefix}matrix_images")
-    matrix_schema = importlib.import_module(f"{module_prefix}matrix_schema")
-    upstream_backend = importlib.import_module(f"{module_prefix}upstream_backend")
-    CameraMotionPlanner = camera_motion.CameraMotionPlanner
-    MotionConfig = camera_motion.MotionConfig
-    MatrixConfig = matrix_config.MatrixConfig
-    prepare_runtime = matrix_config.prepare_runtime
-    read_config = matrix_config.read_config
-    OUTPUT_FRAMES_PER_CHUNK = matrix_images.OUTPUT_FRAMES_PER_CHUNK
-    normalize_output_frames = matrix_images.normalize_output_frames
-    validate_uploaded_image = matrix_images.validate_uploaded_image
-    MatrixGame35Output = matrix_schema.MatrixGame35Output
-    MatrixGame35State = matrix_schema.MatrixGame35State
-    RolloutLimitReached = matrix_schema.RolloutLimitReached
-    StateUpdate = matrix_schema.StateUpdate
-    MatrixWorkerBackend = upstream_backend.MatrixWorkerBackend
-    WorkerSettings = upstream_backend.WorkerSettings
+from matrix_game_3_5_camera import CameraMotionPlanner, MotionConfig
+from matrix_game_3_5_config import MatrixConfig, prepare_runtime, read_config
+from matrix_game_3_5_images import (
+    OUTPUT_FRAMES_PER_CHUNK,
+    normalize_output_frames,
+    validate_uploaded_image,
+)
+from matrix_game_3_5_types import (
+    MatrixGame35Output,
+    MatrixGame35State,
+    RolloutLimitReached,
+    StateUpdate,
+)
+from upstream_backend import MatrixWorkerBackend, WorkerSettings
 
 logger = get_logger(__name__)
 
@@ -110,7 +76,6 @@ class MatrixGame35(ReactorPipeline):
     """Generate an image-, prompt-, and camera-controllable Matrix world."""
 
     state: MatrixGame35State
-    output: MatrixGame35Output
     buffer_size = OUTPUT_FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
@@ -177,8 +142,6 @@ class MatrixGame35(ReactorPipeline):
         self.state.prompt = self._default_prompt
         self._seed = config.seed
         self._clear_controls()
-        self.state.paused = False
-        self.state._step_requested = False
         self.state._restart_requested = True
         self.state._limit_reached = False
         self._chunk_index = 0
@@ -198,8 +161,6 @@ class MatrixGame35(ReactorPipeline):
                 backend.end_session()
         finally:
             self._clear_controls()
-            self.state.paused = False
-            self.state._step_requested = False
             self.state._restart_requested = True
             self.state._limit_reached = False
             self._selected_input = None
@@ -226,6 +187,7 @@ class MatrixGame35(ReactorPipeline):
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Scene description, up to 4096 characters and non-empty after trimming. "
                 "Applied at the next generated chunk boundary; if the rollout limit has been "
@@ -248,24 +210,26 @@ class MatrixGame35(ReactorPipeline):
         name="set_image",
         description=(
             "Replace the anchor image and start a fresh world. Valid at any time; the new "
-            "image clears progress and the rollout limit, releases all camera axes, keeps "
-            "continuous generation paused, and queues one 12-frame `main_video` chunk as "
-            "upload confirmation. Returns `state_update` on success, or `command_error` when "
+            "image clears progress and the rollout limit, releases all camera axes, and "
+            "starts continuous 12-frame `main_video` generation from the fresh world. "
+            "Returns `state_update` on success, or `command_error` when "
             "the upload is not a valid JPEG, PNG, WebP, or BMP within the size limits."
         ),
     )
     def set_image(
         self,
         image: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
             description=(
                 "Anchor image provided through the Reactor upload protocol. JPEG, PNG, WebP, "
                 "or BMP; at most 25 MiB and 100 million pixels. Replaces the active anchor "
                 "when the fresh world begins."
-            )
+            ),
         ),
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Optional scene description, up to 4096 characters. A non-empty value is used "
                 "for the fresh world's first chunk; an empty value preserves the active prompt."
@@ -279,9 +243,7 @@ class MatrixGame35(ReactorPipeline):
             raise CommandError("prompt_required", "Matrix-Game-3.5 requires a prompt.")
         self._selected_input = image
         self.state.prompt = normalized
-        self.state.paused = False
         self._request_restart()
-        self.state._step_requested = False
         return self._state_update()
 
     @event(
@@ -446,37 +408,6 @@ class MatrixGame35(ReactorPipeline):
         self.state.roll = roll
         return self._state_update()
 
-    # Keep pause available for future schema re-enablement without exposing it to clients.
-    def set_paused(
-        self,
-        paused: bool = InputField(
-            default=False,
-            description=(
-                "Set to true to pause before the next chunk, or false to resume continuous "
-                "generation. Takes effect after any in-flight chunk and releases all camera "
-                "axes plus a queued `step`."
-            ),
-        ),
-    ) -> StateUpdate:
-        """Set pause state and return the complete shared world state."""
-        if not paused:
-            self._require_available_rollout()
-        self.state.paused = paused
-        self.state._step_requested = False
-        self._clear_controls()
-        return self._state_update()
-
-    # Keep single-step generation available for future schema re-enablement.
-    def step(self) -> StateUpdate:
-        """Queue one paused chunk and return the complete shared world state."""
-        self._require_available_rollout()
-        if not self.state.paused:
-            raise CommandError(
-                "pause_required", "Pause Matrix-Game-3.5 before stepping."
-            )
-        self.state._step_requested = True
-        return self._state_update()
-
     @event(
         name="reset",
         description=(
@@ -503,11 +434,10 @@ class MatrixGame35(ReactorPipeline):
             raise CommandError("image_required", "Select an image before resetting.")
         if seed >= 0:
             self._seed = seed
-        self.state.paused = False
         self._request_restart()
         return self._state_update()
 
-    async def inference(self) -> AsyncGenerator[object, None]:
+    async def inference(self) -> AsyncGenerator[MatrixGame35Output | None, None]:
         """Generate and emit one complete chunk off-loop per turn."""
         backend = self._backend
         planner = self._planner
@@ -519,7 +449,7 @@ class MatrixGame35(ReactorPipeline):
             if self.state._restart_requested:
                 selected_input = self._selected_input
                 if selected_input is None:
-                    yield Idle
+                    yield None
                     continue
                 prompt = self.state.prompt.strip()
                 if not prompt:
@@ -530,20 +460,13 @@ class MatrixGame35(ReactorPipeline):
                     selected_input,
                     prompt,
                 )
-                if self.state._restart_requested:
-                    continue
                 planner.reset()
                 self._chunk_index = 0
 
             if self.state._limit_reached:
-                yield Idle
+                yield None
                 continue
 
-            if self.state.paused and not self.state._step_requested:
-                yield Idle
-                continue
-
-            self.state._step_requested = False
             trajectory = planner.plan_block(
                 strafe=self.state.strafe,
                 vertical=self.state.vertical,
@@ -563,12 +486,9 @@ class MatrixGame35(ReactorPipeline):
             finally:
                 self._chunk_in_flight = False
             frames = normalize_output_frames(frames)
-            if self.state._restart_requested:
-                continue
             self._chunk_index += 1
             if self._chunk_index >= config.max_chunks:
                 self.state._limit_reached = True
-                self.state.paused = True
                 self._clear_controls()
                 await self.send(
                     RolloutLimitReached(
@@ -592,7 +512,6 @@ class MatrixGame35(ReactorPipeline):
     def _request_restart(self) -> None:
         """Queue a fresh causal rollout and release active camera motion."""
         self._clear_controls()
-        self.state._step_requested = False
         self.state._restart_requested = True
         self.state._limit_reached = False
         self._chunk_index = 0
@@ -625,7 +544,7 @@ class MatrixGame35(ReactorPipeline):
         if selected is None:
             image_source = "none"
         elif isinstance(selected, UploadedFile):
-            image_source = "upload"
+            image_source = "uploaded"
         else:
             image_source = "built_in"
         image_name = selected.name if selected is not None else ""
@@ -634,8 +553,6 @@ class MatrixGame35(ReactorPipeline):
             image_source=image_source,
             image_name=image_name,
             seed=self._seed,
-            paused=self.state.paused,
-            step_queued=self.state._step_requested,
             limit_reached=self.state._limit_reached,
             completed_chunks=self._chunk_index,
             next_chunk=(

@@ -37,24 +37,19 @@ scenes:
     image: asset/sana_wm/demo_0.png
     prompt: asset/sana_wm/demo_0.txt
     intrinsics: asset/sana_wm/demo_0_intrinsics.npy
-    trajectory: asset/sana_wm/demo_0_pose.npy
   - name: demo_1
     image: asset/sana_wm/demo_1.png
     prompt: asset/sana_wm/demo_1.txt
     intrinsics: asset/sana_wm/demo_1_intrinsics.npy
-    trajectory: asset/sana_wm/demo_1_pose.npy
   - name: demo_2
     image: asset/sana_wm/demo_2.png
     prompt: asset/sana_wm/demo_2.txt
     intrinsics: asset/sana_wm/demo_2_intrinsics.npy
-    trajectory: asset/sana_wm/demo_2_pose.npy
   - name: demo_3
     image: asset/sana_wm/demo_3.png
     prompt: asset/sana_wm/demo_3.txt
     intrinsics: asset/sana_wm/demo_3_intrinsics.npy
-    trajectory: asset/sana_wm/demo_3_pose.npy
   - name: demo_4
     image: asset/sana_wm/demo_4.png
     prompt: asset/sana_wm/demo_4.txt
     intrinsics: asset/sana_wm/demo_4_intrinsics.npy
-    trajectory: asset/sana_wm/demo_4_pose.npy

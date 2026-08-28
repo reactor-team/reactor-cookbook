@@ -107,16 +107,6 @@ export interface AlayaWorldSetRollParams {
   roll?: number;
 }
 
-/** Pause before the next chunk or resume continuous generation, releasing all camera motion in either case. Resuming requires a selected image. Emits `pause_changed` and broadcasts `state_update` on success, or `command_error` when resuming without an image. */
-export interface AlayaWorldSetPausedParams {
-  /**
-   * True pauses before the next chunk; false resumes continuous generation. Both values reset all camera velocities to zero.
-   * @default false
-   */
-
-  paused?: boolean;
-}
-
 /** Queue a fresh rollout from the selected image, current prompt, and neutral camera motion. Requires a selected image. Emits `rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` when no image is selected. */
 export interface AlayaWorldResetParams {
   /**
@@ -161,12 +151,6 @@ export interface AlayaWorldStateUpdateMessage {
   /** Random seed used when the current rollout is initialized or reset. */
 
   seed: number;
-  /** Whether automatic chunk generation is paused before the next chunk. */
-
-  paused: boolean;
-  /** Whether `step` has queued one 32-frame chunk while paused. */
-
-  step_queued: boolean;
   /** Whether the selected image, prompt, and seed will start a fresh rollout. */
 
   reset_queued: boolean;
@@ -256,25 +240,6 @@ export interface AlayaWorldCameraMotionChangedMessage {
   applies_to_chunk: number;
 }
 
-/** Emitted when `set_paused` changes playback and releases camera motion. */
-export interface AlayaWorldPauseChangedMessage {
-  type: "pause_changed";
-  /** Whether automatic generation will stop before the next chunk. */
-
-  paused: boolean;
-  /** Whether all six persistent camera velocities were reset to zero; always true. */
-
-  camera_motion_released: boolean;
-}
-
-/** Emitted when `step` queues one chunk while generation is paused. */
-export interface AlayaWorldStepQueuedMessage {
-  type: "step_queued";
-  /** One-based chunk in the active rollout that the queued step will generate. */
-
-  applies_to_chunk: number;
-}
-
 /** Emitted when a manual or automatic reset queues a fresh rollout. */
 export interface AlayaWorldRolloutResetQueuedMessage {
   type: "rollout_reset_queued";
@@ -297,8 +262,6 @@ export type AlayaWorldMessage =
   | AlayaWorldImageSelectedMessage
   | AlayaWorldPromptQueuedMessage
   | AlayaWorldCameraMotionChangedMessage
-  | AlayaWorldPauseChangedMessage
-  | AlayaWorldStepQueuedMessage
   | AlayaWorldRolloutResetQueuedMessage;
 
 /**
@@ -422,21 +385,6 @@ export class AlayaWorldModel extends Reactor {
   }
 
   /**
-   * Pause before the next chunk or resume continuous generation, releasing all camera motion in either case. Resuming requires a selected image. Emits `pause_changed` and broadcasts `state_update` on success, or `command_error` when resuming without an image.
-   * @param params - Pause before the next chunk or resume continuous generation, releasing all camera motion in either case. Resuming requires a selected image. Emits `pause_changed` and broadcasts `state_update` on success, or `command_error` when resuming without an image.
-   */
-
-  async setPaused(params: AlayaWorldSetPausedParams): Promise<void> {
-    await this.sendCommand("set_paused", params);
-  }
-
-  /** Queue exactly one 32-frame chunk while continuous generation is paused. Requires a selected image and `paused=true`. Emits `step_queued` and broadcasts `state_update` on success, or `command_error` when either precondition is missing. */
-
-  async step(): Promise<void> {
-    await this.sendCommand("step", {});
-  }
-
-  /**
    * Queue a fresh rollout from the selected image, current prompt, and neutral camera motion. Requires a selected image. Emits `rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` when no image is selected.
    * @param params - Queue a fresh rollout from the selected image, current prompt, and neutral camera motion. Requires a selected image. Emits `rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` when no image is selected.
    */
@@ -515,28 +463,6 @@ export class AlayaWorldModel extends Reactor {
   onCameraMotionChanged(handler: (message: AlayaWorldCameraMotionChangedMessage) => void): () => void {
     return this.onMessage((msg) => {
       if (msg.type === "camera_motion_changed") handler(msg as AlayaWorldCameraMotionChangedMessage);
-    });
-  }
-
-  /**
-   * Subscribe to "pause_changed" messages only.
-   * @returns Unsubscribe function
-   */
-
-  onPauseChanged(handler: (message: AlayaWorldPauseChangedMessage) => void): () => void {
-    return this.onMessage((msg) => {
-      if (msg.type === "pause_changed") handler(msg as AlayaWorldPauseChangedMessage);
-    });
-  }
-
-  /**
-   * Subscribe to "step_queued" messages only.
-   * @returns Unsubscribe function
-   */
-
-  onStepQueued(handler: (message: AlayaWorldStepQueuedMessage) => void): () => void {
-    return this.onMessage((msg) => {
-      if (msg.type === "step_queued") handler(msg as AlayaWorldStepQueuedMessage);
     });
   }
 

@@ -50,7 +50,7 @@ class StateUpdate(ModelMessage):
 
     image_source: str = MessageField(
         description=(
-            "Source of the selected starting image: `built_in`, `upload`, or `none` before "
+            "Source of the selected starting image: `built_in`, `uploaded`, or `none` before "
             "an image has been selected."
         )
     )
@@ -64,18 +64,6 @@ class StateUpdate(ModelMessage):
         description=(
             "Random seed used by the current or queued rollout. A non-negative `seed` passed "
             "to `reset` replaces it."
-        )
-    )
-    paused: bool = MessageField(
-        description=(
-            "Whether continuous generation stops before the next native chunk. An in-flight "
-            "chunk can still finish."
-        )
-    )
-    step_queued: bool = MessageField(
-        description=(
-            "Whether exactly one chunk is queued while paused. It returns to false when that "
-            "chunk starts or another playback command cancels it."
         )
     )
     reset_queued: bool = MessageField(
@@ -199,7 +187,7 @@ class CameraMotionChanged(ModelMessage):
 
 
 class RolloutLimitReached(ModelMessage):
-    """Emitted when generation pauses at the official latent horizon."""
+    """Emitted when generation idles at the official latent horizon."""
 
     completed_chunks: int = MessageField(
         description="Number of completed chunks when the rollout reached its horizon."
@@ -213,9 +201,8 @@ class RolloutLimitReached(ModelMessage):
 
 
 class MatrixGame2State(InputState):
-    """Expose shared Matrix keyboard, mouse-camera, and playback controls."""
+    """Expose shared Matrix keyboard and mouse-camera controls."""
 
-    _paused: bool = False
     pitch: float = InputField(
         default=0.0,
         ge=-1.0,
@@ -235,16 +222,5 @@ class MatrixGame2State(InputState):
         ),
     )
     _pressed_keys: frozenset[str] = frozenset()
-    _step_requested: bool = False
     _restart_requested: bool = False
     _limit_reached: bool = False
-
-    @property
-    def paused(self) -> bool:
-        """Return whether continuous chunk generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether continuous chunk generation is paused."""
-        self._paused = value

@@ -53,7 +53,6 @@ class EvokeWorkerBackend:
     """Generate native EVOKE chunks in a persistent Python 3.10 subprocess."""
 
     def __init__(self, settings: WorkerSettings) -> None:
-        self._settings = settings
         self._temporary = tempfile.TemporaryDirectory(prefix="reactor-evoke-")
         self._root = Path(self._temporary.name)
         self._lock = threading.Lock()
@@ -159,7 +158,7 @@ class EvokeWorkerBackend:
 
     def close(self) -> None:
         """Stop the worker and remove its request workspace."""
-        process = getattr(self, "_process", None)
+        process = self._process
         if process is None:
             return
         self._process = None

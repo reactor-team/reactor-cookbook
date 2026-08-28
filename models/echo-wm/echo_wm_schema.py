@@ -34,30 +34,19 @@ class EchoWMState(InputState):
     prompt: str = InputField(
         default="",
         max_length=4096,
+        moderate=True,
         description=(
             "Scene, character, perspective, sound, music, and speech description. "
             "Use `set_prompt` to replace it; a change starts a fresh world from the "
             "selected image because one prompt conditions an entire rollout."
         ),
     )
-    _paused: bool = False
     _forward: float = 0.0
     _strafe: float = 0.0
     _pitch: float = 0.0
     _yaw: float = 0.0
     _fov_degrees: float = 70.0
-    _queued_steps: int = 0
     _reset_requested: bool = False
-
-    @property
-    def paused(self) -> bool:
-        """Return whether continuous chunk generation is paused."""
-        return self._paused
-
-    @paused.setter
-    def paused(self, value: bool) -> None:
-        """Set whether continuous chunk generation is paused."""
-        self._paused = value
 
 
 class StateUpdate(ModelMessage):
@@ -79,15 +68,6 @@ class StateUpdate(ModelMessage):
         description="Prompt used by the latest completed chunk, or null before generation."
     )
     seed: int = MessageField(description="Random seed for the current or queued world.")
-    paused: bool = MessageField(
-        description="Whether generation will stop before the next unqueued chunk."
-    )
-    step_queued: bool = MessageField(
-        description="Whether at least one chunk is queued while paused."
-    )
-    queued_steps: int = MessageField(
-        description="Chunks waiting to generate while paused."
-    )
     reset_queued: bool = MessageField(
         description="Whether a fresh world will be initialized before the next chunk."
     )
@@ -123,12 +103,6 @@ class ImageSelected(ModelMessage):
     filename: str = MessageField(description="Selected first-frame filename.")
     prompt: str = MessageField(description="Non-empty prompt for the fresh world.")
     seed: int = MessageField(description="Random seed for the fresh world.")
-    first_chunk_queued: bool = MessageField(
-        description="Whether paused mode caused preview generation to be queued."
-    )
-    preview_chunks_queued: int = MessageField(
-        description="Preview chunks queued by this image selection."
-    )
 
 
 class PromptQueued(ModelMessage):
@@ -153,35 +127,12 @@ class CameraMotionChanged(ModelMessage):
     )
 
 
-class PauseChanged(ModelMessage):
-    """Emitted when continuous generation pauses or resumes."""
-
-    paused: bool = MessageField(description="Pause state now in effect.")
-    next_chunk: int | None = MessageField(
-        description="Next available chunk, or null before an image is selected."
-    )
-
-
-class StepQueued(ModelMessage):
-    """Emitted when `step` queues exactly one paused audio-video chunk."""
-
-    applies_to_chunk: int = MessageField(
-        description="One-based chunk queued by `step`."
-    )
-    expected_video_frames: int = MessageField(
-        description="Expected RGB frames: 25 for chunk 1 and 24 for later chunks."
-    )
-
-
 class RolloutResetQueued(ModelMessage):
     """Emitted when `reset` queues a fresh world from the selected image."""
 
     seed: int = MessageField(description="Random seed for the fresh world.")
     replaced_chunks: int = MessageField(
         description="Completed chunks discarded by the reset."
-    )
-    first_chunk_queued: bool = MessageField(
-        description="Whether one paused preview chunk was queued."
     )
 
 

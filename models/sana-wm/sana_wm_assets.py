@@ -95,8 +95,6 @@ def read_config(config_path: Path | None) -> SanaWMConfig:
                 prompt=source_path / _required_str(scene, "prompt", f"scenes[{index}]"),
                 intrinsics=source_path
                 / _required_str(scene, "intrinsics", f"scenes[{index}]"),
-                trajectory=source_path
-                / _required_str(scene, "trajectory", f"scenes[{index}]"),
             )
         )
 
@@ -172,7 +170,7 @@ def prepare_source(config: SanaWMConfig) -> None:
         )
     required = [config.upstream_config]
     for scene in config.scenes:
-        required.extend([scene.image, scene.prompt, scene.intrinsics, scene.trajectory])
+        required.extend([scene.image, scene.prompt, scene.intrinsics])
     missing = [path for path in required if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"SANA source is missing required files: {missing}")

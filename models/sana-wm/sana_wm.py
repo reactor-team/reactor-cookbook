@@ -17,7 +17,6 @@ from PIL import Image, ImageOps
 from reactor_runtime import (
     ClientInfo,
     CommandError,
-    Idle,
     InputField,
     ReactorPipeline,
     UploadedFile,
@@ -42,14 +41,12 @@ from sana_wm_types import (
     ControlsReleased,
     ImageSelected,
     IntrinsicsSource,
-    PauseChanged,
     PromptChanged,
     RolloutResetQueued,
     SanaWMConfig,
     SanaWMOutput,
     SanaWMState,
     StateUpdate,
-    StepQueued,
     TrajectoryExhausted,
     TrajectorySelected,
 )
@@ -147,7 +144,6 @@ class SanaWM(ReactorPipeline):
     """Generate an image-, prompt-, and camera-controllable SANA-WM world."""
 
     state: SanaWMState
-    output: SanaWMOutput
     buffer_size = PIXEL_FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
@@ -164,7 +160,6 @@ class SanaWM(ReactorPipeline):
         self._active_prompt: str | None = None
         self._chunk_index = 0
         self._generating = False
-        self._reset_in_flight = False
         self._chunk_in_flight = False
 
     def load(self, config_path: Path | None) -> None:
@@ -200,12 +195,10 @@ class SanaWM(ReactorPipeline):
         self._active_prompt = None
         self._chunk_index = 0
         self._generating = False
-        self._reset_in_flight = False
         self._chunk_in_flight = False
         self.state.prompt = ""
-        self.state.paused = False
+        self.state._trajectory_exhausted = False
         self.state._held_controls = set()
-        self.state._step_requested = False
         self.state._reset_requested = False
 
     @connected
@@ -240,14 +233,16 @@ class SanaWM(ReactorPipeline):
     async def set_image(
         self,
         image: UploadedFile = InputField(  # noqa: B008
+            moderate=True,
             description=(
                 "First-frame JPEG, PNG, WebP, or BMP uploaded through Reactor; at most 25 MiB "
                 "and 100 million pixels."
-            )
+            ),
         ),
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Optional non-empty scene description. An empty value preserves the active "
                 "prompt or uses a generic continuation prompt."
@@ -255,6 +250,7 @@ class SanaWM(ReactorPipeline):
         ),
         intrinsics: UploadedFile | None = InputField(  # noqa: B008
             default=None,
+            moderate=True,
             description=(
                 "Optional NumPy .npy calibration shaped (4,), (F,4), (3,3), or (F,3,3) in "
                 "input-image pixels. Pi3X estimates calibration when omitted."
@@ -275,14 +271,12 @@ class SanaWM(ReactorPipeline):
         self._trajectory = None
         self._trajectory_name = None
         self.state.prompt = effective_prompt
-        self.state.paused = False
-        self._queue_reset(auto_step=True)
+        self._queue_reset()
         message = ImageSelected(
             source="uploaded",
             filename=image.name,
             prompt=effective_prompt,
             intrinsics_source=self._intrinsics_source,
-            auto_step_queued=True,
         )
         await self._send_state_update()
         return message
@@ -290,7 +284,7 @@ class SanaWM(ReactorPipeline):
     @event(
         name="random_image",
         description=(
-            "Select a different built-in SANA-WM first frame and prompt, then queue exactly "
+            "Select a different built-in SANA-WM first frame and prompt, then begin "
             "continuous 24-frame chunk generation. Emits `image_selected` and "
             "`state_update` on success, or `command_error` if the selected example has no prompt."
         ),
@@ -317,14 +311,12 @@ class SanaWM(ReactorPipeline):
         self._trajectory = None
         self._trajectory_name = None
         self.state.prompt = prompt
-        self.state.paused = False
-        self._queue_reset(auto_step=True)
+        self._queue_reset()
         message = ImageSelected(
             source="built_in",
             filename=scene.image.name,
             prompt=prompt,
             intrinsics_source="built_in",
-            auto_step_queued=True,
         )
         await self._send_state_update()
         return message
@@ -333,7 +325,7 @@ class SanaWM(ReactorPipeline):
         name="set_prompt",
         description=(
             "Set non-empty scene text and restart generation from the selected first frame so "
-            "the new prompt applies from chunk 1. The paused state is preserved. Emits "
+            "the new prompt applies from chunk 1. Emits "
             "`prompt_changed` and `state_update` on success, or `command_error` before image "
             "selection or when the trimmed prompt is empty."
         ),
@@ -343,6 +335,7 @@ class SanaWM(ReactorPipeline):
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description="Non-empty scene description, trimmed before cache initialization.",
         ),
     ) -> PromptChanged:
@@ -354,7 +347,7 @@ class SanaWM(ReactorPipeline):
                 "prompt_required", "SANA-WM requires a non-empty prompt."
             )
         self.state.prompt = normalized
-        self._queue_reset(auto_step=False)
+        self._queue_reset()
         message = PromptChanged(prompt=normalized, applies_to_chunk=1)
         await self._send_state_update()
         return message
@@ -434,10 +427,11 @@ class SanaWM(ReactorPipeline):
     async def set_camera_trajectory(
         self,
         trajectory: UploadedFile = InputField(  # noqa: B008
+            moderate=True,
             description=(
                 "NumPy .npy array shaped (F,4,4), with at least 25 camera-to-world poses. "
                 "Frame zero anchors the relative trajectory."
-            )
+            ),
         ),
     ) -> TrajectorySelected:
         """Select an upstream-native finite trajectory for a fresh rollout."""
@@ -475,7 +469,7 @@ class SanaWM(ReactorPipeline):
         self._trajectory = values
         self._trajectory_name = trajectory.name
         self._clear_controls()
-        self._queue_reset(auto_step=False)
+        self._queue_reset()
         message = TrajectorySelected(
             filename=trajectory.name,
             frames=int(values.shape[0]),
@@ -499,47 +493,12 @@ class SanaWM(ReactorPipeline):
         self._trajectory = None
         self._trajectory_name = None
         self._clear_controls()
-        self._queue_reset(auto_step=False)
+        self._queue_reset()
         message = RolloutResetQueued(
             trigger="manual",
             seed=self._seed,
             replaced_chunks=replaced,
         )
-        await self._send_state_update()
-        return message
-
-    # Keep pause available for future schema re-enablement without exposing it to clients.
-    async def set_paused(
-        self,
-        paused: bool = InputField(
-            default=False,
-            description="True pauses before the next chunk; false generates continuously.",
-        ),
-    ) -> PauseChanged:
-        """Change automatic generation state at the next chunk boundary."""
-        released = bool(self.state._held_controls) if paused else False
-        self.state.paused = paused
-        self.state._step_requested = False
-        if paused:
-            self._clear_controls()
-        message = PauseChanged(paused=paused, held_controls_released=released)
-        await self._send_state_update()
-        return message
-
-    # Keep single-step generation available for future schema re-enablement.
-    async def step(self) -> StepQueued:
-        """Queue one and only one paused autoregressive turn."""
-        self._require_image()
-        if not self.state.paused:
-            raise CommandError(
-                "not_paused", "Pause SANA-WM before requesting one step."
-            )
-        if self.state._step_requested:
-            raise CommandError(
-                "step_already_queued", "One paused chunk is already queued."
-            )
-        self.state._step_requested = True
-        message = StepQueued(chunk=self._next_chunk())
         await self._send_state_update()
         return message
 
@@ -566,15 +525,14 @@ class SanaWM(ReactorPipeline):
         if seed >= 0:
             self._seed = seed
         replaced = self._chunk_index
-        self.state.paused = False
-        self._queue_reset(auto_step=False)
+        self._queue_reset()
         message = RolloutResetQueued(
             trigger="manual", seed=self._seed, replaced_chunks=replaced
         )
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[object, None]:
+    async def inference(self) -> AsyncGenerator[SanaWMOutput | None, None]:
         """Advance and emit one native upstream chunk off-loop."""
         backend = self._backend
         config = self._require_config()
@@ -582,7 +540,7 @@ class SanaWM(ReactorPipeline):
             raise RuntimeError("SANA-WM backend was not loaded")
         while True:
             if self._selected_image is None:
-                yield Idle
+                yield None
                 continue
 
             if (
@@ -590,9 +548,7 @@ class SanaWM(ReactorPipeline):
                 and not self.state._reset_requested
             ):
                 replaced = self._chunk_index
-                self._queue_reset(
-                    auto_step=self.state._step_requested or not self.state.paused
-                )
+                self._queue_reset()
                 await self.send(
                     RolloutResetQueued(
                         trigger="automatic_chunk_limit",
@@ -604,7 +560,6 @@ class SanaWM(ReactorPipeline):
 
             if self.state._reset_requested:
                 self.state._reset_requested = False
-                self._reset_in_flight = True
                 self._generating = True
                 self.output.flush()
                 await self._send_state_update()
@@ -619,17 +574,13 @@ class SanaWM(ReactorPipeline):
                     self._chunk_index = 0
                     self._active_prompt = self.state.prompt
                 finally:
-                    self._reset_in_flight = False
                     self._generating = False
                 await self._send_state_update()
 
-            if self.state._reset_requested:
-                continue
-            if self.state.paused and not self.state._step_requested:
-                yield Idle
+            if self.state._trajectory_exhausted:
+                yield None
                 continue
 
-            self.state._step_requested = False
             controls = set(self._ordered_controls())
             self._chunk_in_flight = True
             self._generating = True
@@ -643,7 +594,7 @@ class SanaWM(ReactorPipeline):
                 self._chunk_in_flight = False
                 self._generating = False
             if trajectory_exhausted:
-                self.state.paused = True
+                self.state._trajectory_exhausted = True
                 trajectory_frames = backend.trajectory_frames or 0
                 await self.send(
                     TrajectoryExhausted(
@@ -652,9 +603,7 @@ class SanaWM(ReactorPipeline):
                     )
                 )
                 await self._send_state_update()
-                yield Idle
-                continue
-            if self.state._reset_requested:
+                yield None
                 continue
             self._chunk_index = backend.chunk_index
             await self._send_state_update()
@@ -671,11 +620,11 @@ class SanaWM(ReactorPipeline):
         if self._selected_image is None:
             raise CommandError("image_required", "Select an image before this command.")
 
-    def _queue_reset(self, *, auto_step: bool) -> None:
-        """Queue fresh upstream caches and optionally their first paused chunk."""
+    def _queue_reset(self) -> None:
+        """Queue fresh upstream caches for the next inference boundary."""
         self._clear_controls()
+        self.state._trajectory_exhausted = False
         self.state._reset_requested = True
-        self.state._step_requested = auto_step
         self._active_prompt = None
         self._chunk_index = 0
 
@@ -720,8 +669,7 @@ class SanaWM(ReactorPipeline):
             ),
             held_controls=cast(list[Control], self._ordered_controls()),
             seed=self._seed,
-            paused=self.state.paused,
-            step_queued=self.state._step_requested,
+            trajectory_exhausted=self.state._trajectory_exhausted,
             reset_queued=self.state._reset_requested,
             generating=self._generating,
             completed_chunks=self._chunk_index,

@@ -18,7 +18,6 @@ import numpy as np
 from reactor_runtime import (
     ClientInfo,
     CommandError,
-    Idle,
     InputField,
     ReactorPipeline,
     UploadedFile,
@@ -51,12 +50,10 @@ from abot_world_types import (
     ActionChanged,
     ControlsReleased,
     ImageSelected,
-    PauseChanged,
     PromptQueued,
     RolloutLimitReached,
     RolloutResetQueued,
     StateUpdate,
-    StepQueued,
 )
 
 logger = get_logger(__name__)
@@ -82,7 +79,6 @@ class ABotWorld(ReactorPipeline):
     """Generate a prompt-, image-, and keyboard-controlled ABot world."""
 
     state: ABotWorldState
-    output: ABotWorldOutput
     buffer_size = FRAMES_PER_CHUNK
 
     def __init__(self) -> None:
@@ -175,9 +171,7 @@ class ABotWorld(ReactorPipeline):
         """Initialize one shared world before its first viewer connects."""
         config = self._require_config()
         self.state.prompt = DEFAULT_PROMPT
-        self.state.paused = False
         self.state._seed = config.seed
-        self.state._step_requested = False
         self.state._reset_requested = False
         self.state._limit_reached = False
         self._clear_controls()
@@ -290,6 +284,7 @@ class ABotWorld(ReactorPipeline):
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Scene description up to 4096 characters. Whitespace is trimmed; the accepted "
                 "value applies to the next generated chunk and remains active until changed."
@@ -320,15 +315,17 @@ class ABotWorld(ReactorPipeline):
     async def set_image(
         self,
         image: UploadedFile = InputField(  # noqa: B008 - Reactor reads schema metadata.
+            moderate=True,
             description=(
                 "Starting frame uploaded through Reactor's file protocol. JPEG, PNG, WebP, or "
                 "BMP up to 25 MiB and 100 million pixels; upstream center-crop preprocessing "
                 "fits it to the native 1280x704 canvas."
-            )
+            ),
         ),
         prompt: str = InputField(
             default="",
             max_length=4096,
+            moderate=True,
             description=(
                 "Optional scene prompt for the fresh world. An empty value preserves the queued "
                 "prompt, while a non-empty value replaces it after trimming."
@@ -342,15 +339,12 @@ class ABotWorld(ReactorPipeline):
         self._image_source = "uploaded"
         self._image_name = image.name
         self.state.prompt = normalized
-        self.state.paused = False
-        initial_chunk_queued = self.state.paused
-        self._queue_fresh_rollout(generate_initial_chunk=True)
+        self._queue_fresh_rollout()
         message = ImageSelected(
             source="uploaded",
             filename=image.name,
             prompt=normalized,
             applies_to_chunk=1,
-            initial_chunk_queued=initial_chunk_queued,
         )
         await self._send_state_update()
         return message
@@ -381,64 +375,13 @@ class ABotWorld(ReactorPipeline):
         self._image_source = "built_in"
         self._image_name = scene.image.name
         self.state.prompt = scene.prompt
-        self.state.paused = False
-        initial_chunk_queued = self.state.paused
-        self._queue_fresh_rollout(generate_initial_chunk=True)
+        self._queue_fresh_rollout()
         message = ImageSelected(
             source="built_in",
             filename=scene.image.name,
             prompt=scene.prompt,
             applies_to_chunk=1,
-            initial_chunk_queued=initial_chunk_queued,
         )
-        await self._send_state_update()
-        return message
-
-    # Keep pause available for future schema re-enablement without exposing it to clients.
-    async def set_paused(
-        self,
-        paused: bool = InputField(
-            default=False,
-            description=(
-                "Set true to stop before the next chunk or false to resume continuously. New "
-                "sessions default to false. The current world and upstream KV cache are retained; "
-                "all key controls are cleared."
-            ),
-        ),
-    ) -> PauseChanged:
-        """Set playback state and release every native key."""
-        if not paused:
-            self._require_available_rollout()
-        self.state.paused = paused
-        self.state._step_requested = False
-        self._clear_controls()
-        message = PauseChanged(paused=paused, controls_released=True)
-        await self._send_state_update()
-        return message
-
-    # Keep single-step generation available for future schema re-enablement.
-    async def step(self) -> StepQueued:
-        """Queue one paused chunk using the latest prompt and sampled key state."""
-        if self._selected_input is None:
-            raise CommandError(
-                "image_required", "Select an image before requesting a step."
-            )
-        if not self.state.paused:
-            raise CommandError(
-                "pause_required", "Pause ABot-World before requesting a step."
-            )
-        self._require_available_rollout()
-        if self.state._step_requested:
-            raise CommandError(
-                "step_already_queued", "A paused chunk is already queued."
-            )
-        self.state._step_requested = True
-        next_chunk = self._next_chunk()
-        if next_chunk is None:
-            raise CommandError(
-                "rollout_unavailable", "No ABot-World chunk is available."
-            )
-        message = StepQueued(applies_to_chunk=next_chunk)
         await self._send_state_update()
         return message
 
@@ -446,8 +389,8 @@ class ABotWorld(ReactorPipeline):
         name="reset",
         description=(
             "Restart the selected starting image as a fresh causal world. Valid after an image "
-            "is selected; the reset applies at the next inference boundary, resumes continuous "
-            "generation, preserves the prompt, and clears controls and the rollout limit. Emits "
+            "is selected; the reset applies at the next inference boundary, preserves the "
+            "prompt, and clears controls and the rollout limit. Emits "
             "`rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` "
             "when no image is selected or the seed is out of range."
         ),
@@ -472,7 +415,6 @@ class ABotWorld(ReactorPipeline):
         replaced_chunks = self._chunk_index
         if seed >= 0:
             self.state._seed = seed
-        self.state.paused = False
         self._queue_fresh_rollout()
         message = RolloutResetQueued(
             seed=self.state._seed,
@@ -482,12 +424,12 @@ class ABotWorld(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[Any, None]:
+    async def inference(self) -> AsyncGenerator[ABotWorldOutput | None, None]:
         """Generate one native causal chunk per turn and emit its RGB frame batch."""
         while True:
             selected_input = self._selected_input
             if selected_input is None or self.state._limit_reached:
-                yield Idle
+                yield None
                 continue
 
             if self.state._reset_requested:
@@ -504,11 +446,6 @@ class ABotWorld(ReactorPipeline):
                     self._reset_in_flight = False
                 await self._send_state_update()
 
-            if self.state.paused and not self.state._step_requested:
-                yield Idle
-                continue
-
-            self.state._step_requested = False
             action, sampled = sample_key_snapshot(
                 self.state._pressed_keys,
                 self.state._activated_keys,
@@ -527,7 +464,6 @@ class ABotWorld(ReactorPipeline):
             config = self._require_config()
             if self._chunk_index >= config.max_chunks:
                 self.state._limit_reached = True
-                self.state.paused = True
                 self._clear_controls()
                 await self.send(
                     RolloutLimitReached(
@@ -614,10 +550,9 @@ class ABotWorld(ReactorPipeline):
             normalized.append(np.ascontiguousarray(array))
         return np.ascontiguousarray(np.stack(normalized))
 
-    def _queue_fresh_rollout(self, *, generate_initial_chunk: bool = False) -> None:
+    def _queue_fresh_rollout(self) -> None:
         """Queue a cache reset and clear controls without reloading weights."""
         self.state._reset_requested = True
-        self.state._step_requested = generate_initial_chunk and self.state.paused
         self.state._limit_reached = False
         self._clear_controls()
         self.output.flush()
@@ -645,8 +580,6 @@ class ABotWorld(ReactorPipeline):
 
     def _clear_controls(self) -> None:
         """Release held keys and discard every queued short tap."""
-        if self.state is None:
-            return
         self.state._pressed_keys = frozenset()
         self.state._activated_keys = frozenset()
 
@@ -678,8 +611,6 @@ class ABotWorld(ReactorPipeline):
             prompt=self.state.prompt,
             active_prompt=self._active_prompt or None,
             seed=self.state._seed,
-            paused=self.state.paused,
-            step_queued=self.state._step_requested,
             reset_queued=self.state._reset_requested,
             generating=self._reset_in_flight or self._chunk_in_flight,
             limit_reached=self.state._limit_reached,

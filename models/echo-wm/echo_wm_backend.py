@@ -127,23 +127,11 @@ class EchoWMBackend:
         self._sigmas = resolve_causal_sigmas(config.timesteps)
         self._forward: _BlockForward | None = None
         self._buffers: _RolloutBuffers | None = None
-        self._video_tools: Any = None
-        self._audio_tools: AudioLatentTools | None = None
         self._action_cond: dict[str, torch.Tensor] | None = None
         self._generator: torch.Generator | None = None
         self._chunk_index = 0
         self._seed = config.seed
         self._last_profile: dict[str, float] = {}
-
-    @property
-    def audio_sample_rate(self) -> int:
-        """Return the generated PCM sample rate."""
-        return self._audio_sample_rate
-
-    @property
-    def chunk_index(self) -> int:
-        """Return completed chunks in the current rollout."""
-        return self._chunk_index
 
     @property
     def attention_modules(self) -> int:
@@ -183,7 +171,7 @@ class EchoWMBackend:
         )
         generator = torch.Generator(device=self._device).manual_seed(seed)
         noiser = GaussianNoiser(generator)
-        video_state, video_tools = noise_video_state(
+        video_state, _ = noise_video_state(
             output_shape,
             noiser,
             conditionings,
@@ -233,8 +221,6 @@ class EchoWMBackend:
         )
         self._forward = forward
         self._buffers = buffers
-        self._video_tools = video_tools
-        self._audio_tools = audio_tools
         self._action_cond = action_cond
         self._generator = generator
         self._chunk_index = 0
@@ -309,8 +295,6 @@ class EchoWMBackend:
         """Release rollout tensors while retaining loaded model components."""
         self._forward = None
         self._buffers = None
-        self._video_tools = None
-        self._audio_tools = None
         self._action_cond = None
         self._generator = None
         self._chunk_index = 0

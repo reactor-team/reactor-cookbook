@@ -1,26 +1,18 @@
 $schema: reactor/v1
 
-# Reactor model spec for the Matrix-Game-2.0 universal distilled recipe.
-
 model:
-  # Change this name before publishing if it already belongs to another account.
   name: matrix-game-2-0-universal-distilled
-  version: v0.0.1
+  version: v0.1.0
   description: |
     Explore an autoregressive world from an image with composable WASD movement
     and continuous pitch and yaw camera controls.
-
   resources:
-    # The CUDA 12.8 and PyTorch 2.8 build includes Blackwell kernels. Model
-    # weights, action caches, visual context, and the causal VAE remain resident
-    # for the session, so the recipe requests one complete accelerator.
     gpu:
       type: NVIDIA_B200
       count: 1
     cpu:
       request: "4"
       limit: "8"
-    # Loading stages the generator, image encoder, and VAE through host memory.
     memory:
       request: 8Gi
       limit: 48Gi
@@ -28,15 +20,20 @@ model:
 runtime:
   import: matrix_game_2:MatrixGame2
   config: matrix_game_2.yaml
-
-  # `reactor run` bind-mounts this directory at the same absolute path inside
-  # the container. Source and checkpoints downloaded on first load survive
-  # image rebuilds and subsequent runs.
+  # Source and checkpoints downloaded on first load stay here.
   weights_path: ~/.cache/reactor_registry/matrix-game-2-0
+  recording:
+    enabled: true
+    chunk_seconds: 4
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
 
 build:
-  # Keep the Runtime release aligned with the adapter's public API usage.
-  runtime_version: "3.2.3"
+  runtime_version: "3.2.5"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"
@@ -47,13 +44,3 @@ build:
     - libglib2.0-0
   runtime_env:
     TOKENIZERS_PARALLELISM: "false"
-
-recording:
-  enabled: true
-  chunk_seconds: 4
-  clip_max_seconds: 300
-  video_track: main_video
-  video:
-    codec: h264
-    preset: veryfast
-    crf: 23

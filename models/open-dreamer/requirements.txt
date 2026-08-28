@@ -1,4 +1,4 @@
-# Resolve these model dependencies with Reactor Runtime during `reactor build`.
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
 # `build.runtime_version` in reactor.yaml selects the Runtime release.
 jax[cuda12]==0.10.1
 flax==0.12.7

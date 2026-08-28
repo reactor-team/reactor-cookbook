@@ -61,7 +61,6 @@ def test_key_state_is_retained_for_next_chunk(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(world, "send", capture)
 
     pressed = asyncio.run(world.set_key_state("w", True))
-    assert pressed.paused is False
     assert pressed.pressed_keys == ["w"]
     assert world.state._pressed_keys == frozenset({"w"})
 
@@ -71,7 +70,7 @@ def test_key_state_is_retained_for_next_chunk(monkeypatch: MonkeyPatch) -> None:
     assert [message.pressed_keys for message in state_updates] == [["w"], []]
 
 
-def test_image_selection_starts_unpaused(monkeypatch: MonkeyPatch) -> None:
+def test_image_selection_queues_fresh_rollout(monkeypatch: MonkeyPatch) -> None:
     """Start continuous generation after image selection."""
     world = dreamx_world.DreamXWorld()
     world.state = dreamx_types.DreamXWorldState()
@@ -81,9 +80,7 @@ def test_image_selection_starts_unpaused(monkeypatch: MonkeyPatch) -> None:
     world._select_image(Path("selected.jpg"), "uploaded", "A coherent world")
 
     assert flushes == [None]
-    assert world.state.paused is False
     assert world.state._reset_requested is True
-    assert world.state._step_requested is False
     assert world._chunk_index == 0
 
 

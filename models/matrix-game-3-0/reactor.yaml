@@ -2,7 +2,7 @@ $schema: reactor/v1
 
 model:
   name: matrix-game-3-0-distilled
-  version: v0.0.1
+  version: v0.1.0
   description: |
     Explore a memory-augmented autoregressive world from an image, a prompt,
     player movement, and pitch/yaw view controls.
@@ -20,10 +20,20 @@ model:
 runtime:
   import: matrix_game_3_0:MatrixGame30
   config: matrix_game_3_0.yaml
+  # Source checkout, distilled checkpoint, and uploads stay here.
+  weights_path: ~/.cache/reactor_registry/matrix-game-3-0-distilled
+  recording:
+    enabled: true
+    chunk_seconds: 4
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
 
 build:
-  # Keep the Runtime release aligned with the adapter's public API usage.
-  runtime_version: "3.2.3"
+  runtime_version: "3.2.5"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"
@@ -32,13 +42,3 @@ build:
     - git
     - libgl1
     - libglib2.0-0
-
-recording:
-  enabled: true
-  chunk_seconds: 4
-  clip_max_seconds: 300
-  video_track: main_video
-  video:
-    codec: h264
-    preset: veryfast
-    crf: 23

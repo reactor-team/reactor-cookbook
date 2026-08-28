@@ -1,14 +1,8 @@
-# Install model dependencies into the same resolution as Reactor Runtime.
-# `build.runtime_version` owns the Runtime version, while
-# `build.cuda_version` selects the CUDA 12.8 PyTorch index for Blackwell.
-
-# B200-compatible PyTorch stack.
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
 torch==2.9.1
 torchvision==0.24.1
 torchaudio==2.9.1
-
-# Reactor Runtime requires NumPy 2.x. AlayaWorld's inference path and the pinned
-# DA3 checkout are validated against this shared version by this example.
 numpy>=2.1,<3
 scipy>=1.14
 safetensors>=0.4
@@ -23,9 +17,6 @@ pyyaml>=6.0.3
 tqdm
 easydict
 huggingface-hub
-
-# Depth-Anything-3 inference imports. AlayaWorld supplies local stubs for DA3's
-# optional export modules.
 addict
 imageio
 matplotlib

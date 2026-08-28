@@ -7,11 +7,8 @@ import type { Model, WorldState } from "@/lib/model";
 import { Button, Dot, Panel, StatRow } from "./ui";
 
 /**
- * Playback and the life of the current world.
- *
- * Each chunk is 32 frames, a third over a second of video, and costs real GPU
- * time — so pausing, stepping one chunk at a time, and restarting from the same
- * image with a chosen seed are all first-class controls rather than debug aids.
+ * The life of the current world: restart it from the same image with a chosen
+ * seed and watch its progress toward the automatic chunk limit.
  */
 export function RolloutPanel({
   model,
@@ -24,40 +21,21 @@ export function RolloutPanel({
 }) {
   const [seed, setSeed] = useState("");
 
-  const paused = world?.paused ?? true;
   const completed = world?.completed_chunks ?? 0;
   const max = world?.max_chunks ?? 0;
   const progress = max > 0 ? Math.min(100, (completed / max) * 100) : 0;
 
   return (
     <Panel
-      title="Playback"
+      title="Rollout"
       hint={
         enabled
-          ? "Pausing also releases every camera axis, so the world stops where you left it."
+          ? "Restarting rebuilds the world from the same image and prompt."
           : "Available once the world has a starting image."
       }
       disabled={!enabled}
     >
       <div className="flex gap-2">
-        <Button
-          full
-          tone={paused ? "primary" : "default"}
-          onClick={() => void model.setPaused({ paused: !paused })}
-        >
-          {paused ? "Resume" : "Pause"}
-        </Button>
-        <Button
-          full
-          disabled={!paused}
-          title="Generate exactly one 32-frame chunk"
-          onClick={() => void model.step()}
-        >
-          Step once
-        </Button>
-      </div>
-
-      <div className="mt-3 flex gap-2">
         <input
           value={seed}
           onChange={(event) =>
@@ -98,20 +76,14 @@ export function RolloutPanel({
           value={
             <span className="inline-flex items-center gap-1.5">
               <Dot
-                tone={
-                  world?.generating ? "live" : paused ? "idle" : "pending"
-                }
+                tone={world?.generating ? "live" : "pending"}
                 pulse={world?.generating}
               />
               {world?.generating
                 ? "generating"
                 : world?.reset_queued
                   ? "restarting"
-                  : paused
-                    ? world?.step_queued
-                      ? "step queued"
-                      : "paused"
-                    : "waiting"}
+                  : "waiting"}
             </span>
           }
         />

@@ -22,14 +22,14 @@ sys.path.insert(0, str(RECIPE_DIR))
 
 pipeline_module = importlib.import_module("hy_world_1_5")
 camera_module = importlib.import_module("hy_world_1_5_camera")
-schema_module = importlib.import_module("hy_world_1_5_schema")
+types_module = importlib.import_module("hy_world_1_5_types")
 assets_module = importlib.import_module("hy_world_1_5_assets")
 
 HYWorld15 = pipeline_module.HYWorld15
 CameraControl = camera_module.CameraControl
 NativeCameraPlanner = camera_module.NativeCameraPlanner
-HYWorld15Output = schema_module.HYWorld15Output
-HYWorld15State = schema_module.HYWorld15State
+HYWorld15Output = types_module.HYWorld15Output
+HYWorld15State = types_module.HYWorld15State
 assemble_base_model = assets_module.assemble_base_model
 
 
@@ -149,20 +149,19 @@ def test_model_layout_links_remain_valid_after_weights_root_moves() -> None:
         assert all(not Path(path.readlink()).is_absolute() for path in destinations)
 
 
-def test_image_selection_starts_unpaused_and_queues_first_chunk(
+def test_image_selection_queues_and_generates_first_chunk(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """Generate continuously after queueing the initial preview chunk."""
+    """Generate continuously from the fresh world queued by image selection."""
     model, backend = _ready_model()
     flushes: list[None] = []
     monkeypatch.setattr(model.output, "flush", lambda: flushes.append(None))
 
     reply = asyncio.run(model.set_image(_image_upload(), "A quiet road"))
 
-    assert reply.paused is False
-    assert reply.first_chunk_queued is True
-    assert model.state.paused is False
-    assert model.state._step_requested is True
+    assert reply.source == "uploaded"
+    assert reply.prompt == "A quiet road"
+    assert model.state._restart_requested is True
 
     async def generate_first_chunk() -> Any:
         return await anext(model.inference())
@@ -173,8 +172,6 @@ def test_image_selection_starts_unpaused_and_queues_first_chunk(
     assert flushes == [None]
     assert backend.resets == [("A quiet road", 1)]
     assert len(backend.calls) == 1
-    assert model.state.paused is False
-    assert model.state._step_requested is False
     assert model._chunk_index == 1
 
 
@@ -191,8 +188,8 @@ def test_rollout_reset_flushes_pending_media(monkeypatch: MonkeyPatch) -> None:
     assert flushes == [None]
 
 
-def test_step_generates_one_chunk_and_prompt_applies_at_boundary() -> None:
-    """Consume one queued step and sample a prompt exactly at that chunk boundary."""
+def test_prompt_applies_at_next_chunk_boundary() -> None:
+    """Sample a queued prompt exactly at the next chunk boundary."""
     model, backend = _ready_model()
     asyncio.run(model.set_image(_image_upload(), "First prompt"))
 
@@ -203,8 +200,6 @@ def test_step_generates_one_chunk_and_prompt_applies_at_boundary() -> None:
 
     asyncio.run(drain_first_chunk())
     asyncio.run(model.set_prompt("Second prompt"))
-    asyncio.run(model.set_paused(True))
-    asyncio.run(model.step())
 
     async def generate_next_chunk() -> Any:
         return await anext(model.inference())
@@ -214,5 +209,3 @@ def test_step_generates_one_chunk_and_prompt_applies_at_boundary() -> None:
     assert output.main_video.shape == (16, 8, 8, 3)
     assert [prompt for _, prompt in backend.calls] == ["First prompt", "Second prompt"]
     assert model._chunk_index == 2
-    assert model.state.paused is True
-    assert model.state._step_requested is False

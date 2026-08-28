@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import io
 import os
-import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,24 +15,14 @@ import yaml
 from reactor_runtime import UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
 
-EXAMPLE_DIR = Path(__file__).parents[1]
-sys.path.insert(0, str(EXAMPLE_DIR))
+import evoke_config
+from evoke import Evoke
+from evoke_camera import CameraMotionPlanner, MotionConfig
+from evoke_images import validate_uploaded_image, validate_uploaded_pose
+from evoke_types import CommandApplied, EvokeOutput, EvokeState, StateUpdate
 
-camera_module = importlib.import_module("camera_motion")
-config_module = importlib.import_module("evoke_config")
-images_module = importlib.import_module("evoke_images")
-pipeline_module = importlib.import_module("evoke")
-schema_module = importlib.import_module("evoke_schema")
-CameraMotionPlanner = camera_module.CameraMotionPlanner
-MotionConfig = camera_module.MotionConfig
-Evoke = pipeline_module.Evoke
-CommandApplied = schema_module.CommandApplied
-EvokeOutput = schema_module.EvokeOutput
-EvokeState = schema_module.EvokeState
-StateUpdate = schema_module.StateUpdate
-STABILITY_PROMPT = config_module.read_config(
-    EXAMPLE_DIR / "evoke.yaml"
-).stability_prompt
+EXAMPLE_DIR = Path(__file__).parents[1]
+STABILITY_PROMPT = evoke_config.read_config(EXAMPLE_DIR / "evoke.yaml").stability_prompt
 
 CACHE_ENVIRONMENT = {
     "UV_CACHE_DIR": ".cache/uv",
@@ -72,7 +60,6 @@ def _ready_model() -> tuple[Any, _Backend, list[Any]]:
     model = Evoke()
     model.state = EvokeState()
     model.state.prompt = "A coral reef"
-    model.state.paused = False
     model._config = SimpleNamespace(max_chunks=512)
     model._stability_prompt = STABILITY_PROMPT
     model._media = Path("image.jpg")
@@ -151,7 +138,8 @@ def test_reactor_manifest_declares_generated_gpu_build() -> None:
     assert document["$schema"] == "reactor/v1"
     assert document["model"]["resources"]["gpu"]["count"] == 1
     assert document["runtime"]["weights_path"] == "~/.cache/reactor_registry/evoke"
-    assert document["build"]["runtime_version"] == "3.2.3"
+    assert document["build"]["runtime_version"] == "3.2.5"
+    assert document["build"]["python_requirements"] == "requirements.txt"
     assert "git" in document["build"]["system_packages"]
     assert not (EXAMPLE_DIR / "Dockerfile").exists()
 
@@ -161,20 +149,20 @@ def test_prepare_runtime_defaults_caches_to_weights_volume(
 ) -> None:
     """Keep every large download and generated kernel cache on persistent storage."""
     weights_root = tmp_path / "weights"
-    base = config_module.read_config(EXAMPLE_DIR / "evoke.yaml")
+    base = evoke_config.read_config(EXAMPLE_DIR / "evoke.yaml")
     config = replace(
         base,
         source_path=weights_root / "Evoke",
-        worker_python=weights_root / "Evoke" / config_module.WORKER_PYTHON,
+        worker_python=weights_root / "Evoke" / evoke_config.WORKER_PYTHON,
     )
     for variable in CACHE_ENVIRONMENT:
         monkeypatch.delenv(variable, raising=False)
-    monkeypatch.setattr(config_module, "ensure_source_checkout", lambda _: None)
-    monkeypatch.setattr(config_module, "ensure_worker_environment", lambda _: None)
-    monkeypatch.setattr(config_module, "_ensure_model_assets", lambda _: None)
-    monkeypatch.setattr(config_module, "_validate_runtime_paths", lambda _: None)
+    monkeypatch.setattr(evoke_config, "ensure_source_checkout", lambda _: None)
+    monkeypatch.setattr(evoke_config, "ensure_worker_environment", lambda _: None)
+    monkeypatch.setattr(evoke_config, "_ensure_model_assets", lambda _: None)
+    monkeypatch.setattr(evoke_config, "_validate_runtime_paths", lambda _: None)
 
-    config_module.prepare_runtime(config)
+    evoke_config.prepare_runtime(config)
 
     for variable, relative in CACHE_ENVIRONMENT.items():
         expected = weights_root / relative
@@ -266,18 +254,18 @@ def test_rollout_restart_flushes_pending_media(monkeypatch: Any) -> None:
 
 def test_public_example_image_passes_upload_validation() -> None:
     """Accept the bundled public image through the same uploaded-byte path."""
-    path = EXAMPLE_DIR / "example_image/evoke-coral-reef.jpg"
+    path = EXAMPLE_DIR / "example_images/evoke-coral-reef.jpg"
     upload = UploadedFile(
         name=path.name, mime_type="image/jpeg", data=path.read_bytes()
     )
 
-    images_module.validate_uploaded_image(upload)
+    validate_uploaded_image(upload)
 
 
 def test_image_upload_without_prompt_uses_neutral_stability_condition() -> None:
     """Keep omitted text free from object-specific example semantics."""
     model, _, messages = _ready_model()
-    path = EXAMPLE_DIR / "example_image/evoke-coral-reef.jpg"
+    path = EXAMPLE_DIR / "example_images/evoke-coral-reef.jpg"
     upload = UploadedFile(
         name=path.name, mime_type="image/jpeg", data=path.read_bytes()
     )
@@ -288,35 +276,7 @@ def test_image_upload_without_prompt_uses_neutral_stability_condition() -> None:
     assert model.state.prompt == STABILITY_PROMPT
     assert isinstance(messages[-1], StateUpdate)
     assert messages[-1].prompt == STABILITY_PROMPT
-
-
-def test_paused_image_upload_generates_one_preview_chunk() -> None:
-    """Return one uploaded-image preview without resuming continuous generation."""
-    model, backend, _ = _ready_model()
-    model.state.paused = True
-    path = EXAMPLE_DIR / "example_image/evoke-coral-reef.jpg"
-    upload = UploadedFile(
-        name=path.name, mime_type="image/jpeg", data=path.read_bytes()
-    )
-    reply = asyncio.run(model.set_image(upload, "", -1))
-
-    async def collect() -> tuple[list[Any], Any]:
-        generator = model.inference()
-        outputs = [await anext(generator)]
-        idle = await anext(generator)
-        await generator.aclose()
-        return outputs, idle
-
-    outputs, idle = asyncio.run(collect())
-
-    assert "first preview chunk queued" in reply.detail
-    assert len(outputs) == 1
-    assert all(isinstance(output, EvokeOutput) for output in outputs)
-    assert outputs[0].main_video.shape == (36, 384, 640, 3)
-    assert len(backend.generate_calls) == 1
-    assert idle is pipeline_module.Idle
-    assert model.state.paused is True
-    assert model.state._step_requested is False
+    assert messages[-1].input_source == "uploaded"
 
 
 def test_empty_set_prompt_restores_stability_condition() -> None:
@@ -344,4 +304,4 @@ def test_pose_upload_accepts_upstream_matrix_shapes() -> None:
         data=content.getvalue(),
     )
 
-    images_module.validate_uploaded_pose(upload)
+    validate_uploaded_pose(upload)
