@@ -277,7 +277,7 @@ packages:
     os: [win32]
 
   '@reactor-team/js-sdk@3.0.0':
-    resolution: {integrity: sha512-B3bTP62td3jMiTbYU7DHUFtH9PNbbE9YtV41TEXv/w5Wlurdh+kAMSYq0mx2R+ctY/CTgX/VnLp4Jd6AHG+O5A==}
+    resolution: {integrity: sha512-mlDpLWdTT4zn40IfZjHB2JF1WVI8wlcBLL3eCuooc+gcHKH5W03tPFrLK11l0J2HfjRvDybbwbe+rX8TrsmA1g==}
     engines: {node: '>=18'}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
@@ -762,6 +762,8 @@ snapshots:
       hls.js: 1.7.0
       mp4box: 2.4.1
       react: 19.1.0
+    transitivePeerDependencies:
+      - supports-color
 
   '@swc/helpers@0.5.15':
     dependencies:
@@ -851,6 +853,8 @@ snapshots:
   awaitqueue@3.3.1:
     dependencies:
       debug: 4.4.3
+    transitivePeerDependencies:
+      - supports-color
 
   caniuse-lite@1.0.30001809: {}
 
