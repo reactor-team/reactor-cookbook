@@ -50,7 +50,10 @@ class _Stop:
 class _InteractiveSession:
     """Bridge JSON requests into one live EVOKE pipeline call."""
 
-    def __init__(self, pose_base: np.ndarray | None) -> None:
+    def __init__(self, max_chunks: int, pose_base: np.ndarray | None) -> None:
+        # Read by the patched upstream pipeline, which sizes its latent sections
+        # from the session it is handed rather than from its own arguments.
+        self.max_chunks = max_chunks
         self._pose_base = pose_base
         self._inputs: queue.Queue[_ChunkInput | _Stop] = queue.Queue(maxsize=1)
         self._results: queue.Queue[_GeneratedChunk | Exception] = queue.Queue(maxsize=1)
@@ -199,7 +202,7 @@ class EvokeRuntime:
             source_height,
             source_width,
         )
-        session = _InteractiveSession(prepared["pose_base"])
+        session = _InteractiveSession(self._max_chunks, prepared["pose_base"])
         self._session = session
 
         def run() -> None:
