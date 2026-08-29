@@ -21,9 +21,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   X2Provider,
   useX2,
-  useX2CommandError,
   useX2GenerationStopped,
-  useX2ReferenceImageAccepted,
   useX2StateUpdate,
 } from "@reactor-models/x2";
 import {
@@ -109,7 +107,7 @@ const BANNER_TTL_MS = 6000;
 // bookkeeping), reference_image_accepted (decoded dimensions), and
 // command_error (transient banner) are handled as discrete events on top.
 function Workspace() {
-  const { status } = useX2();
+  const { status, lastError } = useX2();
 
   const [ui, setUi] = useState<X2UiState>(DEFAULT_UI_STATE);
   // Webcam is the default source; "video" streams a pre-recorded clip and
@@ -158,7 +156,13 @@ function Workspace() {
     };
   }, [imageUrl]);
 
-  // command_error banner: transient, not part of the reducer.
+  // Command-failure banner: transient, not part of the reducer.
+  //
+  // The model reports a refusal as the command's own error reply now, not as a
+  // broadcast `command_error` message — that message is gone from the schema, so
+  // there is no `useX2CommandError` to subscribe to. A refused command resolves
+  // `undefined` and the reason lands on the SDK's `lastError`, which the effect
+  // below watches.
   const [commandError, setCommandError] = useState<string | null>(null);
   const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const showCommandError = (reason: string) => {
@@ -196,16 +200,20 @@ function Workspace() {
     if (msg.reason === "reset") setResetNonce((n) => n + 1);
   });
 
-  useX2ReferenceImageAccepted((msg) => {
-    setUi((s) => ({
-      ...s,
-      referenceAccepted: { width: msg.width, height: msg.height },
-    }));
-  });
-
-  useX2CommandError((msg) => {
-    showCommandError(`${msg.command}: ${msg.reason}`);
-  });
+  // Surface a command failure. `lastError` is a persistent record — success
+  // never clears it — so banner only a value that is new to this render, and
+  // keep the last-seen one in a ref to tell "new failure" from "same failure
+  // still recorded".
+  const seenErrorRef = useRef(lastError);
+  useEffect(() => {
+    if (lastError && lastError !== seenErrorRef.current) {
+      showCommandError(`[${lastError.code}] ${lastError.message}`);
+    }
+    seenErrorRef.current = lastError;
+    // showCommandError is stable enough for this: it only touches refs and
+    // setState.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastError]);
 
   // Reset local state on full disconnect so a reconnect starts clean.
   useEffect(() => {
@@ -274,6 +282,9 @@ function Workspace() {
             generating={ui.generating}
             hasReference={ui.hasReference}
             accepted={ui.referenceAccepted}
+            onAccepted={(size) =>
+              setUi((s) => ({ ...s, referenceAccepted: size }))
+            }
           />
           <SnapClip />
         </aside>

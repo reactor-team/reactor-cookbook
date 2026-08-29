@@ -8,7 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
-    "@reactor-models/x2": "^0.7.0",
+    "@reactor-models/x2": "^1.0.0",
     "@reactor-team/js-sdk": "^3.0.0",
     "@reactor-team/ui": "^1.4.1",
     "hls.js": "^1.6.0",

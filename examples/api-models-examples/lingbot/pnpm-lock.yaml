@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       '@reactor-models/lingbot':
-        specifier: latest
-        version: 0.2.33(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.13(@types/react@19.2.14)(react@19.2.6))
+        specifier: ^1.0.1
+        version: 1.0.1(react@19.2.6)
       '@reactor-team/js-sdk':
-        specifier: ^2.12.0
-        version: 2.12.0(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.13(@types/react@19.2.14)(react@19.2.6))
+        specifier: ^3.0.0
+        version: 3.0.0(react@19.2.6)
       '@reactor-team/ui':
         specifier: ^1.4.1
         version: 1.4.1(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
@@ -265,21 +265,16 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@reactor-models/lingbot@0.2.33':
-    resolution: {integrity: sha512-x9UdEDJch36Pws/VwHIg4r0jDM78OMWLyyn1buyzy0gYLoBS/4pXwI41IkhdLNoIGRWQDXTif0hSty7xGWbAdQ==}
+  '@reactor-models/lingbot@1.0.1':
+    resolution: {integrity: sha512-2YcONYBd7sournLHwmjaYMCDeGnQkhfRq5bxgOyveh8eooJ/rEO8Oy/I9+q76gRzwM8GCDfUz98asJtMQNxI4A==}
     peerDependencies:
       react: '>=18'
 
-  '@reactor-team/js-sdk@2.12.0':
-    resolution: {integrity: sha512-64WcP8tmUSbSjdv3joEG9ddJIL6PgK35N2lG8BE6yN153dhMHB4TTVkUxN0OUr6ZF2uXyLUJBHKzPymbp0aRZQ==}
+  '@reactor-team/js-sdk@3.0.0':
+    resolution: {integrity: sha512-mlDpLWdTT4zn40IfZjHB2JF1WVI8wlcBLL3eCuooc+gcHKH5W03tPFrLK11l0J2HfjRvDybbwbe+rX8TrsmA1g==}
     engines: {node: '>=18'}
     peerDependencies:
-      hls.js: ^1.6.0
-      react: ^17.0.0 || ^18.0.0 || ^19.0.0
-      zustand: ^5.0.6
-    peerDependenciesMeta:
-      hls.js:
-        optional: true
+      react: ^18.0.0 || ^19.0.0
 
   '@reactor-team/ui@1.4.1':
     resolution: {integrity: sha512-/05IYSlCqbvA+cj+Boz8/lQkeXpnMFKWvfxZeBvVxU2ePI8eCZ5Ey+1EKbUyuGiWPZ7QT7QeKtHcsrN1LN9hkQ==}
@@ -502,8 +497,8 @@ packages:
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
-  mp4box@2.3.0:
-    resolution: {integrity: sha512-nnABYbdh4UguEYyV+uRwQBi1tbb8kXka2Fx9yKzmDKAeh8gkvRKYxoK1XDd8GQIjSfN4rvsXrW1CBo4yRQJZDA==}
+  mp4box@2.4.1:
+    resolution: {integrity: sha512-0HGX7nXoDIX6FKLVl4a3wtYjBlwqsN3xuQC3GXzNtKp98FXUOhDSq623azsz8DG5ptd9ZXcXodDkgbdMZOjWvw==}
     engines: {node: '>=20.8.1'}
 
   ms@2.1.3:
@@ -558,10 +553,6 @@ packages:
   scheduler@0.27.0:
     resolution: {integrity: sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q==}
 
-  sdp-transform@3.0.0:
-    resolution: {integrity: sha512-gfYVRGxjHkGF2NPeUWHw5u6T/KGFtS5/drPms73gaSuMaVHKCY3lpLnGDfswVQO0kddeePoti09AwhYP4zA8dQ==}
-    hasBin: true
-
   semver@7.8.0:
     resolution: {integrity: sha512-AcM7dV/5ul4EekoQ29Agm5vri8JNqRyj39o0qpX6vDF2GZrtutZl5RwgD1XnZjiTAfncsJhMI48QQH3sN87YNA==}
     engines: {node: '>=10'}
@@ -605,9 +596,6 @@ packages:
 
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
-
-  zod@4.4.3:
-    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
   zustand@5.0.13:
     resolution: {integrity: sha512-efI2tVaVQPqtOh114loML/Z80Y4NP3yc+Ff0fYiZJPauNeWZeIp/bRFD7I9bfmCOYBh/PHxlglQ9+wvlwnPikQ==}
@@ -778,25 +766,19 @@ snapshots:
   '@next/swc-win32-x64-msvc@15.5.18':
     optional: true
 
-  '@reactor-models/lingbot@0.2.33(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.13(@types/react@19.2.14)(react@19.2.6))':
+  '@reactor-models/lingbot@1.0.1(react@19.2.6)':
     dependencies:
-      '@reactor-team/js-sdk': 2.12.0(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.13(@types/react@19.2.14)(react@19.2.6))
+      '@reactor-team/js-sdk': 3.0.0(react@19.2.6)
       react: 19.2.6
     transitivePeerDependencies:
-      - hls.js
       - supports-color
-      - zustand
 
-  '@reactor-team/js-sdk@2.12.0(hls.js@1.6.16)(react@19.2.6)(zustand@5.0.13(@types/react@19.2.14)(react@19.2.6))':
+  '@reactor-team/js-sdk@3.0.0(react@19.2.6)':
     dependencies:
       awaitqueue: 3.3.1
-      mp4box: 2.3.0
-      react: 19.2.6
-      sdp-transform: 3.0.0
-      zod: 4.4.3
-      zustand: 5.0.13(@types/react@19.2.14)(react@19.2.6)
-    optionalDependencies:
       hls.js: 1.6.16
+      mp4box: 2.4.1
+      react: 19.2.6
     transitivePeerDependencies:
       - supports-color
 
@@ -972,7 +954,7 @@ snapshots:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  mp4box@2.3.0: {}
+  mp4box@2.4.1: {}
 
   ms@2.1.3: {}
 
@@ -1023,8 +1005,6 @@ snapshots:
   react@19.2.6: {}
 
   scheduler@0.27.0: {}
-
-  sdp-transform@3.0.0: {}
 
   semver@7.8.0:
     optional: true
@@ -1077,8 +1057,6 @@ snapshots:
   typescript@5.9.3: {}
 
   undici-types@6.21.0: {}
-
-  zod@4.4.3: {}
 
   zustand@5.0.13(@types/react@19.2.14)(react@19.2.6):
     optionalDependencies:

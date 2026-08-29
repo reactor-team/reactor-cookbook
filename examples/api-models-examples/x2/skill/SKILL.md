@@ -19,12 +19,12 @@ The typed client is installed from npm as [`@reactor-models/x2`](https://www.npm
 
 ## The four concepts you'll touch
 
-| Concept        | What it is                                                                         | Hook / API                                                                |
-| -------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| **Connection** | The lifecycle of the model session (`disconnected → connecting → waiting → ready`) | `useX2()` → `status`, `connect`, `disconnect`                             |
-| **Commands**   | Things you send TO the model. Always async.                                        | `useX2()` → `setPrompt({...})`, `setPointer({...})`, `reset()`, …         |
-| **Messages**   | Things the model sends BACK — the `state_update` snapshot, acks, errors.           | `useX2StateUpdate((msg) => …)`, `useX2CommandError(…)`, one hook per type |
-| **Tracks**     | Video in (`source`, published by the client) and out (`main_video`).               | `useX2()` → `publish` / `unpublish`, `<X2MainVideoView />`                |
+| Concept        | What it is                                                                                                        | Hook / API                                                        |
+| -------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| **Connection** | The lifecycle of the model session (`disconnected → connecting → waiting → ready`)                                | `useX2()` → `status`, `connect`, `disconnect`                     |
+| **Commands**   | Things you send TO the model. Always async.                                                                       | `useX2()` → `setPrompt({...})`, `setPointer({...})`, `reset()`, … |
+| **Messages**   | What the model broadcasts — the `state_update` snapshot and lifecycle markers. Acks answer their command instead. | `useX2StateUpdate((msg) => …)`, one hook per broadcast type       |
+| **Tracks**     | Video in (`source`, published by the client) and out (`main_video`).                                              | `useX2()` → `publish` / `unpublish`, `<X2MainVideoView />`        |
 
 The full wire surface — every command, every message, the `state_update` payload — is the model's schema reference on docs.reactor.inc. When this guide says "check the schema", that's the page it means.
 
@@ -91,7 +91,10 @@ let cachedToken: { jwt: string; expiresAtMs: number } | null = null;
 let inflightToken: Promise<string> | null = null;
 
 async function fetchToken(): Promise<string> {
-  if (cachedToken && Date.now() < cachedToken.expiresAtMs - TOKEN_REFRESH_SKEW_MS) {
+  if (
+    cachedToken &&
+    Date.now() < cachedToken.expiresAtMs - TOKEN_REFRESH_SKEW_MS
+  ) {
     return cachedToken.jwt;
   }
   if (inflightToken) return inflightToken; // coalesce connect-time parallel hops
@@ -137,7 +140,7 @@ The model broadcasts a `state_update` message on connect and after every observa
 `Workspace` (in `app/X2App.tsx`) feeds every snapshot through `reduce()` (`app/lib/state.ts`) into the app-level `X2UiState` (`app/lib/types.ts`). Two wire quirks the reducer already handles — keep them handled:
 
 - `prompt`, `width`, and `height` are typed `unknown` (nullable on the wire); the model only ever sends values or null.
-- The snapshot only says _whether_ a reference image is set. The decoded dimensions arrive separately on `reference_image_accepted`, so the reducer drops the stale dimensions ack whenever the snapshot reports no reference.
+- The snapshot only says _whether_ a reference image is set. The decoded dimensions come back as the answer to `setReferenceImage`, so the reducer drops the stale dimensions ack whenever the snapshot reports no reference.
 
 Two rules to keep:
 
@@ -154,18 +157,43 @@ await setPrompt({ prompt: "make it watercolor" });
 ```
 
 A command resolves when the model's handler has finished. **None of them reject:**
-a refusal arrives as a broadcast `command_error` and resolves the call with
-`undefined`, and so does a send that never completed, with the reason on
-`lastError`. So `try/catch` is not how you detect a failed command.
+a refusal resolves the call with `undefined` and the reason lands on `lastError`.
+So `try/catch` is not how you detect a failed command.
 
-**X2 is the model where every command answers with nothing.** Its schema declares
-no reply payload on any of them, so awaiting one is a completion barrier — proof
-the handler ran — and every message the model produces is a genuine broadcast that
-reaches the subscriptions below. That is worth knowing because it is *not* true of
-the other models in this folder: on Helios, LingBot, LTX and Sana, commands like
-`setPrompt` answer their caller directly, and the matching `use*Accepted` hook
-never fires. If you port a pattern from one of those skills, or reuse a component
-here, check which side of that line the model sits on before trusting a listener.
+**There is no `command_error` message on this model.** From release 1.0.0 the
+schema declares none, so no `useX2CommandError` hook is generated. A refused
+command reports itself as that command's own error reply, which the SDK records on
+`lastError` (and raises on the `error` event). `X2App` watches `lastError` and
+banners a value that is new to this render — `lastError` is a persistent record
+that success never clears, so comparing against the last-seen value is what
+distinguishes a new failure from an old one still recorded.
+
+### Where a result arrives
+
+| The model                          | Reaches you                                           | X2 commands                                                                 |
+| ---------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------- |
+| **answers** the command that asked | the awaited call's return value, and **nowhere else** | `setPrompt`, `setPointer`, `setReferenceImage`                              |
+| **broadcasts** to every connection | the per-message hooks                                 | `state_update`, `generation_started`, `generation_stopped`                  |
+| answers with **nothing**           | the await is a completion barrier and no more         | `reset`, `setPointerX`, `setPointerY`, `setPointerActive`, `setKeepBacklog` |
+
+An answer is correlated to the command that earned it and delivered only to the
+connection that sent it, so it is **not** raised on the message event. A
+`useX2ReferenceImageAccepted`, `useX2PromptAccepted` or `useX2PointerChanged`
+subscription therefore compiles, subscribes, and never fires — read the value off
+the call:
+
+```tsx
+// ❌ never runs
+useX2ReferenceImageAccepted((msg) => setSize(msg));
+await setReferenceImage({ reference_image: ref });
+
+// ✅ the answer IS the return value
+const accepted = await setReferenceImage({ reference_image: ref });
+if (accepted) setSize({ width: accepted.width, height: accepted.height });
+```
+
+That is what `ReferenceImage.tsx` does, lifting the decoded size to the shell
+through an `onAccepted` prop.
 
 - **Gate every interactive control on `status === "ready"`** — a command sent
   earlier resolves `undefined` and records the reason on `lastError`.
@@ -177,14 +205,14 @@ here, check which side of that line the model sits on before trusting a listener
 
 The typed client delivers each message type through its own hook; `Workspace` subscribes once per type it cares about:
 
-| Message                    | Hook                          | What the app does                                                                 |
-| -------------------------- | ----------------------------- | --------------------------------------------------------------------------------- |
-| `state_update`             | `useX2StateUpdate`            | Feeds the reducer. Everything the UI gates on comes from here.                    |
-| `generation_stopped`       | `useX2GenerationStopped`      | Blacks out the stage; bumps the reset nonce only when `reason === "reset"`.       |
-| `reference_image_accepted` | `useX2ReferenceImageAccepted` | Records the decoded dimensions for the readout.                                   |
-| `command_error`            | `useX2CommandError`           | **Always surfaced** — a dismissible banner with a 6s auto-dismiss. Never swallow. |
+| Message                        | Hook                     | What the app does                                                                                          |
+| ------------------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `state_update`                 | `useX2StateUpdate`       | Feeds the reducer. Everything the UI gates on comes from here.                                             |
+| `generation_stopped`           | `useX2GenerationStopped` | Blacks out the stage; bumps the reset nonce only when `reason === "reset"`.                                |
+| ~~`reference_image_accepted`~~ | —                        | **Never arrives here.** It answers `setReferenceImage`; read it off the awaited call.                      |
+| ~~`command_error`~~            | —                        | **Gone from the schema** as of 1.0.0. A refusal is the command's own error reply, recorded on `lastError`. |
 
-`prompt_accepted`, `pointer_changed`, and `generation_started` also exist and do broadcast on this model; the app relies on the `state_update` echo instead, which arrives for the same transitions and carries the full picture.
+`generation_started` also broadcasts; the app relies on the `state_update` echo instead, which arrives for the same transitions and carries the full picture. `prompt_accepted` and `pointer_changed` are answers rather than broadcasts — their hooks exist but never fire.
 
 Keep message handling centralized in `Workspace` — scattering per-message hooks across leaf components makes ordering unobvious.
 
@@ -210,7 +238,7 @@ Rules when extending:
 - Preset reference images are `fetch`ed back into a `File` so presets and local picks share the exact same upload path — one code path, one set of bugs.
 - A mid-run swap stops and auto-restarts generation (`generation_stopped { reason: "reference_image_changed" }`). Keep the drafts; see the reset-nonce logic in `Workspace`.
 
-The model acks with `reference_image_accepted { width, height }` — the decoded size, useful for telling the user what the model actually sees.
+The awaited call answers with `reference_image_accepted { width, height }` — the decoded size, useful for telling the user what the model actually sees.
 
 ## The pointer — normalized, throttled, released
 
@@ -258,7 +286,7 @@ The pattern, if you rebuild it:
 1. **A second publisher for `source`.** All sources hand their track to `useSourcePublisher` via `onTrack`. Two publishers race against the same transceiver.
 2. **Inferring session state from clicks.** Gate off the reduced `X2UiState`; only `state_update` mutates it.
 3. **Forgetting the disconnect reset.** New session state must be cleared in the `status === "disconnected"` effect, or the next session starts haunted by the last one.
-4. **Swallowing `command_error`.** The banner surfaces every command failure; keep it wired when you add commands.
+4. **Swallowing a command failure.** There is no `command_error` message to subscribe to; failures land on `lastError`, and the shell's effect banners each new one. Keep that effect wired when you add commands, and treat a falsy resolved value as the signal that one happened.
 5. **Adding a Start button.** Generation is armed by the prompt; a Start button would have nothing to send and teaches the wrong mental model.
 6. **Treating every `generation_stopped` as a user reset.** `reference_image_changed` stops auto-restart; only `reason === "reset"` should clear drafts.
 7. **Uploading the clip instead of streaming it.** `VideoSource` exists so the model edits the clip on its live path; the only upload in this app is the reference image.
@@ -274,7 +302,8 @@ The pattern, if you rebuild it:
 - [ ] New sources produce a track and hand it up via `onTrack` — no new publish call sites
 - [ ] New message handling lives in `Workspace` via the typed per-message hooks
 - [ ] New session state resets in the disconnect effect
-- [ ] `command_error` still surfaces (don't swallow it)
+- [ ] Command failures still surface through the `lastError` banner (don't swallow them)
+- [ ] Reads an acceptance off the awaited call, not off a `use*Accepted` subscription (those never fire)
 - [ ] Command payloads use the typed methods off `useX2()` — no raw `sendCommand` strings
 - [ ] Colors via theme utilities / `app/components/ui` primitives, not raw hex
 - [ ] Typed surface imported from `@reactor-models/x2`; base `@reactor-team/js-sdk` imported only where the typed client doesn't cover (SnapClip / recording)

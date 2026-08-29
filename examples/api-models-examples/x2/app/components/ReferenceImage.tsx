@@ -57,7 +57,8 @@ async function toMod4(file: File): Promise<Blob> {
 // Reference-image panel for character/object insertion or swap. Picking an
 // image uploads it via the SDK's presigned-URL protocol (uploadFile) and then
 // sends set_reference_image with the returned FileRef; the model answers with
-// reference_image_accepted (or command_error for an undecodable file).
+// The awaited `setReferenceImage` call, which answers with
+// `reference_image_accepted` (or `undefined` for an undecodable file).
 //
 // The reference conditions a run from its first block. Setting it while
 // generating restarts the stream automatically (generation_stopped with
@@ -69,10 +70,13 @@ export function ReferenceImage({
   generating,
   hasReference,
   accepted,
+  onAccepted,
 }: {
   generating: boolean;
   hasReference: boolean;
   accepted: { width: number; height: number } | null;
+  /** The decoded dimensions the model answered with, lifted to the shell. */
+  onAccepted: (size: { width: number; height: number }) => void;
 }) {
   const { uploadFile, setReferenceImage, status } = useX2();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -97,7 +101,12 @@ export function ReferenceImage({
       // the reference as a driving video and scrambles the color channels on
       // any frame whose width or height isn't a multiple of 4.
       const ref = await uploadFile(await toMod4(file), { name: file.name });
-      await setReferenceImage({ reference_image: ref });
+      // Resolves with `reference_image_accepted`, carrying the dimensions the
+      // model actually decoded. `undefined` means it refused — the reason is on
+      // the SDK's `lastError`, which the shell banners.
+      const accepted = await setReferenceImage({ reference_image: ref });
+      if (!accepted) return;
+      onAccepted({ width: accepted.width, height: accepted.height });
       setPreviewUrl((prev) => {
         if (prev) URL.revokeObjectURL(prev);
         return URL.createObjectURL(file);
