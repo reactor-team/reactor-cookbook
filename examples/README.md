@@ -4,7 +4,7 @@ Complete applications and demos built on hosted Reactor models. Every example
 is a top-level, self-contained project with its own setup, controls, and
 customization guide.
 
-- [`api-model-examples`](./api-model-examples): one reference frontend per model
+- [`api-models-examples`](./api-models-examples): one reference frontend per model
   Reactor serves on the API — Helios, LingBot, LingBot World 2, LongLive 2, LTX,
   Sana, X2 and HappyOyster. Each is a standalone Next.js app with its own agent
   skill, and these are the templates `npx create-reactor-app` scaffolds from.

@@ -23,11 +23,11 @@ works.
 - `models/` — deployable models; each folder is a `reactor` CLI workspace
   governed by GUIDELINES.md.
 - `examples/` — complete applications built on hosted Reactor models.
-  - `examples/api-model-examples/` — the per-model reference frontends, one
+  - `examples/api-models-examples/` — the per-model reference frontends, one
     folder per model Reactor serves on the API. See below before editing one.
 - `robotics/` — Python SDK integrations that drive already-served models.
 
-## `examples/api-model-examples/`
+## `examples/api-models-examples/`
 
 One standalone Next.js app per API model, each carrying a `skill/SKILL.md` that
 holds the reasoning behind its code. These are the templates
@@ -55,7 +55,7 @@ Three rules when you touch one:
 Verify a change the way a reader would:
 
 ```sh
-cd examples/api-model-examples/<model>
+cd examples/api-models-examples/<model>
 pnpm install && pnpm build   # `tsc --noEmit` runs as part of next build
 ```
 

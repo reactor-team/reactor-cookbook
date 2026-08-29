@@ -28,7 +28,7 @@ Each folder is a standalone pnpm project and does **not** join a workspace, so
 copying it out works exactly the way the scaffolding CLI does:
 
 ```bash
-cd examples/api-model-examples/helios
+cd examples/api-models-examples/helios
 cp .env.example .env.local
 # add REACTOR_API_KEY=rk_...
 
