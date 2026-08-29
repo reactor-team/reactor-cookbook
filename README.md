@@ -20,7 +20,9 @@ The three top-level folders cover distinct ways to build with Reactor.
 
 - [`examples/`](./examples) holds complete applications and demos built on
   hosted Reactor models. Each example is a top-level, self-contained project
-  you can copy, run, and adapt.
+  you can copy, run, and adapt. [`examples/api-model-examples/`](./examples/api-model-examples)
+  is the per-model reference set: one frontend for each model Reactor serves on
+  the API, and the templates `npx create-reactor-app` scaffolds from.
 - [`models/`](./models) holds models you deploy. Each folder is a `reactor`
   workspace you build and run with the CLI, and everything that deployment
   needs lives inside it. [Build your own model](https://docs.reactor.inc/deploy/overview)

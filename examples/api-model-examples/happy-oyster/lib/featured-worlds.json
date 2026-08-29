@@ -1,0 +1,50 @@
+[
+  {
+    "key": "sunny-meadow",
+    "title": "Sunny Meadow",
+    "mode": 1,
+    "prompt": "A sunny grassy meadow with rolling green hills stretching to the horizon, dotted with wildflowers in white and violet. A winding dirt path cuts through the tall grass toward a lone oak tree, butterflies drift in the warm air, and a bright blue sky holds a few slow cotton clouds. Soft afternoon light, gentle breeze moving the grass.",
+    "gradient": "radial-gradient(circle at 30% 25%, #a8c66c 0%, #4e7a3a 45%, #23421f 100%)",
+    "image": "/worlds/sunny-meadow.jpg"
+  },
+  {
+    "key": "neon-city",
+    "title": "Neon City",
+    "mode": 1,
+    "prompt": "A rain-slicked cyberpunk city street at night. Neon signs in pink, cyan and orange reflect in deep puddles on the asphalt, steam rises from grates and vents, and holographic billboards flicker above crowded noodle stalls. Narrow alleys branch off between towering buildings strung with cables, and the wet air glows under the city lights.",
+    "gradient": "radial-gradient(circle at 30% 25%, #ff5f9e 0%, #4b1e6b 50%, #120b2e 100%)",
+    "image": "/worlds/neon-city.jpg"
+  },
+  {
+    "key": "ancient-forest",
+    "title": "Ancient Forest",
+    "mode": 1,
+    "prompt": "A misty ancient forest with towering moss-covered trees whose canopies vanish into fog. Shafts of golden light break through the leaves onto a narrow trail between giant ferns, fallen trunks wear carpets of emerald moss, and fireflies hover in the dim hollows. The air feels heavy, green and very old.",
+    "gradient": "radial-gradient(circle at 30% 25%, #7fb069 0%, #2d5a3d 50%, #0e2417 100%)",
+    "image": "/worlds/ancient-forest.jpg"
+  },
+  {
+    "key": "desert-ruins",
+    "title": "Desert Ruins",
+    "mode": 1,
+    "prompt": "Sandstone ruins in a vast desert at golden hour. Broken columns and half-buried arches cast long shadows over rippled dunes, carved reliefs worn smooth by centuries of wind. A distant caravan trail winds between the rocks, heat shimmer rises off the sand, and the sky burns amber and rose above the horizon.",
+    "gradient": "radial-gradient(circle at 30% 25%, #f0c987 0%, #b0722f 50%, #4a2c12 100%)",
+    "image": "/worlds/desert-ruins.jpg"
+  },
+  {
+    "key": "coral-abyss",
+    "title": "Coral Abyss",
+    "mode": 2,
+    "prompt": "A slow descent through a luminous underwater canyon. Coral towers in violet and teal rise from the seabed, schools of silver fish swirl through columns of light from the surface, and a giant manta ray glides past ancient shipwreck bones. Bioluminescent plankton sparks in the dark water as the camera drifts deeper toward a glowing cave mouth.",
+    "gradient": "radial-gradient(circle at 30% 25%, #4ecdc4 0%, #1a5f7a 50%, #071e33 100%)",
+    "image": "/worlds/coral-abyss.jpg"
+  },
+  {
+    "key": "sky-citadel",
+    "title": "Sky Citadel",
+    "mode": 2,
+    "prompt": "A floating citadel of white stone and brass drifts among sunset clouds. Airships with canvas sails dock at its spires, waterfalls pour off its edges into open sky, and banners ripple in the high wind. The story follows a lone messenger climbing the great stair as the light shifts from gold to violet and lanterns come alive across the city.",
+    "gradient": "radial-gradient(circle at 30% 25%, #ffd8a8 0%, #c2769b 50%, #3d2b56 100%)",
+    "image": "/worlds/sky-citadel.jpg"
+  }
+]

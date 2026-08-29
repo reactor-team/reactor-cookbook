@@ -1,0 +1,14 @@
+node_modules
+.next
+.env
+.env.local
+*.log
+.DS_Store
+*.tsbuildinfo
+
+# Preset portraits. Faces are a licensing/consent question, not a code one, so
+# no image lands in this repo until its provenance is recorded. The app
+# degrades to placeholder cards without them. See public/presets/README.md.
+public/presets/*.jpg
+public/presets/*.png
+public/presets/*.webp

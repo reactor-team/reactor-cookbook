@@ -1,0 +1,8 @@
+# This folder is its own pnpm workspace root, so `pnpm install` here installs
+# the app's own dependencies even when the folder lives inside another workspace.
+packages: []
+
+allowBuilds:
+  core-js: false
+  msw: true
+  sharp: true

@@ -1,0 +1,33 @@
+{
+  "name": "lingbot-world-2",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@reactor-models/lingbot-world-2": "^1.0.1",
+    "@reactor-team/js-sdk": "^3.0.0",
+    "@reactor-team/ui": "^1.4.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "hls.js": "^1.6.0",
+    "next": "15.5.9",
+    "radix-ui": "^1.4.3",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "shadcn": "^3.8.1",
+    "tailwind-merge": "^3.4.0",
+    "tw-animate-css": "^1.4.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

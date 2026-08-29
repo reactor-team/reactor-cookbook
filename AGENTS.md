@@ -23,7 +23,41 @@ works.
 - `models/` — deployable models; each folder is a `reactor` CLI workspace
   governed by GUIDELINES.md.
 - `examples/` — complete applications built on hosted Reactor models.
+  - `examples/api-model-examples/` — the per-model reference frontends, one
+    folder per model Reactor serves on the API. See below before editing one.
 - `robotics/` — Python SDK integrations that drive already-served models.
+
+## `examples/api-model-examples/`
+
+One standalone Next.js app per API model, each carrying a `skill/SKILL.md` that
+holds the reasoning behind its code. These are the templates
+`npx create-reactor-app` scaffolds from, and the CLI is being repointed at this
+folder — so a folder name here is a public identifier (`--model <name>`), not an
+internal label. Renaming one breaks the CLI.
+
+Three rules when you touch one:
+
+- **The folder's `skill/SKILL.md` is part of the deliverable.** A change to how
+  the example works that leaves the skill describing the old behaviour is
+  incomplete — the skill is what agents read, so a stale one actively teaches the
+  wrong thing.
+- **Auth is an API key server-side, exchanged for a session-scoped JWT.** That is
+  the only auth model these examples document. Do not add a third-party identity
+  provider, and do not name one: readers copy verbatim, and a session-scoped
+  Reactor token has the opposite lifetime rule from a refreshed identity token.
+  The resolver must return a *stable* token for a session's whole life.
+- **A command's result arrives on the awaited call, not on a subscription.**
+  `@reactor-team/js-sdk` 3.x delivers a handler's answer correlated to the command
+  that earned it, so it reaches only the connection that asked and never the
+  message event. A listener waiting for an acceptance message compiles and never
+  fires. Which commands answer is per-model; each skill carries its own table.
+
+Verify a change the way a reader would:
+
+```sh
+cd examples/api-model-examples/<model>
+pnpm install && pnpm build   # `tsc --noEmit` runs as part of next build
+```
 
 ## Verifying model changes
 

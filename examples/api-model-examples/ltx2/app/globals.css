@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+/* Tailwind v4 theme aliases.
+ *
+ * Pull the Reactor brand tokens out of @reactor-team/ui/styles.css
+ * (loaded in layout.tsx) and re-expose them as Tailwind utilities:
+ *
+ *   bg-brand / text-brand / border-brand   → the gold accent (#C7C099)
+ *   text-brand-light                        → the lighter gold, for small text
+ *   text-brand-fg                           → readable text on the brand bg
+ *   bg-surface / border-edge                → panel fill and hairline
+ *   font-sans / font-mono                   → Aeonik + IBM Plex Mono
+ *
+ * We deliberately don't import the lib's React components — those use hooks
+ * internally and force consumers into "use client". The CSS vars are pure
+ * design tokens with no runtime cost, and the stylesheet carries the Aeonik
+ * @font-face, so the app ships no font files of its own.
+ */
+@theme {
+  --font-sans: var(--reactor-font-sans);
+  --font-mono: var(--reactor-font-mono);
+
+  --color-brand: var(--reactor-color-mid-gold);
+  --color-brand-light: var(--reactor-color-light-gold);
+  --color-brand-fg: var(--reactor-color-interstellar);
+  /* Aliases onto the same zinc the shared ui/ module uses, so components
+   * written against `bg-surface`/`border-edge` and components written against
+   * PANEL land on one palette. */
+  --color-surface: rgb(24 24 27 / 0.4); /* zinc-900/40 */
+  --color-edge: #27272a; /* zinc-800 */
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: #0a0a0a;
+  color: #fafafa;
+  font-family: var(--reactor-font-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+textarea,
+input {
+  font-family: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+input[type="range"] {
+  accent-color: var(--reactor-color-mid-gold);
+}
