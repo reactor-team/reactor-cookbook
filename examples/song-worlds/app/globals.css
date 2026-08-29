@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+/* Tailwind v4 theme aliases.
+ *
+ * Pull the Reactor brand tokens out of @reactor-team/ui/styles.css
+ * (loaded in layout.tsx) and re-expose them as Tailwind utilities:
+ *
+ *   bg-brand / text-brand / border-brand   → cream-gold accent
+ *   text-brand-fg                           → readable text on the brand bg
+ *   bg-active / text-active                 → "connected/running" green
+ *   font-sans / font-mono                   → Aeonik + IBM Plex Mono
+ *
+ * We deliberately don't import the lib's React components — those
+ * use hooks internally and force consumers into "use client". The
+ * CSS vars are pure design tokens with no runtime cost.
+ */
+@theme {
+  --font-sans: var(--reactor-font-sans);
+  --font-mono: var(--reactor-font-mono);
+
+  --color-brand: var(--reactor-color-light-gold);
+  --color-brand-fg: var(--reactor-color-interstellar);
+  --color-active: var(--reactor-color-flora-light);
+}
+
+html,
+body {
+  background: #09090b;
+  color: #e4e4e7;
+  font-family:
+    var(--reactor-font-sans),
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
+
+textarea,
+input {
+  font-family: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--reactor-color-light-gold) 35%, transparent);
+}
+
+/* Slim, translucent scrollbars for the glass panels' overflow areas
+   (event list, JSON summary) — the default chunky OS scrollbar breaks
+   the frosted-glass look. Firefox via scrollbar-* props, WebKit via
+   pseudo-elements; both degrade to the default scrollbar harmlessly. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
