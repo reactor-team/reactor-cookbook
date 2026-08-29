@@ -299,23 +299,33 @@ code reads the answer:
 
 | The model | Reaches you | Lingbot commands |
 | --- | --- | --- |
-| **answers** the command that asked | the awaited call's return value, and **nowhere else** | `setPrompt`, `setImage`, `pause`, `resume`, `reset` |
-| **broadcasts** to every connection on the session | the subscription — `useLingbotState`, `useLingbotCommandError`, `useLingbotChunkComplete`, … | the `state` snapshot, `command_error`, per-chunk progress, `generation_*` lifecycle |
-| answers with **nothing** | the await is a completion barrier and no more | `start`, `setSeed`, `setMovement`, `setLookHorizontal`, `setLookVertical`, `setRotationSpeedDeg` |
+| **answers** the command that asked | the awaited call's return value — and the **sending** connection's `message` event | `setPrompt`, `setImage`, `pause`, `resume`, `reset` |
+| **broadcasts** to every connection on the session | the subscription — `useLingbotState`, `useLingbotCommandError`, `useLingbotChunkComplete`, … | the `state` snapshot, `command_error`, per-chunk progress, `conditions_ready`, `generation_started`, `generation_complete` |
+| answers with **nothing** | the await resolves `undefined`; nothing reaches the message event | `start`, `setSeed`, `setMovement`, `setLookHorizontal`, `setLookVertical`, `setRotationSpeedDeg` |
 
-An answer is correlated to the command that earned it, so it is delivered to the
-one connection that sent it and is **not** raised on the message event. A
-subscription waiting for `image_accepted` therefore never fires:
+An answer is **addressed**: the runtime sends it to the one connection whose
+command earned it, correlated by request id. On that connection it arrives twice
+over — it resolves the awaited call, and the same frame also raises the `message`
+event, so a typed hook for an answer does fire. No other connection in the session
+sees it at all.
+
+So read the answer off the await, not off a hook — not because the hook is dead,
+but because the await is tied to **your** call:
 
 ```tsx
-// ❌ compiles, subscribes, and never runs
+// ⚠️ fires, but not usefully: this handler sees the answer to any setImage on
+// this connection, with no way to tell which call it belongs to — and on a
+// second client it never fires at all.
 useLingbotImageAccepted(() => setImageReady(true));
-await setImage({ image: ref });
 
-// ✅ the answer IS the return value
+// ✅ tied to this call, and it tells you the handler finished
 const accepted = await setImage({ image: ref });
 if (accepted) setImageReady(true);
 ```
+
+The corollary matters for multi-client sessions: anything every client has to
+agree on must **broadcast**. That is what the `state` snapshot is for — never
+build shared UI state out of answers.
 
 ### Chaining conditioning before `start()`
 
@@ -365,16 +375,19 @@ The example app exposes mid-stream prompt swap only via the bundled scenes, but 
 
 `@reactor-models/lingbot` ships one typed subscription hook per message:
 
-| Hook                                                                        | Purpose                                                                                                                                               |
-| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `useLingbotState(handler)`                                                  | The state snapshot. **Use this; almost everything you need is here.**                                                                                 |
-| `useLingbotCommandError(handler)`                                           | A command was rejected (bad preconditions, bad input). Render this somewhere visible.                                                                 |
-| ~~`useLingbotImageAccepted`~~                                                | **Never fires.** `image_accepted` answers `setImage` — read it off the awaited call.                                                                                                                                     |
-| ~~`useLingbotPromptAccepted`~~                                               | **Never fires.** Same reason: `prompt_accepted` answers `setPrompt`.                                                                                                                                                    |
-| `useLingbotChunkComplete(handler)`                                          | One chunk finished generating. Useful for progress sounds, telemetry, scheduled prompt swaps.                                                         |
-| `useLingbotGenerationStarted` / `Paused` / `Resumed` / `Reset` / `Complete` | Lifecycle transitions. Useful for one-shot reactions (toasts, sounds), but **don't aggregate these into your own state** — read the snapshot instead. |
-| `useLingbotMessage(handler)`                                                | Catch-all over the typed discriminated union. Useful for devtools / logging.                                                                          |
-| ~~`useLingbotConditionsReady`~~                                              | **Never fires** — `conditions_ready` answers its command rather than being broadcast. The hook is generated for every declared message, so it still exists and still compiles.                                          |
+Whether a hook fires on **every** connection or only on the one that sent the
+command depends on how the model produced the message — see the table above:
+
+| Hook                                                | Reaches          | Purpose                                                                                                                                                    |
+| --------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `useLingbotState(handler)`                          | every connection | The state snapshot. **Use this; almost everything you need is here.**                                                                                       |
+| `useLingbotCommandError(handler)`                   | every connection | A command was rejected (bad preconditions, bad input). Render this somewhere visible.                                                                       |
+| `useLingbotChunkComplete(handler)`                  | every connection | One chunk finished generating. Useful for progress sounds, telemetry, scheduled prompt swaps.                                                               |
+| `useLingbotConditionsReady(handler)`                | every connection | Broadcast by `setPrompt` and `setImage` once each commits — it is not an answer here, so it is the one conditioning signal a second client does see.        |
+| `useLingbotGenerationStarted` / `Complete`          | every connection | Lifecycle transitions from the generation loop. Useful for one-shot reactions, but **don't aggregate them into your own state** — read the snapshot.        |
+| `useLingbotPromptAccepted` / `ImageAccepted`        | the sender only  | Answers to `setPrompt` / `setImage`. Read them off the awaited call.                                                                                        |
+| `useLingbotGenerationPaused` / `Resumed` / `Reset`  | the sender only  | Answers to `pause` / `resume` / `reset`. A second client never sees them — gate shared UI on `snapshot.paused` and clear local state off the resolved call. |
+| `useLingbotMessage(handler)`                        | both             | Catch-all over the typed discriminated union. Useful for devtools / logging.                                                                                |
 
 ### Always surface `command_error`
 

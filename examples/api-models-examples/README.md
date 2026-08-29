@@ -13,7 +13,7 @@ repointed at this folder.
 
 | Example                                 | Typed SDK                                                                                          | What it demonstrates                                                                                                                                                                                                                                                                                |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`happy-oyster/`](./happy-oyster)       | [`@reactor-models/happy-oyster`](https://www.npmjs.com/package/@reactor-models/happy-oyster)       | Interactive world model. Build a world from a prompt (or attach a permanent one), then travel it live: **Adventure** worlds you drive with WASD, **Directing** worlds you steer with text `instruct` plus pause/rewind. Mode-fixed sessions, authoritative `world_state` snapshot.                  |
+| [`happy-oyster/`](./happy-oyster) ⚠️     | [`@reactor-models/happy-oyster`](https://www.npmjs.com/package/@reactor-models/happy-oyster)       | **Cannot install until its typed SDK 1.0.0 publishes** (see the folder's README). Interactive world model. Build a world from a prompt (or attach a permanent one), then travel it live: **Adventure** worlds you drive with WASD, **Directing** worlds you steer with text `instruct` plus pause/rewind. Mode-fixed sessions, authoritative `world_state` snapshot.                  |
 | [`helios/`](./helios)                   | [`@reactor-models/helios`](https://www.npmjs.com/package/@reactor-models/helios)                   | Continuous prompt-driven video. Curated text and image scenes, mid-stream prompt hot-swap, atomic `setConditioning({ prompt, image })` for image-to-video, clip capture, design tokens from `@reactor-team/ui`.                                                                                     |
 | [`lingbot/`](./lingbot)                 | [`@reactor-models/lingbot`](https://www.npmjs.com/package/@reactor-models/lingbot)                 | Interactive world model. Pick a starting image, drive the scene with WASD, layer curated dynamic events (rain, fog, …) as live prompt swaps, clip capture.                                                                                                                                          |
 | [`lingbot-world-2/`](./lingbot-world-2) | [`@reactor-models/lingbot-world-2`](https://www.npmjs.com/package/@reactor-models/lingbot-world-2) | Interactive world model driven like a game. Two-axis WASD, per-latent `set_camera_pose` motion (mouse-look, roll, orbit, jump arcs, crouch dips), hold-key world events, a layered prompt workbench, attention-window and KV-cache knobs.                                                           |
@@ -63,41 +63,51 @@ Each `skill/SKILL.md` explains the failure mode if you break that last rule.
 Every example targets 3.x. One behavioural change matters more than the rest, and
 no part of getting it wrong is a compile error:
 
-**A command's result arrives on the awaited call, not on a subscription.** When a
-model's handler answers with a message, that answer is correlated to the command
-and delivered only to the connection that sent it — so it is never raised on the
-message event. A listener waiting for an acceptance message compiles, subscribes,
-and never fires; a promise parked for one never settles, and has no timeout.
+**A command's result belongs on the awaited call, not on a subscription.** When a
+model's handler answers with a message, that answer is **addressed**: the runtime
+sends it to the one connection whose command earned it, correlated by request id.
+On that connection it arrives twice over — it resolves the awaited call, and the
+same frame also raises the `message` event — so a typed hook for an answer does
+fire. It just fires for *any* call of that command on this connection, with no way
+to say which, and it never fires on a second client in the session at all.
 
 ```tsx
-// ❌ never runs
+// ⚠️ fires, but for any setImage on this connection — and never on a second
+// client watching the same session.
 useHeliosImageAccepted((msg) => setDimensions(msg));
-await setImage({ image: ref });
 
-// ✅ the answer IS the return value
+// ✅ tied to this call, and it tells you the handler finished
 const accepted = await setImage({ image: ref });
 if (accepted) setDimensions(accepted);
 ```
 
-Two corollaries:
+The corollary for multi-client sessions: anything every client has to agree on
+must **broadcast**, which is what a model's `state` snapshot is for. Never build
+shared UI state out of answers.
+
+Two more corollaries:
 
 - **Awaiting a command that answers with nothing is still a barrier.** The runtime
   acknowledges every correlated command once its handler has run, so a resolved
   `await` means the handler finished. Delete any sleep that existed to "give the
   model time".
-- **Commands never reject.** A refusal arrives as a broadcast `command_error` and
-  resolves the call with `undefined`; so does a send that never completed, with the
-  reason on `lastError`. `try/catch` is not how you detect failure.
+- **Commands never reject.** `try/catch` is not how you detect failure. Where the
+  reason turns up is per-model, and the three shapes are genuinely different —
+  see below.
 
 Which commands answer, which broadcast, and which answer with nothing is
 per-model, so each `skill/SKILL.md` carries the table for its own model. Check that
-table before porting a pattern between folders — a listener that works in one is
-not evidence it fires in another.
+table before porting a pattern between folders — how one model reports a refusal is
+not evidence for another.
 
-`x2` is worth a specific note: from its 1.0.0 release it declares no
-`command_error` message at all, so there is no hook to subscribe to. A refused
-command reports itself as that command's own error reply, which the SDK records on
-`lastError`.
+**How a refusal reaches you, by model.** Worth reading once, because the three
+shapes need different client code:
+
+| Models | A refused command… |
+| --- | --- |
+| `helios`, `lingbot`, `lingbot-world-2`, `longlive-v2`, `sana-streaming` | resolves the call `undefined` and broadcasts `command_error` to every connection. Surface that hook. |
+| `ltx2` | **resolves the call with a `command_error` message — truthy.** `if (reply)` is not a confirmation; narrow on `reply.type`. Its generated signatures name only the success message, so TypeScript cannot catch this. |
+| `x2` | declares no `command_error` at all from its 1.0.0 release, so there is no hook. The refusal is the command's own error reply, which the SDK records on `lastError` and raises on the `error` event. |
 
 ## Conventions
 

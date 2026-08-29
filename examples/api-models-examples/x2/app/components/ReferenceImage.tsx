@@ -56,9 +56,9 @@ async function toMod4(file: File): Promise<Blob> {
 
 // Reference-image panel for character/object insertion or swap. Picking an
 // image uploads it via the SDK's presigned-URL protocol (uploadFile) and then
-// sends set_reference_image with the returned FileRef; the model answers with
-// The awaited `setReferenceImage` call, which answers with
-// `reference_image_accepted` (or `undefined` for an undecodable file).
+// sends set_reference_image with the returned FileRef. The awaited call answers
+// with `reference_image_accepted`, or `undefined` for an undecodable file — the
+// reason then lands on the SDK's `lastError`, which the shell banners.
 //
 // The reference conditions a run from its first block. Setting it while
 // generating restarts the stream automatically (generation_stopped with

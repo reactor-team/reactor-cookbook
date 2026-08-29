@@ -29,14 +29,14 @@ export function Playback({
           icon="play"
           label="Resume"
           disabled={notReady}
-          onClick={() => resume().catch(console.error)}
+          onClick={() => resume()}
         />
       ) : (
         <IconButton
           icon="pause"
           label="Pause"
           disabled={notReady}
-          onClick={() => pause().catch(console.error)}
+          onClick={() => pause()}
         />
       )}
       <IconButton
@@ -45,11 +45,9 @@ export function Playback({
         tone="danger"
         disabled={notReady}
         onClick={() =>
-          reset()
-            .then((reply) => {
-              if (reply) onReset();
-            })
-            .catch(console.error)
+          void reset().then((reply) => {
+            if (reply) onReset();
+          })
         }
       />
       <span className="ml-1 text-xs text-zinc-500">

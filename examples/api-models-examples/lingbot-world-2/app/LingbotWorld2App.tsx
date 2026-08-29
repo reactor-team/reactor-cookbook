@@ -136,7 +136,7 @@ function StatusBar() {
           <Button
             size="xs"
             variant="secondary"
-            onClick={() => reset().catch(console.error)}
+            onClick={() => reset()}
             className="h-7 px-3 font-mono text-xs bg-red-500/15 border-red-500/20 hover:bg-red-500/25 text-red-400"
           >
             Reset

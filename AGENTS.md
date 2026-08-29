@@ -46,11 +46,14 @@ Three rules when you touch one:
   provider, and do not name one: readers copy verbatim, and a session-scoped
   Reactor token has the opposite lifetime rule from a refreshed identity token.
   The resolver must return a *stable* token for a session's whole life.
-- **A command's result arrives on the awaited call, not on a subscription.**
-  `@reactor-team/js-sdk` 3.x delivers a handler's answer correlated to the command
-  that earned it, so it reaches only the connection that asked and never the
-  message event. A listener waiting for an acceptance message compiles and never
-  fires. Which commands answer is per-model; each skill carries its own table.
+- **A command's result belongs on the awaited call, not on a subscription.**
+  `@reactor-team/js-sdk` 3.x delivers a handler's answer addressed to the
+  connection that asked, correlated by request id. There it both resolves the
+  awaited call and raises that connection's `message` event — so an acceptance
+  listener does fire, but for any call of that command and never on a second
+  client in the session. Read answers off the await; keep subscriptions for what
+  the model broadcasts. Which commands answer, and where a refusal surfaces, is
+  per-model — each skill carries its own table.
 
 Verify a change the way a reader would:
 

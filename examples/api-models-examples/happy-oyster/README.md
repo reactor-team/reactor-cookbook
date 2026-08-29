@@ -28,6 +28,15 @@ with a typed `connect → createWorld / attachWorld → startTravel` flow, live 
 
 ## Quick start
 
+> **This example cannot install yet.** It needs `@reactor-models/happy-oyster`
+> `1.0.0` — the release built against `@reactor-team/js-sdk` 3.x — and the latest
+> published version is `0.3.0`, which still depends on the 2.x SDK. Until 1.0.0
+> publishes, `pnpm install` here cannot resolve. The folder ships without a
+> lockfile for the same reason: the only one that could be generated today would
+> pin the 2.x tree this app no longer targets.
+
+> **Start a standalone project:** `npx create-reactor-app my-app --model=happy-oyster` scaffolds this example into a fresh app — no clone needed. The steps below are for running it in-place from a monorepo checkout.
+
 ```bash
 cp .env.example .env.local
 # add your key: REACTOR_API_KEY=rk_...   (grab one at reactor.inc/account/api-keys)

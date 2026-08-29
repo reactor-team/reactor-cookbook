@@ -51,14 +51,20 @@ The authored plan is **client state**, not model state — it lives in `app/lib/
 
 - **Status-gate every control.** Only send commands when `status === "ready"`.
 - **A command resolves when the model's handler has finished**, and carries
-  whatever that handler answered with. `setShot`, `scheduleShot`,
-  `scheduleSceneCut`, `pause`, `resume` and `reset` answer with a message;
-  `start`, `sceneCut` and `setSeed` answer with nothing, so awaiting those is a
-  completion barrier and no more.
-- **An answer reaches only the connection that asked.** It is correlated to its
-  command and is **not** raised on the message event, so a `use*Accepted`-style
-  subscription for one compiles, subscribes, and never fires — read the result off
-  the awaited call. The `state` snapshot and `command_error` do broadcast.
+  whatever that handler answered with:
+
+| The model | Reaches you | LongLive 2 commands |
+| --- | --- | --- |
+| **answers** the command that asked | the awaited call's return value — and the **sending** connection's `message` event | `setShot`, `scheduleShot`, `scheduleSceneCut`, `pause`, `resume`, `reset` |
+| **broadcasts** to every connection | the per-message hooks | `state`, `chunk_complete`, `command_error`, `scene_cut`, `generation_started` / `complete` |
+| answers with **nothing** | the await resolves `undefined`; nothing reaches the message event | `start`, `sceneCut`, `setSeed` |
+
+- **An answer is addressed to the one connection that asked.** There it resolves
+  the awaited call *and* raises the `message` event, so a `use*Scheduled`-style
+  hook does fire — but only on this connection, and with no way to tell which
+  in-flight call it answers. Read the result off the awaited call. Anything a
+  second client must also see has to broadcast, which is what the `state`
+  snapshot is for.
 - **None of them reject.** A refusal arrives as a broadcast `command_error` and
   resolves the call with `undefined`; so does a send that never completed, with the
   reason on `lastError`. `try/catch` is not how you detect a failed command.
@@ -69,6 +75,49 @@ The authored plan is **client state**, not model state — it lives in `app/lib/
 ## Receiving messages
 
 The `state` snapshot is the source of truth: `running`, `started`, `paused`, `current_chunk`, `session_chunk`, `current_prompt`, `seed`, `scheduled_shots`, `scheduled_scene_cuts`. Surface `command_error` (`<CommandError>`) so a rejected beat (empty prompt, wrong state, past chunk) is never silent.
+
+`useLongliveV2ShotSet`, `ShotScheduled`, `SceneCutScheduled`, `GenerationPaused`, `GenerationResumed` and `GenerationReset` are answers, so they only ever fire on the connection that sent the command. Don't build the timeline or the phase gate on them — read `state`, which broadcasts.
+
+## Auth — a memoizing `jwtToken` resolver + a scoped mint route
+
+Two pieces work together: a Next.js GET route that mints a session-scoped JWT
+server-side (`app/api/reactor/token/route.ts`), and the `jwtToken` resolver on
+`<LongliveV2Provider>` that the SDK calls on every Reactor API hop.
+
+`jwtToken` takes a `JwtSource` — `string | (() => string | Promise<string>)`. The
+example passes `jwtToken={fetchToken}`, and the SDK re-invokes it on every Reactor
+API call (uploads, `GET /clips`, ICE refresh, SDP renegotiation), so a token aging
+out mid-session can't 401 those hops. A bare string works but fixes one value at
+construction time. (Porting from js-sdk 2.x: the prop used to be a separate
+`getJwt`; it is gone, and TypeScript catches the rename.) The provider stabilizes
+the resolver via `useRef + useMemo`, so an inline arrow is safe and `useCallback`
+is unnecessary.
+
+**`fetchToken` memoizes the token in module scope until shortly before it expires,
+and fetches with `cache: "no-store"` — that is load-bearing, not an optimization.**
+The token is session-scoped: a session may only be operated by the exact token
+that created it, so every hop of one session must present the same JWT. The
+browser's HTTP cache cannot promise that — DevTools "Disable cache" and ordinary
+eviction both make it miss — and on a miss the resolver mints a fresh token with
+no bound sessions, so the next upload or clip call answers:
+
+```
+403 … this token is session-scoped and is not authorized for this resource;
+mint it again with authorization_details.resources.sessions.bind …
+```
+
+The edge it does not cover: a session created just before the memo expires is
+orphaned at the re-mint, because the fresh token is not bound to it. Covering that
+needs a re-mint naming the live session in
+`authorization_details.resources.sessions.bind`.
+
+The route returns `expires_at` alongside the JWT so the resolver memoizes for
+exactly the lifetime the server granted; sets `Cache-Control: private, no-store`
+so no CDN stores a per-user credential; is a GET because nothing about the request
+varies (it still POSTs to Reactor internally); and scopes the mint through
+`authorization_details` to `reactor/longlive-v2` with a bounded `max_sessions`, so
+the browser's token can only create sessions for that one model and act on the
+ones it created. Your `rk_` API key never leaves the server.
 
 ## The timeline
 

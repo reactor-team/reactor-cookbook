@@ -39,14 +39,82 @@ The **Input panel** (`ModeInput`) is phase-aware on the model's `started` flag: 
 | **Messages (you receive)** | `useSanaStreamingState((msg) => …)`, `useSanaStreamingCommandError((msg) => …)`, `useSanaStreamingGenerationReset((msg) => …)`, and a hook per other message. |
 | **Tracks**                 | `<SanaStreamingMainVideoView />` — pre-bound `<ReactorView track="main_video">` for output. Input is the `camera` track you `publish` into.                   |
 
-The provider is `<SanaStreamingProvider jwtToken={fetchToken}>` (`app/SanaStreamingApp.tsx`): the model name and tracks are baked in, and every base-provider prop (`jwtToken`, `connectOptions`, `apiUrl`, …) passes straight through. `jwtToken` takes a static string or a resolver; the example passes a resolver that memoizes the minted token until shortly before it expires, because a session-scoped token must stay stable for the session's whole life.
+The provider is `<SanaStreamingProvider jwtToken={fetchToken}>` (`app/SanaStreamingApp.tsx`): the model name and tracks are baked in, and every base-provider prop (`jwtToken`, `connectOptions`, `apiUrl`, …) passes straight through.
+
+## Auth — a memoizing `jwtToken` resolver + a scoped mint route
+
+Two pieces work together: a Next.js GET route that mints a session-scoped JWT
+server-side (`app/api/reactor/token/route.ts`), and the `jwtToken` resolver on
+`<SanaStreamingProvider>` that the SDK calls on every Reactor API hop.
+
+### `jwtToken` takes a string **or** a resolver
+
+```tsx
+type JwtSource = string | (() => string | Promise<string>);
+```
+
+The example passes `jwtToken={fetchToken}`. The SDK re-invokes that function on
+every Reactor API call — `POST /sessions/:id/uploads`, `GET /clips`, ICE refresh,
+SDP renegotiation — so a token aging out mid-session can't 401 those hops. A bare
+string works too, but it fixes one value at construction time and breaks the
+moment that value expires.
+
+(Porting from js-sdk 2.x: the prop used to be a separate `getJwt`. It is gone;
+`jwtToken` absorbed both shapes, and TypeScript catches the rename.)
+
+The provider stabilizes the resolver via `useRef + useMemo`, so an inline arrow is
+safe — a parent re-render does **not** tear the session down. Do not wrap it in
+`useCallback`.
+
+### The resolver memoizes, and that is load-bearing
+
+`fetchToken` holds the minted token in module scope until shortly before it
+expires, and fetches with `cache: "no-store"`. **Do not hand this job to the
+browser's HTTP cache.** The token is session-scoped: a session may only be
+operated by the exact token that created it, so every hop of one session must
+present the same JWT. A browser cache cannot promise that — DevTools "Disable
+cache" and ordinary eviction both make it miss — and on a miss the resolver mints
+a fresh token with no bound sessions, so the next upload or clip call answers:
+
+```
+403 … this token is session-scoped and is not authorized for this resource;
+mint it again with authorization_details.resources.sessions.bind …
+```
+
+The edge it does not cover: a session created just before the memo expires is
+orphaned at the re-mint, because the fresh token is not bound to it. Covering that
+needs a re-mint naming the live session in
+`authorization_details.resources.sessions.bind`.
+
+### The route — `app/api/reactor/token/route.ts`
+
+Already implemented. You usually don't need to touch it, but here's why it works
+the way it does so you don't accidentally break it:
+
+1. **It returns `expires_at` alongside the JWT.** Reactor's `/tokens` endpoint
+   takes an `expires_after` body and answers `{ jwt, expires_at }`. Handing
+   `expires_at` to the client is what lets the resolver memoize for exactly the
+   lifetime the server granted rather than a number guessed in the client.
+2. **`Cache-Control: private, no-store`.** The client owns the cache (above), and
+   `private` keeps any CDN or proxy from storing a per-user credential.
+3. **GET, not POST.** Nothing about the request varies, so a GET reads as the
+   lookup it is. The handler still POSTs to Reactor internally.
+4. **`authorization_details` scopes the token.** The mint pins the JWT to
+   `reactor/sana-streaming` with a bounded session budget (`max_sessions`): the
+   browser's token can only create sessions for that one model and act on the
+   sessions it created — everything else on the account answers 403. Never hand a
+   browser an unscoped token; that is the API key's full user-level access in
+   cookie-jar form.
+
+Your `rk_` API key never leaves the server. The JWT is the only credential the
+browser ever holds.
 
 ## The model is the source of truth
 
 The browser sends commands and renders model-reported state; it never tracks generation state optimistically.
 
 - The typed `state` snapshot (`useSanaStreamingState`) is the **only** thing that mutates the reducer. The model sends it on connect, after every accepted command, and at each chunk boundary, so the UI renders from one message instead of accumulating individual events. `app/lib/state.ts:reduce` projects it into `SanaState` (`app/lib/types.ts`): `running`, `started`, `paused`, `currentChunk`, `currentPrompt`, `seed`. Every gate in the UI — the Input panel's setup-vs-playback phase (`started`), pause-vs-resume (`paused`) — keys off this state, not local guesses.
-- Other messages are handled imperatively in the `Workspace` shell, each via its own typed hook: `useSanaStreamingCommandError` → a transient 6s banner (`<CommandError>`); `useSanaStreamingGenerationReset` → bump `resetNonce` (children clear their local UI in step) and black out the stage until generation runs again.
+- `command_error` is handled imperatively in the `Workspace` shell via its own typed hook — `useSanaStreamingCommandError` → a transient 6s banner (`<CommandError>`). The reset cleanup does **not** go through a hook: `generation_reset` answers `reset()`, so `Playback` calls `onReset` on the resolved await, which bumps `resetNonce` (children clear their local UI in step) and blacks out the stage until generation runs again.
 - Reset local state to `DEFAULT_STATE` on full disconnect so a reconnect starts clean.
 
 No `autoConnect` — `<StatusBadge>` surfaces the four-state machine with Connect/Disconnect buttons so the lifecycle is visible. Flip on `connectOptions={{ autoConnect: true }}` for a production app.
@@ -67,14 +135,17 @@ send that never completed, with the reason on `lastError`.
 
 | The model | Reaches you | Sana commands |
 | --- | --- | --- |
-| **answers** the command that asked | the awaited call's return value, and **nowhere else** | `setPrompt`, `pause`, `resume`, `reset` |
-| **broadcasts** to every connection | the per-message hooks | `state`, `command_error`, `chunk_complete`, `generation_started` / `_complete` |
-| answers with **nothing** | the await is a completion barrier and no more | `start`, `setSeed`, `setAnchorInterval` |
+| **answers** the command that asked | the awaited call's return value — and the **sending** connection's `message` event | `setPrompt`, `pause`, `resume`, `reset` |
+| **broadcasts** to every connection | the per-message hooks | `state`, `command_error`, `chunk_complete`, `anchored`, `generation_started` / `_complete` |
+| answers with **nothing** | the await resolves `undefined`; nothing reaches the message event | `start`, `setSeed`, `setAnchorInterval` |
 
-An answer reaches only the connection that asked, so it is **not** raised on the
-message event: a `use*Accepted` or `useSanaStreamingGenerationReset` subscription
-compiles, subscribes, and never fires. Read the result off the call instead — see
-`Playback`, which runs the reset cleanup from the resolved `reset()`.
+An answer is **addressed**: it goes to the one connection whose command earned it,
+correlated by request id. There it resolves the awaited call *and* raises the
+`message` event, so `useSanaStreamingPromptAccepted` and
+`useSanaStreamingGenerationReset` do fire — but only on this connection, and with
+no way to tell which in-flight call they answer. Read the result off the call
+instead: `Playback` runs its reset cleanup from the resolved `reset()`, which is
+both unambiguous and the only shape that still works with a second client attached.
 
 ## Receiving messages
 
@@ -82,12 +153,13 @@ Each message has its own typed hook; subscribe to only the ones you care about, 
 
 | Message (hook)                                         | Role                                                             |
 | ------------------------------------------------------ | ---------------------------------------------------------------- |
-| `state` (`useSanaStreamingState`)                      | **The only reducer input.** Full snapshot.                       |
-| `command_error` (`useSanaStreamingCommandError`)       | `{ command, reason }`. Always surface it (the shell banners it). |
-| ~~`prompt_accepted`~~                                  | **Never fires.** It answers `setPrompt` — read it off the awaited call.       |
-| `chunk_complete` (`useSanaStreamingChunkComplete`)     | Per-chunk progress. Informational.                               |
-| `generation_started` / `_complete` (matching hooks)    | Informational lifecycle markers.                                 |
-| ~~`generation_reset`~~                                 | **Never fires.** It answers `reset` — the shell runs its cleanup off the resolved `reset()` call, threaded to `Playback` as `onReset`. |
+| `state` (`useSanaStreamingState`)                      | Broadcast. **The only reducer input.** Full snapshot.             |
+| `command_error` (`useSanaStreamingCommandError`)       | Broadcast. `{ command, reason }`. Always surface it (the shell banners it). |
+| `chunk_complete` (`useSanaStreamingChunkComplete`)     | Broadcast. Per-chunk progress. Informational.                    |
+| `generation_started` / `_complete` (matching hooks)    | Broadcast. Informational lifecycle markers.                      |
+| `anchored` (`useSanaStreamingAnchored`)                | Broadcast when the edit re-grounds on the source (see `setAnchorInterval`). |
+| `prompt_accepted` (`useSanaStreamingPromptAccepted`)   | **Sender-only** — the answer to `setPrompt`. Read it off the awaited call. |
+| `generation_paused` / `resumed` / `reset`              | **Sender-only** — answers to `pause` / `resume` / `reset`. The shell runs its reset cleanup off the resolved `reset()` call, threaded to `Playback` as `onReset`. |
 
 Anything that should change what the UI shows belongs in the reducer, fed only by `state`. `useSanaStreamingMessage` is a catch-all over the whole `SanaStreamingMessage` union (handy for devtools).
 

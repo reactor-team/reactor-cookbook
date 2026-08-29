@@ -21,7 +21,7 @@ export function SeedField({ modelSeed }: { modelSeed: number }) {
         min={0}
         defaultValue={modelSeed}
         disabled={notReady}
-        onBlur={(e) => setSeed({ seed: +e.target.value }).catch(console.error)}
+        onBlur={(e) => void setSeed({ seed: +e.target.value })}
         className={cn(
           "w-20 rounded-md border border-zinc-700 bg-zinc-900/40 px-2 py-1 font-mono text-xs text-zinc-200 outline-none transition focus:border-brand/60 disabled:opacity-40",
         )}

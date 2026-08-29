@@ -117,15 +117,16 @@ The model answers a command in one of two ways:
 
 | The model | Reaches you | HappyOyster commands |
 | --- | --- | --- |
-| **answers** the command that asked | the awaited call's return value, and **nowhere else** | `getCredentials`, `endTravel`, `requestState` |
+| **answers** the command that asked | the awaited call's return value — and the **sending** connection's subscriptions | `getCredentials`, `endTravel`, `requestState` |
 | **broadcasts** to every connection | the subscription — `onWorldState`, `onTravelState`, `onActionError` | every snapshot, and every refusal |
-| answers with **nothing** | the await is a completion barrier and no more | `createWorld`, `attachWorld` |
+| answers with **nothing** | the await resolves `undefined`; nothing reaches a subscription | `createWorld`, `attachWorld` |
 
-An answer is correlated to its command and delivered to the one connection that
-sent it, so it is **not** raised on the message event. Waiting for
-`travel_credentials` or `travel_ended` on a subscription therefore waits forever —
-which used to be how `startTravel()` was written, and is why the facade now reads
-them off the call.
+An answer is **addressed** to the one connection whose command earned it. There it
+resolves the awaited call and also reaches that connection's subscriptions — but
+only that connection's, and with no way to tell which in-flight call it answers.
+`startTravel()` used to wait for `travel_credentials` on a subscription and match
+it up by hand; reading it off the call instead is unambiguous, which is why the
+facade was rewritten that way.
 
 `requestState()` sits on both sides on purpose: its snapshot answers the call
 **and** is published to `onWorldState` subscribers, because a snapshot is

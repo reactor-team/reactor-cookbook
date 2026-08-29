@@ -17,7 +17,7 @@ export function Prompt({ activePrompt }: { activePrompt: string | null }) {
   const ready = status === "ready";
   const apply = (prompt: string) => {
     if (!ready) return;
-    setPrompt({ prompt }).catch(console.error);
+    void setPrompt({ prompt });
   };
   const applyPreset = (prompt: string) => {
     setText(prompt);

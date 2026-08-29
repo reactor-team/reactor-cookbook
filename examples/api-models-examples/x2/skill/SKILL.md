@@ -172,22 +172,23 @@ distinguishes a new failure from an old one still recorded.
 
 | The model                          | Reaches you                                           | X2 commands                                                                 |
 | ---------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------- |
-| **answers** the command that asked | the awaited call's return value, and **nowhere else** | `setPrompt`, `setPointer`, `setReferenceImage`                              |
+| **answers** the command that asked | the awaited call's return value — and the **sending** connection's `message` event | `setPrompt`, `setPointer`, `setReferenceImage`                              |
 | **broadcasts** to every connection | the per-message hooks                                 | `state_update`, `generation_started`, `generation_stopped`                  |
-| answers with **nothing**           | the await is a completion barrier and no more         | `reset`, `setPointerX`, `setPointerY`, `setPointerActive`, `setKeepBacklog` |
+| answers with **nothing**           | the await resolves `undefined`; nothing reaches the message event | `reset`, `setPointerX`, `setPointerY`, `setPointerActive`, `setKeepBacklog` |
 
-An answer is correlated to the command that earned it and delivered only to the
-connection that sent it, so it is **not** raised on the message event. A
-`useX2ReferenceImageAccepted`, `useX2PromptAccepted` or `useX2PointerChanged`
-subscription therefore compiles, subscribes, and never fires — read the value off
-the call:
+An answer is **addressed**: the runtime sends it to the one connection whose
+command earned it, correlated by request id. There it resolves the awaited call
+*and* raises the `message` event, so `useX2ReferenceImageAccepted`,
+`useX2PromptAccepted` and `useX2PointerChanged` do fire — but only on this
+connection, and with no way to tell which in-flight call they answer. Read the
+value off the call:
 
 ```tsx
-// ❌ never runs
+// ⚠️ fires, but for any setReferenceImage on this connection — and never on a
+// second client watching the same session.
 useX2ReferenceImageAccepted((msg) => setSize(msg));
-await setReferenceImage({ reference_image: ref });
 
-// ✅ the answer IS the return value
+// ✅ tied to this call
 const accepted = await setReferenceImage({ reference_image: ref });
 if (accepted) setSize({ width: accepted.width, height: accepted.height });
 ```
@@ -207,12 +208,12 @@ The typed client delivers each message type through its own hook; `Workspace` su
 
 | Message                        | Hook                     | What the app does                                                                                          |
 | ------------------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `state_update`                 | `useX2StateUpdate`       | Feeds the reducer. Everything the UI gates on comes from here.                                             |
-| `generation_stopped`           | `useX2GenerationStopped` | Blacks out the stage; bumps the reset nonce only when `reason === "reset"`.                                |
-| ~~`reference_image_accepted`~~ | —                        | **Never arrives here.** It answers `setReferenceImage`; read it off the awaited call.                      |
+| `state_update`                 | `useX2StateUpdate`       | Broadcast. Feeds the reducer. Everything the UI gates on comes from here.                                   |
+| `generation_stopped`           | `useX2GenerationStopped` | Broadcast. Blacks out the stage; bumps the reset nonce only when `reason === "reset"`.                      |
+| `reference_image_accepted`     | `useX2ReferenceImageAccepted` | **Sender-only** — the answer to `setReferenceImage`. Read it off the awaited call instead.             |
 | ~~`command_error`~~            | —                        | **Gone from the schema** as of 1.0.0. A refusal is the command's own error reply, recorded on `lastError`. |
 
-`generation_started` also broadcasts; the app relies on the `state_update` echo instead, which arrives for the same transitions and carries the full picture. `prompt_accepted` and `pointer_changed` are answers rather than broadcasts — their hooks exist but never fire.
+`generation_started` also broadcasts; the app relies on the `state_update` echo instead, which arrives for the same transitions and carries the full picture. `prompt_accepted` and `pointer_changed` are answers, so their hooks fire only on the connection that sent the command — the app reads both off the awaited call.
 
 Keep message handling centralized in `Workspace` — scattering per-message hooks across leaf components makes ordering unobvious.
 

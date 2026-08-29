@@ -50,7 +50,7 @@ export function ModeInput({
   };
 
   const onStart = () => {
-    startGeneration({ start }).catch(console.error);
+    void startGeneration({ start });
   };
 
   return (

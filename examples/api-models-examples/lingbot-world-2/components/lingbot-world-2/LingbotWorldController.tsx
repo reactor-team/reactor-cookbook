@@ -888,9 +888,7 @@ export function LingbotWorldController({ className }: { className?: string }) {
   // Sync initial rotation speed to backend on connect
   useEffect(() => {
     if (isReady)
-      lw2
-        .setRotationSpeedDeg({ rotation_speed_deg: rotationSpeed })
-        .catch(console.error);
+      void lw2.setRotationSpeedDeg({ rotation_speed_deg: rotationSpeed });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isReady]);
 
@@ -941,7 +939,7 @@ export function LingbotWorldController({ className }: { className?: string }) {
       arrowLooking;
     if (!active) {
       if (poseSentActiveRef.current) {
-        lw2.setCameraPose({ camera_pose: [] }).catch(console.error);
+        void lw2.setCameraPose({ camera_pose: [] });
         poseSentActiveRef.current = false;
       }
       pendingDYawRef.current = 0;
@@ -1004,7 +1002,7 @@ export function LingbotWorldController({ className }: { className?: string }) {
         : uniformCrouchTy;
       camera_pose.push(rx, ry, rz, tx, jumpTy + crouchTy, tz);
     }
-    lw2.setCameraPose({ camera_pose }).catch(console.error);
+    void lw2.setCameraPose({ camera_pose });
     poseSentActiveRef.current = true;
   }, [sendCommand]);
   useEffect(() => {
@@ -1300,9 +1298,7 @@ export function LingbotWorldController({ className }: { className?: string }) {
       if (lastSentMoveLRef.current === next) return;
       lastSentMoveLRef.current = next;
       if (isReadyRef.current)
-        lw2
-          .setMoveLongitudinal({ move_longitudinal: next })
-          .catch(console.error);
+        void lw2.setMoveLongitudinal({ move_longitudinal: next });
     },
     [sendCommand],
   );
@@ -1312,8 +1308,7 @@ export function LingbotWorldController({ className }: { className?: string }) {
       setMoveLat(next);
       if (lastSentMoveLatRef.current === next) return;
       lastSentMoveLatRef.current = next;
-      if (isReadyRef.current)
-        lw2.setMoveLateral({ move_lateral: next }).catch(console.error);
+      if (isReadyRef.current) void lw2.setMoveLateral({ move_lateral: next });
     },
     [sendCommand],
   );
@@ -1911,20 +1906,19 @@ export function LingbotWorldController({ className }: { className?: string }) {
 
   const pushRotationSpeed = (v: number) => {
     setRotationSpeed(v);
-    if (isReady)
-      lw2.setRotationSpeedDeg({ rotation_speed_deg: v }).catch(console.error);
+    if (isReady) void lw2.setRotationSpeedDeg({ rotation_speed_deg: v });
   };
 
   const pushSeed = (v: number) => {
     setSeed(v);
-    if (isReady) lw2.setSeed({ seed: v }).catch(console.error);
+    if (isReady) void lw2.setSeed({ seed: v });
   };
 
   // DiT attention-window selector (auto / small / large).
   const pushAttnWindow = (w: AttnWindow) => {
     if (attnWindow === w) return;
     setAttnWindow(w);
-    if (isReady) lw2.setAttnWindow({ attn_window: w }).catch(console.error);
+    if (isReady) void lw2.setAttnWindow({ attn_window: w });
   };
 
   // KV-cache / RoPE reset mode selector (off / auto / manual).

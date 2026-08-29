@@ -89,4 +89,4 @@ The published docs cover the model itself: the [overview](https://docs.reactor.i
 
 ## Tech stack
 
-Next.js 15 · React 19 · TypeScript · Tailwind v4 · `@reactor-team/js-sdk` · `@reactor-team/ui`
+Next.js 15 · React 19 · TypeScript · Tailwind v4 · [`@reactor-models/x2`](https://www.npmjs.com/package/@reactor-models/x2) (typed SDK) · `@reactor-team/js-sdk` (recording primitives) · `@reactor-team/ui` (design tokens)

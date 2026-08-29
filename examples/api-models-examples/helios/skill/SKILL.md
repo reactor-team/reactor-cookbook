@@ -270,23 +270,33 @@ code reads the answer:
 
 | The model | Reaches you | Helios commands |
 | --- | --- | --- |
-| **answers** the command that asked | the awaited call's return value, and **nowhere else** | `setPrompt`, `setImage`, `setConditioning`, `pause`, `resume`, `rewind`, `saveSnapshot`, `listSnapshots`, `schedulePrompt` |
-| **broadcasts** to every connection on the session | the subscription — `useHeliosState`, `useHeliosCommandError`, `useHeliosChunkComplete`, … | the `state` snapshot, `command_error`, per-chunk progress, `generation_*` lifecycle |
-| answers with **nothing** | the await is a completion barrier and no more | `start`, `reset`, `setSeed`, `setSrScale`, `setImageStrength` |
+| **answers** the command that asked | the awaited call's return value — and the **sending** connection's `message` event | `setPrompt`, `setImage`, `setConditioning`, `pause`, `resume`, `rewind`, `saveSnapshot`, `listSnapshots`, `schedulePrompt` |
+| **broadcasts** to every connection on the session | the subscription — `useHeliosState`, `useHeliosCommandError`, `useHeliosChunkComplete`, … | the `state` snapshot, `command_error`, per-chunk progress, `generation_started`, `rewind_failed` |
+| answers with **nothing** | the await resolves `undefined`; nothing reaches the message event | `start`, `reset`, `setSeed`, `setSrScale`, `setImageStrength` |
 
-An answer is correlated to the command that earned it, so it is delivered to the
-one connection that sent it and is **not** raised on the message event. That means
-a subscription waiting for `image_accepted` or `prompt_accepted` never fires:
+An answer is **addressed**: the runtime sends it to the one connection whose
+command earned it, correlated by request id. On that connection it arrives twice
+over — it resolves the awaited call, and the same frame also raises the `message`
+event, so a typed hook for an answer does fire. No other connection in the session
+sees it at all.
+
+So read the answer off the await, not off a hook — not because the hook is dead,
+but because the await is tied to **your** call:
 
 ```tsx
-// ❌ compiles, subscribes, and never runs
+// ⚠️ fires, but not usefully: this handler sees the answer to any setImage
+// on this connection, with no way to tell which call it belongs to — and on a
+// second client it never fires at all.
 useHeliosImageAccepted((msg) => setDimensions(msg));
-await setImage({ image: ref });
 
-// ✅ the answer IS the return value
+// ✅ tied to this call, and it tells you the handler finished
 const accepted = await setImage({ image: ref });
 if (accepted) setDimensions(accepted);
 ```
+
+The corollary matters for multi-client sessions: anything every client has to
+agree on must **broadcast**. That is what the `state` snapshot is for — never
+build shared UI state out of answers.
 
 Awaiting a command that answers with nothing is still worth doing. The runtime
 acknowledges every correlated command once its handler has run, so a resolved
@@ -353,16 +363,24 @@ error during the await can still false-positive.
 
 `@reactor-models/helios` ships one typed subscription hook per message:
 
-| Hook                                                | Purpose                                                                                                                                                                                                                                                                                                                                                   |
-| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `useHeliosState(handler)`                           | The state snapshot. **Use this; almost everything you need is here.**                                                                                                                                                                                                                                                                                     |
-| `useHeliosCommandError(handler)`                    | A command was rejected (bad preconditions, bad input). Render this somewhere visible.                                                                                                                                                                                                                                                                     |
-| ~~`useHeliosImageAccepted`~~                         | **Never fires.** `image_accepted` answers `setImage` instead of being broadcast — read it off the awaited call. The hook is generated for every declared message, so it still exists and still compiles.                                                                                                                                                    |
-| ~~`useHeliosPromptAccepted`~~                        | **Never fires.** Same reason: `prompt_accepted` answers `setPrompt`.                                                                                                                                                                                                                                                                                       |
-| `useHeliosChunkComplete(handler)`                   | One chunk finished generating. Useful for progress sounds, telemetry.                                                                                                                                                                                                                                                                                     |
-| `useHeliosGenerationStarted` / `Paused` / `Resumed` | Lifecycle transitions. Useful for one-shot reactions (toasts, sounds), but **don't aggregate these into your own state** — read the snapshot instead.                                                                                                                                                                                                     |
-| `useHeliosMessage(handler)`                         | Catch-all over the typed discriminated union. Useful for devtools / logging.                                                                                                                                                                                                                                                                              |
-| ~~`useHeliosConditionsReady`~~                       | **Never fires.** `conditions_ready` answers `setConditioning`; the awaited call carries the `has_prompt` / `has_image` flags.                                                                                                                                                                                                                               |
+Whether a hook fires on **every** connection or only on the one that sent the
+command depends on how the model produced the message — see the table above.
+Helios splits three ways, and the split is worth knowing before you rely on a
+hook to keep a second client in step:
+
+| Hook                                                              | Reaches                             | Purpose                                                                                                                                                            |
+| ----------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `useHeliosState(handler)`                                         | every connection                    | The state snapshot. **Use this; almost everything you need is here.**                                                                                              |
+| `useHeliosCommandError(handler)`                                  | every connection                    | A command was rejected (bad preconditions, bad input). Render this somewhere visible.                                                                              |
+| `useHeliosChunkComplete(handler)`                                 | every connection                    | One chunk finished generating. Useful for progress sounds, telemetry.                                                                                              |
+| `useHeliosGenerationStarted(handler)`                             | every connection                    | Generation began. Useful for a one-shot reaction, but **don't aggregate it into your own state** — read the snapshot instead.                                       |
+| `useHeliosRewindFailed(handler)`                                  | every connection                    | How `rewind` and `saveSnapshot` report failure — they broadcast this rather than answering with it.                                                                 |
+| `useHeliosConditionsReady(handler)`                               | every connection, **and** the sender | Broadcast by `setPrompt` and `setImage` after each commits; **also** the answer to `setConditioning`. Both paths are live.                                          |
+| `useHeliosPromptAccepted(handler)`                                | every connection, **and** the sender | Broadcast by `setConditioning` (which commits a prompt on the way to its own answer); **also** the answer to `setPrompt` / `schedulePrompt`.                        |
+| `useHeliosImageAccepted(handler)`                                 | every connection, **and** the sender | Broadcast by `setConditioning`; **also** the answer to `setImage`.                                                                                                 |
+| `useHeliosGenerationPaused` / `Resumed`                           | the sender only                     | Answers to `pause` / `resume`. A second client never sees them — gate shared UI on `snapshot.paused` instead.                                                       |
+| `useHeliosRewindComplete`, `useHeliosSnapshotSaved`, `useHeliosSnapshotList` | the sender only          | Answers to `rewind`, `saveSnapshot`, `listSnapshots`. Read them off the awaited call; the hook only ever fires for a command this connection sent.                  |
+| `useHeliosMessage(handler)`                                       | both                                | Catch-all over the typed discriminated union. Useful for devtools / logging.                                                                                       |
 
 ### Always surface `command_error`
 

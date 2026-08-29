@@ -46,6 +46,8 @@ which is the same split every other example in this repo uses.
 > `reactor/ltx2` first. Ask the Reactor team; a `connect` that 404s with
 > `model not found` is what missing access looks like.
 
+> **Start a standalone project:** `npx create-reactor-app my-app --model=ltx2` scaffolds this example into a fresh app — no clone needed. The steps below are for running it in-place from a monorepo checkout.
+
 ```bash
 cp .env.example .env.local   # add your REACTOR_API_KEY
 pnpm install

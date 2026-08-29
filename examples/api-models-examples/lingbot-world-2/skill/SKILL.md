@@ -163,17 +163,18 @@ The controller subscribes once with the catch-all `useLingbotWorld2Message` and 
 | Message                                                | What it means / what the app does with it                                                                                                                                         |
 | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `state`                                                | Periodic full snapshot: `has_prompt`, `has_image`, `started`, `running`, `paused`, `camera_pose_active`. Mirrors into local state.                                                |
-| ~~`prompt_accepted` / `image_accepted`~~               | **Never arrive here.** Both answer their command instead — read them off the awaited `setPrompt` / `setImage`. `image_accepted` carries the accepted `width` / `height`.           |
-| ~~`conditions_ready`~~                                 | **Never arrives here** for the same reason. The `state` snapshot carries the same `has_prompt` / `has_image` picture and does broadcast.                                          |
+| `conditions_ready`                                     | Broadcast by `set_prompt` and `set_image` once each commits, so it reaches every connection. The `state` snapshot carries the same `has_prompt` / `has_image` picture.             |
 | `generation_started`                                   | Generation began; carries `chunk_num`.                                                                                                                                            |
 | `chunk_complete`                                       | **The heartbeat of the live phase.** Carries `chunk_index` and `active_action`. The app advances jump arcs, consumes crouch dips, and sends the next `set_camera_pose` from here. |
-| `generation_paused` / `resumed` / `complete` / `reset` | Lifecycle transitions. `generation_reset` is where the app clears all per-session scene state.                                                                                    |
+| `generation_complete`                                  | The run finished on its own.                                                                                                                                                      |
 | `command_error`                                        | A command was rejected. **Always surfaced** — the app shows it as a 4-second toast (`errorToast`).                                                                                |
+| `prompt_accepted` / `image_accepted`                   | Answers to `set_prompt` / `set_image`, so they reach **only the connection that sent the command** — read them off the awaited call. `image_accepted` carries the accepted `width` / `height`. |
+| `generation_paused` / `resumed` / `reset`              | Answers to `pause` / `resume` / `reset`, so likewise **sender-only**. Clear per-session scene state off the resolved `reset()` call rather than waiting for the message.           |
 
 Two rules to keep when extending:
 
 1. **Clear everything on disconnect.** The controller has a `useEffect` on `status === "disconnected"` that resets every piece of session state — held keys, arcs, refs, previews. If you add new session state (a new ref, a new held-input), add its reset there too, or the next session starts haunted by the last one.
-2. **Surface `command_error` for new commands automatically.** The existing toast handles any command. Don't swallow errors in your own `catch(console.error)` without also letting the toast fire.
+2. **Surface `command_error` for new commands automatically.** The existing toast handles any command, because `command_error` broadcasts. Don't reach for `try/catch` or `.catch()` around a command: they never reject, so a `catch` is dead code — the toast is the error path. A fire-and-forget command is written `void lw2.setSeed({ seed })`.
 
 ## Sending commands — where the result arrives
 
@@ -186,15 +187,17 @@ Which way the model answers decides where your code reads the result:
 
 | The model | Reaches you | LingBot World 2 commands |
 | --- | --- | --- |
-| **answers** the command that asked | the awaited call's return value, and **nowhere else** | `setPrompt`, `setImage`, `pause`, `resume`, `reset` |
-| **broadcasts** to every connection | `useLingbotWorld2Message` and the per-message hooks | `state`, `chunk_complete`, `command_error`, `generation_started` / `complete` |
-| answers with **nothing** | the await is a completion barrier and no more | `start`, and the movement / camera-pose setters |
+| **answers** the command that asked | the awaited call's return value — and the **sending** connection's `message` event | `setPrompt`, `setImage`, `pause`, `resume`, `reset` |
+| **broadcasts** to every connection | `useLingbotWorld2Message` and the per-message hooks | `state`, `chunk_complete`, `command_error`, `conditions_ready`, `generation_started` / `complete` |
+| answers with **nothing** | the await resolves `undefined`; nothing reaches the message event | `start`, `triggerKvCacheReset`, and the movement / camera-pose / knob setters |
 
-An answer is correlated to the command that earned it, so it reaches the one
-connection that sent it and is **not** raised on the message event. A `msg.type
-=== "image_accepted"` branch in the catch-all listener therefore never runs, and a
-promise parked for it never settles — with no timeout, that is a button that does
-nothing.
+An answer is **addressed**: the runtime sends it to the one connection whose
+command earned it, correlated by request id. On that connection it resolves the
+awaited call *and* raises the `message` event, so a `msg.type ===
+"image_accepted"` branch in the catch-all listener does run. It just runs only
+here — a second client in the session never sees it — and it cannot tell you which
+of several in-flight `setImage` calls it belongs to. Read the answer off the await
+instead, and keep the listener for what the model genuinely broadcasts.
 
 The canonical start flow lives in `applyScene()`:
 

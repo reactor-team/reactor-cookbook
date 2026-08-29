@@ -340,11 +340,15 @@ function Workspace() {
       try {
         const ref = await uploadFile(file, { name });
         const errorBefore = lastErrorRef.current;
-        const accepted = await sendAvatarImage({ avatar_image: ref });
-        if (accepted) return true;
-        if (lastErrorRef.current === errorBefore) {
-          // No new error, no reply: the model refused, and the
-          // command_error handler has already said why.
+        const reply = await sendAvatarImage({ avatar_image: ref });
+        // This model answers a refusal with `command_error` on the same call
+        // rather than with nothing, so a truthy reply is not yet a
+        // confirmation — narrow on the type. The generated signature only
+        // names the success message, so it cannot make this distinction for us.
+        if (reply && reply.type === "avatar_image_accepted") return true;
+        if (reply || lastErrorRef.current === errorBefore) {
+          // Either the model refused outright (`command_error`, already
+          // surfaced by its handler) or it acknowledged without confirming.
           return false;
         }
         setNotice({

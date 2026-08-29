@@ -192,7 +192,9 @@ snapshot can't clobber half-typed input). Those drafts would survive the reset.
 The nonce that keys `<TakePanel>` is bumped to remount it and drop the drafts with
 the state they mirrored — and it is bumped from the **resolved `reset()` call**,
 not from `useLtx2GenerationReset`. `generation_reset` answers `reset`, so that
-hook never fires; a listener there would leave the drafts in place.
+hook only ever fires on the connection that sent it; driving cleanup from the
+resolved await keeps it tied to the call that caused it, and keeps working if a
+second client attaches.
 
 ## Where a result arrives: the call, or a subscription
 
@@ -204,12 +206,32 @@ that handler answered with. Which way the model answers decides where you read i
 
 | The model | Reaches you | LTX commands |
 | --- | --- | --- |
-| **answers** the command that asked | the awaited call's return value, and **nowhere else** | `setAvatarImage`, `setScript`, `setPrompt`, `setWpm`, `setSeed`, `setDurationSeconds`, `pause`, `resume`, `reset` |
-| **broadcasts** to every connection | the per-message hooks | `state_update`, `command_error`, `generation_started` / `failed`, `window_progress` |
-| answers with **nothing** | the await is a completion barrier and no more | `start`, `stop` |
+| **answers** the command that asked | the awaited call's return value — and the **sending** connection's `message` event | `setAvatarImage`, `setScript`, `setPrompt`, `setWpm`, `setSeed`, `setDurationSeconds`, `pause`, `resume`, `reset` |
+| **broadcasts** to every connection | the per-message hooks | `state_update`, `generation_started` / `stopped` / `failed` / `complete`, `window_progress` |
+| answers with **nothing** | the await resolves `undefined`; nothing reaches the message event | `start`, `stop` |
 
-An answer is correlated to the command that earned it, so it reaches the one
-connection that sent it and is **not** raised on the message event.
+An answer is **addressed**: it goes to the one connection whose command earned it,
+correlated by request id. There it resolves the awaited call *and* raises the
+`message` event, so `useLtx2ScriptAccepted` and friends do fire — but only on this
+connection, and with no way to tell which in-flight call they answer.
+
+### `command_error` is an answer on this model, not a broadcast
+
+**LTX is the exception among the API models, and it changes how you detect a
+refusal.** Eight of its handlers — `setAvatarImage`, `setScript`, `setWpm`,
+`setDurationSeconds`, `pause`, `resume`, `start`, `stop` — report a refusal by
+*returning* `command_error` rather than broadcasting it. Three consequences:
+
+1. **A refusal resolves the call truthy.** It is a `command_error` message, not
+   `undefined`. `if (reply)` is therefore not a confirmation — narrow on
+   `reply.type`, the way `setAvatarImage` in `Ltx2App.tsx` does. The generated
+   signature names only the success message (`Ltx2ScriptAcceptedMessage |
+   undefined`), so TypeScript cannot catch this for you.
+2. **`useLtx2CommandError` fires on the sending connection only.** It is an
+   answer, so a second client watching the same session never learns the command
+   was refused.
+3. **`start` and `stop` are typed `Promise<undefined>` but can resolve with a
+   `command_error`.** Treat a truthy value from either as a refusal.
 
 ### `set_avatar_image` is why this matters most
 
@@ -239,9 +261,11 @@ Two things follow, and both are load-bearing:
    not an edge**, and this model emits a snapshot after every window, so an
    unguarded predicate resolved instantly against a snapshot describing the
    *previous* face. All of that existed to answer "has the handler run yet", which
-   the await now answers directly. The registry is gone; do not reintroduce it, and
-   do not park a promise on `avatar_image_accepted` — it is an answer now, so
-   nothing broadcasts it and the promise never settles.
+   the await now answers directly. The registry is gone; do not reintroduce it.
+   Parking a promise on `avatar_image_accepted` would technically resolve — an
+   answer does raise the sending connection's `message` event — but it resolves
+   for *any* `setAvatarImage` on this connection, which is the ambiguity the
+   registry's guards existed to paper over. The await is tied to one call.
 2. **Never `start` on an unconfirmed image.** Awaiting is only half of it —
    something has to hold Start for the length of the await. `setAvatarImage()`
    raises `imagePending` itself, in a `try/finally`, rather than leaving each call
@@ -258,12 +282,19 @@ finish would lower the shared flag while the second is still decoding.
 
 ### Telling a refusal from a bodyless answer
 
-`undefined` means the send failed **or** the handler completed and returned
-nothing. `lastError` is a persistent record that success never clears, so compare
-it across the call rather than reading it bare — only an error that appeared since
-the pre-call snapshot belongs to this call. The app mirrors `lastError` into a ref
-for exactly this, because the store field captured in an async closure is a
-render-time snapshot.
+On this model a resolved call has three possible meanings, not two:
+
+| Resolved value | Meaning |
+| --- | --- |
+| the success message (`reply.type === "…_accepted"`) | confirmed |
+| a `command_error` message (truthy!) | the model refused; `reply.reason` says why |
+| `undefined` | the handler returned nothing, **or** the send never completed |
+
+Only the third case needs `lastError`, and it is a persistent record that success
+never clears — so compare it across the call rather than reading it bare; only an
+error that appeared since the pre-call snapshot belongs to this call. The app
+mirrors `lastError` into a ref for exactly this, because the store field captured
+in an async closure is a render-time snapshot.
 
 ## Time to first frame
 

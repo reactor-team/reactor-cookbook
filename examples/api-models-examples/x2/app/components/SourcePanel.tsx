@@ -80,7 +80,7 @@ export function SourcePanel({
     setPending(value);
     if (pendingTimer.current) clearTimeout(pendingTimer.current);
     pendingTimer.current = setTimeout(() => setPending(null), 4000);
-    setKeepBacklog({ keep_backlog: value }).catch(console.error);
+    void setKeepBacklog({ keep_backlog: value });
   };
 
   const handleModeChange = (m: X2SourceMode) => {
@@ -146,7 +146,7 @@ export function SourcePanel({
             variant="secondary"
             size="sm"
             disabled={!ready}
-            onClick={() => reset().catch(console.error)}
+            onClick={() => reset()}
           >
             Reset
           </Button>
