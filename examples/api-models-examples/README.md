@@ -13,7 +13,7 @@ repointed at this folder.
 
 | Example                                 | Typed SDK                                                                                          | What it demonstrates                                                                                                                                                                                                                                                                                |
 | --------------------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`happy-oyster/`](./happy-oyster) ⚠️     | [`@reactor-models/happy-oyster`](https://www.npmjs.com/package/@reactor-models/happy-oyster)       | **Cannot install until its typed SDK 1.0.0 publishes** (see the folder's README). Interactive world model. Build a world from a prompt (or attach a permanent one), then travel it live: **Adventure** worlds you drive with WASD, **Directing** worlds you steer with text `instruct` plus pause/rewind. Mode-fixed sessions, authoritative `world_state` snapshot.                  |
+| [`happy-oyster/`](./happy-oyster)       | [`@reactor-models/happy-oyster`](https://www.npmjs.com/package/@reactor-models/happy-oyster)       | Interactive world model. Build a world from a prompt (or attach a permanent one), then travel it live: **Adventure** worlds you drive with WASD, **Directing** worlds you steer with text `instruct` plus pause/rewind. Mode-fixed sessions, authoritative `world_state` snapshot.                  |
 | [`helios/`](./helios)                   | [`@reactor-models/helios`](https://www.npmjs.com/package/@reactor-models/helios)                   | Continuous prompt-driven video. Curated text and image scenes, mid-stream prompt hot-swap, atomic `setConditioning({ prompt, image })` for image-to-video, clip capture, design tokens from `@reactor-team/ui`.                                                                                     |
 | [`lingbot/`](./lingbot)                 | [`@reactor-models/lingbot`](https://www.npmjs.com/package/@reactor-models/lingbot)                 | Interactive world model. Pick a starting image, drive the scene with WASD, layer curated dynamic events (rain, fog, …) as live prompt swaps, clip capture.                                                                                                                                          |
 | [`lingbot-world-2/`](./lingbot-world-2) | [`@reactor-models/lingbot-world-2`](https://www.npmjs.com/package/@reactor-models/lingbot-world-2) | Interactive world model driven like a game. Two-axis WASD, per-latent `set_camera_pose` motion (mouse-look, roll, orbit, jump arcs, crouch dips), hold-key world events, a layered prompt workbench, attention-window and KV-cache knobs.                                                           |
@@ -109,11 +109,7 @@ client code:
 | `x2` | declares no `command_error` at all from its 1.0.0 release, so there is no hook. The refusal is the command's own error reply, which the SDK records on `lastError` and raises on the `error` event. |
 
 A refusal is never the awaited value, so `undefined` — not a message with an
-error-ish shape — is what a call site tests for. (`ltx2` releases up to 5.0.1 got
-this wrong: eight handlers returned `command_error` where their annotation
-promised the accepted message, so a refusal resolved truthy and a typed client
-unwrapped it as the success type. Fixed in 5.0.2; the folder's skill notes what to
-do against an older release.)
+error-ish shape — is what a call site tests for.
 
 ## Conventions
 

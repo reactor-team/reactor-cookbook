@@ -221,11 +221,12 @@ learns the reason through `useLtx2CommandError`. That is why `undefined` from a
 reply-declaring command is the case to test for, and why the error banner is a
 subscription rather than something read off a call.
 
-> Requires **ltx2 5.0.2 or newer**. Up to 5.0.1 those eight handlers *returned*
-> `command_error` where their annotation promised the accepted message, so a
-> refusal resolved the call truthy and a typed client unwrapped it as the success
-> type. Against an older release, treat a reply whose `type` is not the expected
-> `…_accepted` as a refusal.
+> This is the contract from **model release 5.0.2** on. Up to 5.0.1 eight
+> handlers *returned* `command_error` where their annotation promised the
+> accepted message, so a refusal resolved the call truthy and a typed client
+> unwrapped it as the success type. If you ever point this app at an older
+> deployment, treat a reply whose `type` is not the expected `…_accepted` as a
+> refusal.
 
 ### `set_avatar_image` is why this matters most
 
