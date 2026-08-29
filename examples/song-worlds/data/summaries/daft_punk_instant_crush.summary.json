@@ -1,0 +1,73 @@
+{
+  "summary": {
+    "songId": "daft_punk_instant_crush_ending_loop",
+    "durationSec": 90,
+    "bpm": 111.11,
+    "beatConfidence": 0.94,
+    "lowConfidenceRhythm": false,
+    "downbeatPhaseUncertain": false,
+    "keyEstimate": "A# minor",
+    "keyMode": "minor",
+    "harmonicCharacter": "90% minor · D#m, A#m, F#7, G#7",
+    "brightnessLabel": "bright",
+    "harmonicPercussiveBalance": "harmonic-dominant",
+    "spectralMotion": "restless",
+    "spectralWidth": "wide",
+    "integratedLufs": -14,
+    "dynamicRangeLufs": 1.42,
+    "labelRegime": "semantic",
+    "structureBackend": "songformer_hf",
+    "sectionsDerivedFromEnergy": false,
+    "sections": [
+      {
+        "start": 0,
+        "end": 18.96,
+        "label": "verse",
+        "energyMean": 0.522,
+        "energyPeak": 1,
+        "brightness": 0.405,
+        "onsetRate": 3.4,
+        "trend": "steady",
+        "dominance": "vocal-led"
+      },
+      {
+        "start": 18.96,
+        "end": 36.36,
+        "label": "inst",
+        "energyMean": 0.424,
+        "energyPeak": 1,
+        "brightness": 0.352,
+        "onsetRate": 4.6,
+        "trend": "steady",
+        "dominance": "vocal-led"
+      },
+      {
+        "start": 36.36,
+        "end": 53.76,
+        "label": "inst",
+        "energyMean": 0.427,
+        "energyPeak": 1,
+        "brightness": 0.357,
+        "onsetRate": 4.2,
+        "trend": "steady",
+        "dominance": "vocal-led"
+      },
+      {
+        "start": 53.76,
+        "end": 90,
+        "label": "inst",
+        "energyMean": 0.416,
+        "energyPeak": 1,
+        "brightness": 0.351,
+        "onsetRate": 4.4,
+        "trend": "steady",
+        "dominance": "vocal-led"
+      }
+    ],
+    "notableMoments": [
+      { "time": 1, "kind": "energy-jump", "strength": 0.32 },
+      { "time": 9.5, "kind": "energy-jump", "strength": 0.34 },
+      { "time": 41.92, "kind": "loudest", "strength": 1 }
+    ]
+  }
+}
