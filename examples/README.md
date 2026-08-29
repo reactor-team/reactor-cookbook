@@ -7,3 +7,6 @@ customization guide.
 - [`world-model-arcade`](./world-model-arcade): a navigable 3D arcade that turns
   LingBot World 2 into seven controller-first games with shared input and HUD
   systems.
+- [`song-worlds`](./song-worlds): turns an uploaded song into a generative world
+  composed once offline and streamed live with Helios or LingBot World 2, driven
+  by a fixed timestamped score rather than live decisions.
