@@ -12,7 +12,7 @@ import { SnapClip } from "./components/SnapClip";
 import { Video } from "./components/Video";
 
 // JWT resolver passed to <LongliveV2Provider jwtToken>. js-sdk 3.x accepts a static
-// string or a resolver; the SDK calls a resolver on every Coordinator HTTP hop
+// string or a resolver; the SDK calls a resolver on every Reactor API hop
 // — uploads, clip manifests, ICE refreshes, SDP renegotiation — so a static
 // string would 401 those hops the moment the token ages out.
 //

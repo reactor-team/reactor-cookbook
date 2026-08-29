@@ -4,7 +4,7 @@
 // so they read this single value.
 //
 // ltx2 runs on production. It is not listed publicly yet, so the key's account
-// still needs to be granted access, but the coordinator is the normal one.
+// still needs to be granted access, but the API endpoint is the normal one.
 // Override with NEXT_PUBLIC_REACTOR_API_URL.
 export const REACTOR_API_URL =
   process.env.NEXT_PUBLIC_REACTOR_API_URL || "https://api.reactor.inc";

@@ -597,7 +597,7 @@ When you scaffold a new component, ask: "Does this depend on Helios-specific eve
 
 The context-inheritance only works for components rendered **inside** the provider subtree. `SnapClip`'s modal is a normal child of the panel, so it inherits the resolver fine.
 
-The trap is rendering clip UI through a React portal whose host lives _outside_ `<HeliosProvider>` — most commonly a Sonner `<Toaster />` mounted in `app/layout.tsx` as a sibling of `{children}`. The custom-toast tree has no `ReactorContext` in scope, the fallback returns `undefined`, and Coordinator answers the clip download with:
+The trap is rendering clip UI through a React portal whose host lives _outside_ `<HeliosProvider>` — most commonly a Sonner `<Toaster />` mounted in `app/layout.tsx` as a sibling of `{children}`. The custom-toast tree has no `ReactorContext` in scope, the fallback returns `undefined`, and the Reactor API answers the clip download with:
 
 ```
 {"error":"Missing Authorization header"}

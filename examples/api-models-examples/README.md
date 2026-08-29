@@ -100,14 +100,20 @@ per-model, so each `skill/SKILL.md` carries the table for its own model. Check t
 table before porting a pattern between folders — how one model reports a refusal is
 not evidence for another.
 
-**How a refusal reaches you, by model.** Worth reading once, because the three
-shapes need different client code:
+**How a refusal reaches you, by model.** Two shapes, and they need different
+client code:
 
 | Models | A refused command… |
 | --- | --- |
-| `helios`, `lingbot`, `lingbot-world-2`, `longlive-v2`, `sana-streaming` | resolves the call `undefined` and broadcasts `command_error` to every connection. Surface that hook. |
-| `ltx2` | **resolves the call with a `command_error` message — truthy.** `if (reply)` is not a confirmation; narrow on `reply.type`. Its generated signatures name only the success message, so TypeScript cannot catch this. |
+| `helios`, `lingbot`, `lingbot-world-2`, `longlive-v2`, `ltx2`, `sana-streaming` | resolves the call `undefined` and broadcasts `command_error` to every connection. Surface that hook. |
 | `x2` | declares no `command_error` at all from its 1.0.0 release, so there is no hook. The refusal is the command's own error reply, which the SDK records on `lastError` and raises on the `error` event. |
+
+A refusal is never the awaited value, so `undefined` — not a message with an
+error-ish shape — is what a call site tests for. (`ltx2` releases up to 5.0.1 got
+this wrong: eight handlers returned `command_error` where their annotation
+promised the accepted message, so a refusal resolved truthy and a typed client
+unwrapped it as the success type. Fixed in 5.0.2; the folder's skill notes what to
+do against an older release.)
 
 ## Conventions
 

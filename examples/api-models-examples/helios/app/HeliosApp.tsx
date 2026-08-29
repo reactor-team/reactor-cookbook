@@ -15,7 +15,7 @@ import { Video } from "./components/Video";
 //
 // `@reactor-team/js-sdk` 3.x takes a `JwtSource` — a static string or a
 // resolver. Pass the resolver so the SDK can mint a fresh JWT on every
-// Coordinator HTTP hop — uploads, clip manifests, ICE refreshes, SDP
+// Reactor API hop — uploads, clip manifests, ICE refreshes, SDP
 // renegotiation. With a static string those hops 401 the moment the
 // token ages out.
 //

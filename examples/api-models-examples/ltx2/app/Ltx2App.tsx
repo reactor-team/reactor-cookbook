@@ -66,11 +66,11 @@ import { TakePanel } from "./components/TakePanel";
 // be operated by the token that created it. This route mints an account-scoped
 // token, so here it is one round trip instead of many.)
 //
-// Owning the cache also settles what the coordinator URL used to be a query
-// parameter for. Tokens are signed per-coordinator, and the parameter existed
+// Owning the cache also settles what the API URL used to be a query
+// parameter for. Tokens are signed per-environment, and the parameter existed
 // only to keep the browser from replaying one environment's JWT at another.
 // This memo lives for one page load, so it cannot outlive a rebuild that
-// changes the coordinator.
+// changes the API endpoint.
 const TOKEN_REFRESH_SKEW_MS = 60_000;
 let cachedToken: { jwt: string; expiresAtMs: number } | null = null;
 let inflightToken: Promise<string> | null = null;
@@ -116,7 +116,7 @@ export function Ltx2App() {
       // forced an "enable audio" overlay onto the first frame instead.
       //
       // maxAttempts widens the SDK's SDP-answer polling window (default 6
-      // attempts ≈ 13s) so connect() waits as long as the coordinator will
+      // attempts ≈ 13s) so connect() waits as long as the Reactor API will
       // hold a pending connection (~60s) before giving up. A session
       // scheduled onto a pod that takes longer than that to come up still
       // fails; pressing Connect again opens a fresh window.
@@ -340,15 +340,11 @@ function Workspace() {
       try {
         const ref = await uploadFile(file, { name });
         const errorBefore = lastErrorRef.current;
-        const reply = await sendAvatarImage({ avatar_image: ref });
-        // This model answers a refusal with `command_error` on the same call
-        // rather than with nothing, so a truthy reply is not yet a
-        // confirmation — narrow on the type. The generated signature only
-        // names the success message, so it cannot make this distinction for us.
-        if (reply && reply.type === "avatar_image_accepted") return true;
-        if (reply || lastErrorRef.current === errorBefore) {
-          // Either the model refused outright (`command_error`, already
-          // surfaced by its handler) or it acknowledged without confirming.
+        const accepted = await sendAvatarImage({ avatar_image: ref });
+        if (accepted) return true;
+        if (lastErrorRef.current === errorBefore) {
+          // No new error, no reply: the model refused, and the
+          // command_error handler has already said why.
           return false;
         }
         setNotice({

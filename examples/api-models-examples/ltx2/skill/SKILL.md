@@ -207,7 +207,7 @@ that handler answered with. Which way the model answers decides where you read i
 | The model | Reaches you | LTX commands |
 | --- | --- | --- |
 | **answers** the command that asked | the awaited call's return value — and the **sending** connection's `message` event | `setAvatarImage`, `setScript`, `setPrompt`, `setWpm`, `setSeed`, `setDurationSeconds`, `pause`, `resume`, `reset` |
-| **broadcasts** to every connection | the per-message hooks | `state_update`, `generation_started` / `stopped` / `failed` / `complete`, `window_progress` |
+| **broadcasts** to every connection | the per-message hooks | `state_update`, `command_error`, `generation_started` / `stopped` / `failed` / `complete`, `window_progress` |
 | answers with **nothing** | the await resolves `undefined`; nothing reaches the message event | `start`, `stop` |
 
 An answer is **addressed**: it goes to the one connection whose command earned it,
@@ -215,23 +215,17 @@ correlated by request id. There it resolves the awaited call *and* raises the
 `message` event, so `useLtx2ScriptAccepted` and friends do fire — but only on this
 connection, and with no way to tell which in-flight call they answer.
 
-### `command_error` is an answer on this model, not a broadcast
+A **refusal is not an answer.** The handler broadcasts `command_error` and returns
+without a value, so the awaited call resolves `undefined` and every connection
+learns the reason through `useLtx2CommandError`. That is why `undefined` from a
+reply-declaring command is the case to test for, and why the error banner is a
+subscription rather than something read off a call.
 
-**LTX is the exception among the API models, and it changes how you detect a
-refusal.** Eight of its handlers — `setAvatarImage`, `setScript`, `setWpm`,
-`setDurationSeconds`, `pause`, `resume`, `start`, `stop` — report a refusal by
-*returning* `command_error` rather than broadcasting it. Three consequences:
-
-1. **A refusal resolves the call truthy.** It is a `command_error` message, not
-   `undefined`. `if (reply)` is therefore not a confirmation — narrow on
-   `reply.type`, the way `setAvatarImage` in `Ltx2App.tsx` does. The generated
-   signature names only the success message (`Ltx2ScriptAcceptedMessage |
-   undefined`), so TypeScript cannot catch this for you.
-2. **`useLtx2CommandError` fires on the sending connection only.** It is an
-   answer, so a second client watching the same session never learns the command
-   was refused.
-3. **`start` and `stop` are typed `Promise<undefined>` but can resolve with a
-   `command_error`.** Treat a truthy value from either as a refusal.
+> Requires **ltx2 5.0.2 or newer**. Up to 5.0.1 those eight handlers *returned*
+> `command_error` where their annotation promised the accepted message, so a
+> refusal resolved the call truthy and a typed client unwrapped it as the success
+> type. Against an older release, treat a reply whose `type` is not the expected
+> `…_accepted` as a refusal.
 
 ### `set_avatar_image` is why this matters most
 
@@ -282,19 +276,13 @@ finish would lower the shared flag while the second is still decoding.
 
 ### Telling a refusal from a bodyless answer
 
-On this model a resolved call has three possible meanings, not two:
-
-| Resolved value | Meaning |
-| --- | --- |
-| the success message (`reply.type === "…_accepted"`) | confirmed |
-| a `command_error` message (truthy!) | the model refused; `reply.reason` says why |
-| `undefined` | the handler returned nothing, **or** the send never completed |
-
-Only the third case needs `lastError`, and it is a persistent record that success
-never clears — so compare it across the call rather than reading it bare; only an
-error that appeared since the pre-call snapshot belongs to this call. The app
-mirrors `lastError` into a ref for exactly this, because the store field captured
-in an async closure is a render-time snapshot.
+`undefined` means the model refused, **or** the send never completed. Telling them
+apart needs `lastError`, which is a persistent record that success never clears —
+so compare it across the call rather than reading it bare; only an error that
+appeared since the pre-call snapshot belongs to this call. The app mirrors
+`lastError` into a ref for exactly this, because the store field captured in an
+async closure is a render-time snapshot. When `lastError` did not move, the model
+refused and `command_error` already carries the reason.
 
 ## Time to first frame
 

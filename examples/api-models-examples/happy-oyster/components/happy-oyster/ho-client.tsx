@@ -168,7 +168,7 @@ export function LiveClientProvider({
 
 // Session-level failures (no GPU capacity, bad key, network) belong next to
 // the Connect button, not in the console. 429 is the one users actually hit:
-// the Coordinator had no free GPU for the session.
+// Reactor had no free GPU for the session.
 function describeError(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : String(cause);
   if (/\b429\b/.test(message))
