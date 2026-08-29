@@ -18,13 +18,37 @@ The app does not use the generated provider, because that provider fixes the
 model name at generation time. It wraps the SDK's own `ReactorProvider` instead,
 so the name can come from the environment.
 
+## A command answers with a message
+
+Every command this model declares returns one: `set_image` and `random_image`
+answer with `image_selected`, `set_prompt` with `prompt_queued`, the six camera
+axes with `camera_motion_changed`, `reset` with `rollout_reset_queued`. The
+generated wrappers are typed from the schema, so the answer is the awaited
+call's value:
+
+```ts
+const image = await model.setImage({ image: reference });
+if (image) console.log(image.filename);
+```
+
+An answer is addressed to the connection that asked, so read it there rather
+than through the matching message hook — the hook fires on this connection too,
+but it cannot say which call it answers and it never fires for a second viewer.
+Hooks are for what the model genuinely broadcasts: `state_update`, and
+`rollout_reset_queued` when the rollout loop restarts on its own (which is why
+that one message arrives both ways).
+
 ## Regenerating
 
-Start the model, read its schema, and generate from that:
+The schema can be rendered from the model's source without weights or a GPU,
+which is the quickest way to refresh these files after changing the Python
+contract:
 
 ```sh
-# from the example root, with the model running
-curl -s localhost:8080/schema -o /tmp/alayaworld-schema.json
+# from this model's root (the folder holding reactor.yaml)
+uv run --with 'reactor-runtime==3.2.5' --with numpy --with pillow \
+  python -m reactor_runtime.schema --path . --version v0.1.0 \
+  --out /tmp/alayaworld-schema.json
 
 npx @reactor-team/codegen \
   --schema /tmp/alayaworld-schema.json \
@@ -32,5 +56,8 @@ npx @reactor-team/codegen \
   --output demo/lib/alayaworld/client.ts
 ```
 
-`MODEL_VERSION` in the generated file reflects what the running container
-reports, which is a placeholder for a model that has not been released.
+Pin the runtime to whatever `build.runtime_version` in `reactor.yaml` names, and
+pass `--version` the release tag from `model.version`, since that is what the
+generator stamps into `MODEL_VERSION`. Reading the schema off a running
+container works too — `curl -fsS localhost:8080/schema` — and is worth doing
+when you want the contract exactly as deployed rather than as written.

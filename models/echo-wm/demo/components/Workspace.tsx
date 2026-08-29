@@ -6,7 +6,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   useEchoWmFlash,
   useEchoWmFlashAutomaticResetQueued,
-  useEchoWmFlashImageSelected,
   useEchoWmFlashStateUpdate,
 } from "@/lib/echo_wm/client.react";
 import type { DemoConfig } from "@/lib/config";
@@ -45,15 +44,8 @@ export function Workspace({ config }: { config: DemoConfig }) {
   // actually do next, rather than guessing from the commands this tab sent.
   useEchoWmFlashStateUpdate(setWorld);
 
-  useEchoWmFlashImageSelected((message) => {
-    notify(
-      "info",
-      message.source === "built_in"
-        ? `Loaded built-in scene ${message.filename}`
-        : `Loaded ${message.filename}`,
-    );
-  });
-
+  // A distinct message from anything a command answers with: the rollout loop
+  // broadcasts it when it restarts on its own, so every viewer sees it.
   useEchoWmFlashAutomaticResetQueued((message) => {
     notify(
       "info",
