@@ -40,6 +40,15 @@ _WORKER_POLL_SECONDS = 0.1
 # and its only job is to be a syntactically ordinary prompt.
 WARMUP_PROMPT = "A slow cinematic shot of sunlight moving across a quiet room."
 
+# Every prompt is padded (or token-truncated) to exactly this many tokens
+# before it reaches the engine. Regional torch.compile is keyed on the packed
+# sequence length, which includes the prompt's token count, so a novel prompt
+# length would otherwise recompile — measured at ~23 s against ~15 s for the
+# clip itself. One fixed length means one compiled shape, captured by the
+# warm-up and reused by every clip. 256 comfortably holds the 800-character
+# prompt cap.
+PROMPT_TOKENS = 256
+
 
 class ClipJob:
     """The handle to one submitted build: its inputs, outcome, and completion.
@@ -104,6 +113,7 @@ class FastH3Backend:
         from fastvideo import VideoGenerator
 
         self.generator = VideoGenerator.from_config(self._generator_config())
+        self._load_tokenizer()
 
         self._worker = threading.Thread(
             target=self._worker_loop, name="fasth3-generation", daemon=True
@@ -112,6 +122,48 @@ class FastH3Backend:
         self._preload_native_imports()
         self._run_blocking(self._warmup)
         logger.info("fasth3 backend loaded")
+
+    def _load_tokenizer(self) -> None:
+        """Load the bundle's tokenizer and calibrate the one-token pad filler.
+
+        Padding must land on an exact token count, so the filler is verified to
+        cost exactly one token at load rather than assumed.
+        """
+        from transformers import AutoTokenizer
+
+        self._tokenizer = AutoTokenizer.from_pretrained(str(self._model_path / "tokenizer"))
+        for candidate in (" .", ".", " a"):
+            base = len(self._tokenizer.encode(WARMUP_PROMPT, add_special_tokens=False))
+            padded = len(
+                self._tokenizer.encode(WARMUP_PROMPT + candidate, add_special_tokens=False)
+            )
+            if padded == base + 1:
+                self._pad_filler = candidate
+                return
+        raise RuntimeError("no single-token pad filler found for this tokenizer")
+
+    def _pad_prompt(self, prompt: str) -> str:
+        """Return *prompt* at exactly ``PROMPT_TOKENS`` tokens.
+
+        Shorter prompts gain trailing filler tokens; a longer one (past the
+        800-character cap only in pathological tokenizations) is truncated at
+        the token boundary. The client-facing prompt — what `ClipInfo` echoes —
+        is the original; only the engine sees this form.
+        """
+        encode = lambda text: len(self._tokenizer.encode(text, add_special_tokens=False))  # noqa: E731
+        ids = self._tokenizer.encode(prompt, add_special_tokens=False)
+        if ids and len(ids) >= PROMPT_TOKENS:
+            return self._tokenizer.decode(ids[:PROMPT_TOKENS])
+        padded = prompt + self._pad_filler * (PROMPT_TOKENS - len(ids))
+        # Filler cost is calibrated, but a prompt's own tail can merge with the
+        # first filler token; correct by measurement rather than assumption.
+        while encode(padded) > PROMPT_TOKENS:
+            padded = padded[: -len(self._pad_filler)]
+        while encode(padded) < PROMPT_TOKENS:
+            padded += self._pad_filler
+        if encode(padded) != PROMPT_TOKENS:
+            logger.warning(f"prompt padded to {encode(padded)} tokens, not {PROMPT_TOKENS}")
+        return padded
 
     @staticmethod
     def _preload_native_imports() -> None:
@@ -358,7 +410,9 @@ class FastH3Backend:
         from fastvideo.api import GenerationRequest, OutputConfig, SamplingConfig
 
         return GenerationRequest(
-            prompt=prompt,
+            # Padded to the fixed token length so one compiled shape serves
+            # every prompt; ClipInfo keeps echoing the original text.
+            prompt=self._pad_prompt(prompt),
             # MiniMax-H3 is guidance-distilled, so there is no negative branch
             # to steer and no CFG pass to pay for.
             negative_prompt="",
