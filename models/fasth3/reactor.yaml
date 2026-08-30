@@ -10,13 +10,16 @@ model:
     90% sparse video attention, builds queued clips in order while playback
     stays a separate, explicit step: enqueue prompts, play any built clip on
     demand, and the stream holds on black in between.
-  # Eight GPUs is load-bearing rather than a performance preference: sequence
-  # parallelism spans all eight, and a 15 s clip builds in 12.88 s on eight
-  # B200s against 15.5 s on four. Only the former keeps a queued prompt
-  # playable in under its own duration.
+  # Four B200s is FastVideo's tested default for this checkpoint. Builds run
+  # slightly slower than the clip plays (a 15 s clip in ~15.5 s against
+  # ~12.9 s on eight), which the queue absorbs: playback is explicit and clips
+  # are pre-built, so GPU count only moves the enqueue-to-ready wait. The count
+  # must divide H3's 56 attention heads (1, 2, 4, 7, 8 …), and each rank holds
+  # its own ~63 GB text encoder plus a 66/N GB transformer shard, so fewer
+  # than four wants offloading or very large GPUs.
   #
   # cpu and memory are an opening estimate. With nothing CPU-offloaded the host
-  # holds the load-time transient of eight ranks streaming a 148 GB bundle plus
+  # holds the load-time transient of four ranks streaming a 148 GB bundle plus
   # the built-clip buffer — about 1 GB of uint8 pixels per queued clip, bounded
   # by inference.queue_size in fasth3.yaml — so re-measure on real hardware and
   # tighten. If the offload flags in fasth3.yaml are turned back on, memory
@@ -24,13 +27,16 @@ model:
   resources:
     gpu:
       type: NVIDIA_B200
-      count: 8
+      count: 4
     cpu:
       request: "8"
       limit: "32"
+    # Sized for the offloaded text encoder (fasth3.yaml): four ranks hold
+    # ~63 GB each on the host, plus the built-clip buffer and the load
+    # transient. With the offload turned off, 64Gi/256Gi suffices.
     memory:
-      request: 32Gi
-      limit: 256Gi
+      request: 280Gi
+      limit: 384Gi
 
 runtime:
   import: fasth3:FastH3
@@ -44,7 +50,7 @@ runtime:
     enabled: false
 
 build:
-  runtime_version: "3.2.5"
+  runtime_version: "3.2.6"
   python_requirements: requirements.txt
   # CUDA 13 is the model's requirement, not a preference: the VSA-H3 sparse
   # kernel and the FA4 CuTe kernels are both cu130 builds. Every other model in
@@ -66,8 +72,12 @@ build:
     - ninja-build
   # torch comes from the cu130 index in requirements.txt; let the resolver
   # compare that index with PyPI for everything the index also mirrors.
+  # UV_OVERRIDE feeds the requirements back in as resolver overrides, which is
+  # what lets the runtime's protobuf>=7.35.1 defeat cutlass-dsl's stale <7 cap
+  # — see the protobuf note in requirements.txt.
   build_env:
     UV_INDEX_STRATEGY: unsafe-best-match
+    UV_OVERRIDE: /app/requirements.txt
   # Long-lived server allocating a clip's worth of pixels over and over, in two
   # different shapes: the expandable-segments allocator is what stops
   # fragmentation creeping across a multi-hour channel.

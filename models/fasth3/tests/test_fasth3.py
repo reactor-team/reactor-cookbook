@@ -1054,9 +1054,8 @@ def test_the_config_the_runtime_hands_to_load_exists(manifest):
     assert (MODEL_DIR / config).is_file(), f"runtime.config points at a missing {config}"
 
 
-def test_the_runtime_pin_matches_the_rest_of_the_repo(manifest):
-    """Every model here pins the same Reactor Runtime release."""
-    assert manifest["build"]["runtime_version"] == "3.2.5"
+def test_the_runtime_pin_is_current(manifest):
+    assert manifest["build"]["runtime_version"] == "3.2.6"
 
 
 def test_the_runtime_release_is_pinned_once(manifest):

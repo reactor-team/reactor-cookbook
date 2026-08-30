@@ -1,6 +1,6 @@
 """FastH3 as a Reactor model: a queue of prompt-driven video-and-audio clips.
 
-FastH3 is MiniMax-H3 distilled to four transformer forwards, and on eight
+FastH3 is MiniMax-H3 distilled to four transformer forwards, and on a few
 Blackwell GPUs it builds video about as fast as the video plays. This model
 puts a queue in front of that: clients `enqueue` generation requests — a prompt
 plus opaque metadata, each answered with a UUID — builds run through the queue
@@ -28,6 +28,7 @@ Layout:
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 from reactor_runtime import (
@@ -99,7 +100,9 @@ class FastH3(ReactorModel):
     def __init__(self) -> None:
         """Create the model shell; everything session-scoped arrives in load()."""
         super().__init__()
-        self._build: tuple[ClipEntry, ClipJob] | None = None
+        # The build in flight: its entry, its job handle, and when it was
+        # submitted (monotonic), so readiness latency is a measured number.
+        self._build: tuple[ClipEntry, ClipJob, float] | None = None
 
     # ------------------------------------------------------------------ load
 
@@ -139,7 +142,7 @@ class FastH3(ReactorModel):
         because its entry no longer lives in the queue.
         """
         if self._build is not None:
-            _entry, job = self._build
+            _entry, job, _submitted = self._build
             job.cancelled = True
             self._build = None
 
@@ -238,7 +241,7 @@ class FastH3(ReactorModel):
         self._stop_playout = True
         self._play_request = None
         if self._build is not None:
-            _entry, job = self._build
+            _entry, job, _submitted = self._build
             job.cancelled = True
         self._queue.clear()
 
@@ -516,7 +519,7 @@ class FastH3(ReactorModel):
         if self._playing is not None:
             self._stop_playout = True
         if self._build is not None:
-            _entry, job = self._build
+            _entry, job, _submitted = self._build
             job.cancelled = True
         self._clip_frames = self.config.clip_frames
         self._seed = self.config.seed
@@ -583,7 +586,7 @@ class FastH3(ReactorModel):
         discarded silently; the queue owns what exists.
         """
         if self._build is not None:
-            entry, job = self._build
+            entry, job, submitted = self._build
             if not job.done.is_set():
                 return
             self._build = None
@@ -597,6 +600,13 @@ class FastH3(ReactorModel):
                 await self._send_state_update()
             else:
                 entry.video, entry.audio = job.result
+                logger.info(
+                    "clip ready",
+                    clip=entry.clip_id,
+                    frames=entry.frames,
+                    build_wait_s=round(time.monotonic() - submitted, 2),
+                    queued=len(self._queue),
+                )
                 await self._send_queue_update()
                 await self._send_state_update()
         if self._build is None:
@@ -604,6 +614,12 @@ class FastH3(ReactorModel):
             if pending is not None:
                 height, width = self._canvas()
                 pending.building = True
+                logger.info(
+                    "clip build submitted",
+                    clip=pending.clip_id,
+                    frames=pending.frames,
+                    queued=len(self._queue),
+                )
                 self._build = (
                     pending,
                     self.backend.submit(
@@ -613,6 +629,7 @@ class FastH3(ReactorModel):
                         height=height,
                         width=width,
                     ),
+                    time.monotonic(),
                 )
 
     async def _play_clip(self, entry: ClipEntry) -> None:

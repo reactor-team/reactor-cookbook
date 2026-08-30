@@ -24,10 +24,12 @@ conditioning are not.
 
 ## Prerequisites
 
-- **Eight NVIDIA B200s.** Eight is load-bearing, not a performance preference:
-  sequence parallelism spans all of them, and a 15 s clip builds in 12.88 s on
-  eight against 15.5 s on four. Only the former keeps a queued prompt playable
-  in under its own duration, which is what makes the queue feel live.
+- **Four NVIDIA B200s** — FastVideo's tested default for this checkpoint. A
+  15 s clip builds in about 15.5 s on four and 12.9 s on eight; playback is
+  explicit and clips are pre-built, so the GPU count only moves the
+  enqueue-to-ready wait. The count must divide H3's 56 attention heads
+  (1, 2, 4, 7, 8 …), and each rank holds its own ~63 GB text encoder plus a
+  66/N GB transformer shard, so fewer than four wants offloading.
 - **CUDA 13.** The VSA-H3 sparse kernel and the FA4 CuTe kernels are both cu130
   builds, which is why this model's `build.cuda_version` differs from every
   other model here.
@@ -64,7 +66,7 @@ python -m reactor_runtime.schema --path . --out /tmp/schema.json
 # The CPU-only structural tests.
 PYTHONPATH=. python -m pytest tests/ -q
 
-# Build the image and serve (needs the weights and eight GPUs).
+# Build the image and serve (needs the weights and four GPUs).
 reactor build
 reactor run
 ```
@@ -210,9 +212,11 @@ instead of re-deriving these rules.
 
 ## What to expect from the timing
 
-- **Enqueue-to-ready** is one build: roughly the clip's own duration on eight
-  B200s (a 14.375 s clip in about 13 s), plus the wait behind earlier queued
-  builds. `queue_update` reports the clip turning `ready`.
+- **Enqueue-to-ready** is one build, plus the wait behind earlier queued
+  builds; `queue_update` reports the clip turning `ready`. On the measured
+  sm100a profile a 14.375 s clip builds in about 15 s on four B200s (13 s on
+  eight); on the portable profile this deployment currently runs (triton VSA,
+  offloaded text encoder — see `fasth3.yaml`) the measured number is 31–35 s.
 - **Play-to-first-frame** is near-instant for a ready clip — the frames are
   already in host memory; the only latency is the transport.
 - **`stop`** cuts to black within a fraction of a second: the emitter checks the
@@ -292,8 +296,14 @@ tree arrives through `requirements.txt` and an upgrade is a one-line bump.
 
 ## Open questions for bring-up
 
+- **The sm100a VSA kernel does not launch.** fastvideo-kernel 0.3.5's CUDA
+  block-sparse kernel fails with `block_sparse_sm100a launch failed: invalid
+  argument` on driver 595 / CUDA 13.1 / B200, eager and compiled alike, so
+  `fasth3.yaml` runs the triton route at ~2.5x the build time. Retest each
+  fastvideo-kernel release and switch back — it also re-enables regional
+  compile, the other half of the measured fast profile.
 - **Host memory.** Every rank loads its own text encoder, so CPU-offloading it
-  across eight ranks would want several hundred GB of host memory *and* pay a
+  across four ranks would want ~250 GB of host memory *and* pay a
   transfer per clip. `fasth3.yaml` therefore keeps it resident on the GPU, which
   the FSDP-sharded transformer leaves room for. Confirm against measured VRAM
   before changing either flag, and re-size `resources.memory` in the manifest

@@ -3,11 +3,15 @@
 --extra-index-url https://download.pytorch.org/whl/cu130
 
 # The cu130 builds the sparse-attention and FA4 kernels are compiled against.
-# 2.12.0 is what fastvideo 0.2.1 pins; torchvision and torchaudio are left to
-# the index so it picks the matching build.
+# 2.12.0 is what fastvideo 0.2.1 pins. torchvision and torchaudio are pinned
+# exactly, because UV_OVERRIDE (see below) strips their own torch coupling
+# from resolution: 0.27.x is the torchvision built against torch 2.12, and
+# 2.11.0 is the newest torchaudio the cu130 index carries — fine here, since
+# the only torchaudio surface this model touches (`functional.resample`) is
+# pure torch ops, not its compiled extension.
 torch==2.12.0
-torchaudio
-torchvision
+torchaudio==2.11.0
+torchvision==0.27.1
 
 # The inference stack: pipelines, the MiniMax-H3 model code, the VSA-H3
 # attention backend, and the VideoGenerator engine.
@@ -24,6 +28,13 @@ fastvideo-kernel==0.3.5
 # nvidia-cutlass-dsl at 4.6.0.dev0, and an older cutlass-dsl breaks these
 # kernels at JIT time rather than at import.
 flash-attn-4 @ git+https://github.com/Dao-AILab/flash-attention.git@14c377950125c70b7a9dabf9c561fca53715ac7d#subdirectory=flash_attn/cute
+
+# Pinned because cutlass-dsl caps protobuf at <7 while the Reactor Runtime
+# needs >=7.35.1. The cap is over-conservative: protobuf's cross-version
+# guarantee accepts older gencode on a newer runtime, so cutlass-dsl's 6.x
+# gencode runs fine on 7.35. build_env sets UV_OVERRIDE to this file, which
+# turns this line into the resolver-level override that defeats the cap.
+protobuf>=7.35.1
 
 # fasth3.py parses fasth3.yaml itself: the runtime hands over the path to the
 # file `runtime.config` names and does not read it.

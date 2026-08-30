@@ -97,8 +97,16 @@ def load_config(config_path: Path | None) -> FastH3Config:
 
 
 def resolve_model_path(config: FastH3Config, weights_root: Path) -> Path:
-    """The checkpoint directory inside the mounted weights bundle."""
-    return weights_root / str(config.runtime.get("checkpoint_dir", DEFAULT_CHECKPOINT_DIR))
+    """The checkpoint directory inside the mounted weights bundle.
+
+    ``checkpoint_dir: "."`` means the snapshot's components sit directly under
+    the weights root, which is how ``reactor weights upload`` lays a bundle out
+    when the snapshot itself is uploaded.
+    """
+    subdir = str(config.runtime.get("checkpoint_dir", DEFAULT_CHECKPOINT_DIR))
+    if subdir in ("", "."):
+        return weights_root
+    return weights_root / subdir
 
 
 def require_weights(root: Path, model_path: Path) -> None:

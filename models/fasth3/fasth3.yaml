@@ -34,12 +34,16 @@ inference:
   # leaves the trained schedule and is not supported by the checkpoint.
   num_inference_steps: 5
 
-  # Video Sparse Attention. 0.9 / tile 64 / sm100a is the checkpoint's trained
-  # and measured policy (fastvideo_inference.json). `triton` is the portable
-  # fallback for a non-Blackwell box and is much slower.
+  # Video Sparse Attention, 0.9 sparsity on tile 64 — the checkpoint's trained
+  # policy (fastvideo_inference.json). The kernel is `triton`, the portable
+  # route: fastvideo-kernel 0.3.5's `sm100a` CUDA kernel fails to launch on
+  # this stack (`block_sparse_sm100a launch failed: invalid argument`, eager
+  # and compiled alike, driver 595 / CUDA 13.1 / B200). Switch back to
+  # `sm100a` when an upstream kernel release fixes it — it is the measured
+  # fast route, roughly 2.5x quicker per clip.
   vsa_sparsity: 0.9
   vsa_tile_size: 64
-  vsa_kernel: sm100a
+  vsa_kernel: triton
 
   # FA4 for the dense (text and audio) attention paths, and the inference-only
   # H3 fusions. Both are part of the measured profile. The fusions change
@@ -49,9 +53,11 @@ inference:
   h3_fusions: true
 
   # Regional compile of the transformer blocks, and an independently compiled
-  # video VAE decoder. Both are in the measured profile. Regional compile is
-  # shape-keyed, which is why every clip length and canvas has to be warmed.
-  inference_torch_compile: true
+  # video VAE decoder. Regional compile supports only the sm100a VSA route, so
+  # it is off while the kernel above is `triton`; turn both back on together.
+  # It is shape-keyed, which is why every clip length and canvas has to be
+  # warmed.
+  inference_torch_compile: false
   compile_vae: true
 
   # Sequence-parallel all-to-all route. `off` reproduces the measured profile;
@@ -69,15 +75,18 @@ inference:
 
 runtime:
   # Weight bundle layout, relative to the mounted weights root. One HF snapshot
-  # directory carries every component: transformer, text encoder, both VAEs,
-  # both schedulers, tokenizer and processor.
-  checkpoint_dir: FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree
+  # carries every component — transformer, text encoder, both VAEs, both
+  # schedulers, tokenizer and processor. "." means the components sit directly
+  # under the weights root, which is how `reactor weights upload` lays the
+  # bundle out; name a subdirectory here when the snapshot is nested instead.
+  checkpoint_dir: "."
 
   # Sequence parallelism spans every GPU (sp_size == num_gpus, tp_size 1).
-  # Eight is what keeps the queue responsive: the published build time for a
-  # 15 s clip is 12.88 s on eight B200s against 15.5 s on four, so a queued
-  # prompt is playable in well under its own duration.
-  num_gpus: 8
+  # Four matches FastVideo's tested default for this checkpoint: a 15 s clip
+  # builds in about 15.5 s (12.9 s on eight). Playback is explicit and clips
+  # are pre-built, so the count only moves the enqueue-to-ready wait; it must
+  # divide H3's 56 attention heads.
+  num_gpus: 4
 
   # false shards the transformer with FSDP, matching the checkpoint's own
   # contract. Sharding is what frees the VRAM to keep the text encoder resident
@@ -85,12 +94,13 @@ runtime:
   # denoise; A/B them on the target hardware.
   replicated_dit: false
 
-  # Offload policy. The text encoder is ~69 GB and every rank loads its own
-  # copy, so CPU-offloading it on eight ranks would want ~550 GB of host memory
-  # AND pay a host-to-device transfer on every clip. Keeping it resident is both
-  # cheaper and faster once the transformer is sharded — flip these back on only
-  # if VRAM measurements say otherwise.
-  offload_text_encoder: false
+  # Offload policy. The text encoder is ~63 GB and every rank loads its own
+  # copy; offloading it to the host costs ~250 GB of host memory (four ranks —
+  # size resources.memory in reactor.yaml with it) plus a transfer per clip,
+  # and drops the per-GPU footprint from ~92 GB to ~30 GB. On dedicated GPUs
+  # flipping it off is faster; it is on so the model also fits beside other
+  # tenants on a shared machine.
+  offload_text_encoder: true
   offload_vae: false
 
   # Pinned host buffers speed up device-to-host transfer but make the
