@@ -182,6 +182,16 @@ class ClipStopped(ModelMessage):
     )
 
 
+class ClipPopped(ModelMessage):
+    """Emitted when `pop` removes a clip from the queue.
+
+    The clip's slot is free again immediately. A build already running for it
+    is discarded when it completes; the GPUs cannot abandon it mid-build.
+    """
+
+    clip: ClipInfo = MessageField(description="The clip that left the queue.")
+
+
 class ClipFailed(ModelMessage):
     """Emitted when a clip's generation fails.
 

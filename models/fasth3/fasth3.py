@@ -56,6 +56,7 @@ from fasth3_types import (
     ClipFailed,
     ClipFinished,
     ClipLengthAccepted,
+    ClipPopped,
     ClipQueued,
     ClipStarted,
     ClipStopped,
@@ -401,6 +402,43 @@ class FastH3(ReactorModel):
         self._play_request = entry
         await self._send_queue_update()
         await self._send_state_update()
+
+    @event(
+        name="pop",
+        description=(
+            "Remove one clip from the queue by its UUID, freeing its slot for "
+            "something else. Works on built and still-generating clips alike; "
+            "a build already running for it is discarded when it completes. "
+            "The clip that is playing is not in the queue — `stop` is the "
+            "command that cuts it. Emits `clip_popped`, `queue_update` and "
+            "`state_update`, or `command_error` when no queued clip has that "
+            "id."
+        ),
+    )
+    async def pop(
+        self,
+        clip_id: str = InputField(
+            default="",
+            description="UUID of the queued clip to remove, from `clip_queued` or `queue_update`.",
+        ),
+    ) -> ClipPopped:
+        """Take one clip out of the queue and free its slot."""
+        entry = self._queue.get(clip_id) if clip_id else None
+        if entry is None:
+            reason = (
+                f"No queued clip has id {clip_id!r}."
+                if clip_id
+                else "Pass the `clip_id` of the queued clip to remove."
+            )
+            await self._refuse("pop", reason)
+            return None
+        self._queue.remove(entry)
+        if self._build is not None and self._build[0] is entry:
+            _entry, job, _submitted = self._build
+            job.cancelled = True
+        await self._send_queue_update()
+        await self._send_state_update()
+        return ClipPopped(clip=entry.snapshot())
 
     @event(
         name="stop",

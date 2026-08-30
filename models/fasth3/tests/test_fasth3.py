@@ -199,8 +199,14 @@ def test_an_empty_idle_session_can_only_enqueue_and_configure():
 def test_a_ready_clip_makes_play_valid():
     commands = session_rules.valid_commands(playing=False, queued=1, ready=1, capacity=10)
     assert "play" in commands
+    assert "pop" in commands
     # Queued clips were built at the current canvas, so it is locked.
     assert "set_canvas" not in commands
+
+
+def test_pop_needs_a_queued_clip():
+    commands = session_rules.valid_commands(playing=False, queued=0, ready=0, capacity=10)
+    assert "pop" not in commands
 
 
 def test_playing_offers_stop_and_locks_the_canvas():
@@ -422,6 +428,33 @@ def test_only_one_clip_plays_at_a_time(model):
 
     assert run(model.play(clip_id="")) is None
     assert refusal(model).reason.startswith("A clip is already playing")
+
+
+def test_pop_frees_the_slot(model):
+    kept = run(model.enqueue(prompt="keep", metadata="")).clip
+    victim = run(model.enqueue(prompt="drop", metadata="")).clip
+    reply = run(model.pop(clip_id=victim["clip_id"]))
+    assert reply.clip["clip_id"] == victim["clip_id"]
+    assert [c["clip_id"] for c in model._queue.snapshot()] == [kept["clip_id"]]
+
+    assert run(model.pop(clip_id="nope")) is None
+    assert refusal(model).command == "pop"
+    assert run(model.pop(clip_id="")) is None  # the id is required
+    assert refusal(model).command == "pop"
+
+
+def test_pop_cancels_the_build_in_flight(model):
+    from fasth3_backend import ClipJob
+
+    clip = run(model.enqueue(prompt="building", metadata="")).clip
+    entry = model._queue.get(clip["clip_id"])
+    entry.building = True
+    job = ClipJob(None)
+    model._build = (entry, job, 0.0)
+
+    run(model.pop(clip_id=clip["clip_id"]))
+    assert job.cancelled is True
+    assert len(model._queue) == 0
 
 
 def test_stop_needs_a_playing_clip(model):
@@ -869,6 +902,7 @@ EXPECTED_COMMANDS = {
     "get_queue": "QueueUpdate",
     "get_state": "StateUpdate",
     "play": None,
+    "pop": "ClipPopped",
     "reset": "SessionReset",
     "set_autoplay": "AutoplayAccepted",
     "set_canvas": "CanvasAccepted",
@@ -883,6 +917,7 @@ EXPECTED_MESSAGES = {
     "clip_failed",
     "clip_finished",
     "clip_length_accepted",
+    "clip_popped",
     "clip_queued",
     "clip_started",
     "clip_stopped",
@@ -895,7 +930,7 @@ EXPECTED_MESSAGES = {
 
 # Commands that can be refused. Each one has to say so in its own summary, and
 # name the message a client will actually receive.
-EXPECTED_REJECTIONS = ("enqueue", "play", "stop", "set_canvas")
+EXPECTED_REJECTIONS = ("enqueue", "play", "pop", "stop", "set_canvas")
 
 # The struct every clip-referencing message embeds, and its JSON types.
 EXPECTED_CLIP_INFO = {
@@ -957,7 +992,9 @@ def test_every_message_is_published_once(schema):
 
 def test_every_clip_message_embeds_the_full_struct(schema):
     """`ClipInfo` rides whole on every message that references a clip."""
-    for message in ("ClipQueued", "ClipStarted", "ClipFinished", "ClipStopped", "ClipFailed"):
+    for message in (
+        "ClipQueued", "ClipStarted", "ClipFinished", "ClipStopped", "ClipFailed", "ClipPopped"
+    ):
         clip = schema["components"]["schemas"][message]["properties"]["clip"]
         rendered = {
             name: field["type"] for name, field in clip["properties"].items()

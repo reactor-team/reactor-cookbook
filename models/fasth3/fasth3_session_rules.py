@@ -24,6 +24,8 @@ def valid_commands(*, playing: bool, queued: int, ready: int, capacity: int) -> 
     commands = list(_ALWAYS)
     if queued < capacity:
         commands.append("enqueue")
+    if queued > 0:
+        commands.append("pop")
     if playing:
         commands.append("stop")
     else:

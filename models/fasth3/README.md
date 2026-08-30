@@ -150,6 +150,7 @@ size in force.
 |---|---|---|---|
 | `enqueue` | `prompt` (≤ 800 chars), `metadata` (≤ 2000 chars), `seed` (optional, ≥ 0), `seconds` (optional, 5.167–14.375) | Queues one generation; replies `clip_queued` with the full `ClipInfo`. Without a seed the session's advancing default is used; without `seconds` the session's default length. | queue full, empty prompt |
 | `play` | `clip_id` (optional UUID) | Streams the oldest ready clip, or the named one. Emits `clip_started` as frames begin. | already playing, unknown id, clip not ready |
+| `pop` | `clip_id` (UUID) | Removes that clip from the queue, freeing its slot; a build in flight for it is discarded. Replies `clip_popped`. | unknown or missing id |
 | `stop` | — | Cuts the playing clip to black; the queue is untouched. With autoplay on, acts as a skip. Emits `clip_stopped`. | nothing playing |
 | `get_queue` | — | Replies with the full queue — the same payload as `queue_update`. | — |
 | `set_autoplay` | `enabled` (bool) | On, the oldest ready clip starts on its own whenever nothing is playing. Off (default), the stream holds until `play`. Replies `autoplay_accepted`. | — |
@@ -173,6 +174,7 @@ A rejected command has no effect and is answered by a broadcast
 | `clip_finished` | everyone | A clip was fully sent; the stream is now black until the next `play`. |
 | `clip_stopped` | everyone | `stop` (or `reset`) cut the clip; the rest of it is discarded. |
 | `clip_failed` | everyone | A build failed; the clip left the queue and the queue moves on. |
+| `clip_popped` | the caller | Reply to `pop`. The clip left the queue and its slot is free. |
 | `clip_length_accepted` | the caller | Reply to `set_clip_seconds`. Carries the snapped value. |
 | `seed_accepted` | the caller | Reply to `set_seed`. |
 | `autoplay_accepted` | the caller | Reply to `set_autoplay`. |
