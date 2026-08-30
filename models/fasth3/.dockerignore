@@ -19,3 +19,6 @@ Thumbs.db
 .gitignore
 weights/
 
+# Client-side code; nothing in the image imports it
+client/
+

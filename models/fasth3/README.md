@@ -69,6 +69,9 @@ PYTHONPATH=. python -m pytest tests/ -q
 # Build the image and serve (needs the weights and four GPUs).
 reactor build
 reactor run
+
+# Drive the served model end to end with the reference client (saves .mp4s).
+python client/client.py
 ```
 
 `load()` warms one throwaway clip per configured canvas before the pod reports
@@ -293,6 +296,7 @@ tree arrives through `requirements.txt` and an upgrade is a one-line bump.
 | `fasth3.yaml` | `inference:` the recipe and queue size, `runtime:` weight layout and engine shape |
 | `reactor.yaml` | The manifest: identity, version, resources, runtime, image build |
 | `tests/` | Structural tests that need no GPU |
+| `client/` | Reference SDK client that drives the whole queue contract and saves what it receives |
 
 ## Open questions for bring-up
 
