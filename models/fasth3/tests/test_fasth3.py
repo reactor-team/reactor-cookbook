@@ -341,6 +341,16 @@ def test_each_enqueue_advances_the_seed(model):
     assert run(model.enqueue(prompt="p", metadata="")).clip["seed"] == 7
 
 
+def test_an_explicit_length_applies_to_that_clip_only(model):
+    """A per-enqueue `seconds` snaps to the grid and spares the session default."""
+    clip = run(model.enqueue(prompt="p", metadata="", seconds=8.3)).clip
+    assert clip["frames"] == clip_plan.frames_for_seconds(8.3)
+    assert clip["frames"] % 17 == 5
+    assert model._clip_frames == model.config.clip_frames  # default untouched
+    plain = run(model.enqueue(prompt="p", metadata="")).clip
+    assert plain["frames"] == model.config.clip_frames
+
+
 def test_an_explicit_seed_leaves_the_default_untouched(model):
     """Explicit and automatic seeding must not interfere with each other."""
     explicit = run(model.enqueue(prompt="p", metadata="", seed=42)).clip
@@ -970,13 +980,15 @@ def test_free_text_fields_are_marked_for_moderation(schema):
     assert properties["metadata"]["x-reactor-moderate"] is True
 
 
-def test_the_enqueue_seed_is_optional_on_the_wire(schema):
-    """Omitted or null means the session's advancing default seed."""
-    seed = schema["paths"]["/events/enqueue"]["post"]["requestBody"]["content"][
+def test_the_enqueue_seed_and_length_are_optional_on_the_wire(schema):
+    """Omitted or null means the session's defaults."""
+    properties = schema["paths"]["/events/enqueue"]["post"]["requestBody"]["content"][
         "application/json"
-    ]["schema"]["properties"]["seed"]
-    types = seed.get("anyOf") or [seed]
-    assert any(entry.get("type") == "null" for entry in types), seed
+    ]["schema"]["properties"]
+    for name in ("seed", "seconds"):
+        field = properties[name]
+        types = field.get("anyOf") or [field]
+        assert any(entry.get("type") == "null" for entry in types), (name, field)
 
 
 def test_the_clip_length_bounds_a_client_reads_are_generatable(schema):

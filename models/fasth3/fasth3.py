@@ -267,9 +267,10 @@ class FastH3(ReactorModel):
             "Queue one clip generation. The prompt is what the clip will show; "
             "the metadata is an opaque string echoed back on every message that "
             "references the clip, for frontends to carry their own tracking "
-            "data. The clip's length and canvas are the session's conditions "
-            "as they stand now, and the seed is either the one passed here or "
-            "the session's advancing default. Builds run through the queue in "
+            "data. The clip's canvas is the session's; its length is the "
+            "`seconds` passed here (snapped to what the model can produce) or "
+            "the session default, and its seed is the one passed here or the "
+            "session's advancing default. Builds run through the queue in "
             "order; watch `queue_update` for the clip turning ready. Replies "
             "`clip_queued` with the clip's UUID and emits `queue_update` and "
             "`state_update`, or `command_error` when the queue is full or the "
@@ -307,6 +308,19 @@ class FastH3(ReactorModel):
                 "untouched, so explicit and automatic seeding do not interfere."
             ),
         ),
+        seconds: float | None = InputField(
+            default=None,
+            ge=clip_plan.MIN_SECONDS_PUBLISHED,
+            le=clip_plan.MAX_SECONDS_PUBLISHED,
+            description=(
+                f"Length of this clip in seconds, between {_CLIP_RANGE}, "
+                "snapped to the nearest length the model can produce; the "
+                "clip's structure reports the effective value. Omitted or "
+                "null, the session default applies. A length the deployment "
+                "has not built before pays a one-off compile cost on its "
+                "first build."
+            ),
+        ),
     ) -> ClipQueued:
         """Append one generation request to the queue."""
         prompt = prompt.strip()
@@ -323,10 +337,15 @@ class FastH3(ReactorModel):
             # None on the wire; the InputField sentinel when called directly.
             seed = self._seed
             self._seed += 1
+        frames = (
+            clip_plan.frames_for_seconds(float(seconds))
+            if isinstance(seconds, (int, float))
+            else self._clip_frames
+        )
         entry = self._queue.enqueue(
             prompt=prompt,
             metadata=metadata,
-            frames=self._clip_frames,
+            frames=frames,
             seed=seed,
         )
         await self._send_queue_update()
@@ -419,12 +438,13 @@ class FastH3(ReactorModel):
     @event(
         name="set_clip_seconds",
         description=(
-            "Set how long newly enqueued clips are. The value is snapped to "
-            "the nearest length the model can produce, so read the effective "
-            "one back from `clip_length_accepted`. Clips already in the queue "
-            "keep the length they were enqueued with. Longer clips carry a "
-            "scene further; shorter ones build faster. Emits "
-            "`clip_length_accepted` and `state_update`."
+            "Set the default length for enqueues that carry no `seconds` of "
+            "their own. The value is snapped to the nearest length the model "
+            "can produce, so read the effective one back from "
+            "`clip_length_accepted`. Clips already in the queue keep the "
+            "length they were enqueued with. Longer clips carry a scene "
+            "further; shorter ones build faster. Emits `clip_length_accepted` "
+            "and `state_update`."
         ),
     )
     async def set_clip_seconds(

@@ -70,7 +70,10 @@ class StateUpdate(ModelMessage):
     """
 
     clip_seconds: float = MessageField(
-        description="Length every newly enqueued clip will have, in seconds."
+        description=(
+            "Length a newly enqueued clip gets when `enqueue` carries no "
+            "`seconds` of its own."
+        )
     )
     clip_seconds_min: float = MessageField(
         description="Shortest clip length `set_clip_seconds` accepts."

@@ -148,12 +148,12 @@ size in force.
 
 | Command | Parameters | Effect | Rejected when |
 |---|---|---|---|
-| `enqueue` | `prompt` (≤ 800 chars), `metadata` (≤ 2000 chars), `seed` (optional, ≥ 0) | Queues one generation; replies `clip_queued` with the full `ClipInfo`. Without a seed, the session's advancing default is used. | queue full, empty prompt |
+| `enqueue` | `prompt` (≤ 800 chars), `metadata` (≤ 2000 chars), `seed` (optional, ≥ 0), `seconds` (optional, 5.167–14.375) | Queues one generation; replies `clip_queued` with the full `ClipInfo`. Without a seed the session's advancing default is used; without `seconds` the session's default length. | queue full, empty prompt |
 | `play` | `clip_id` (optional UUID) | Streams the oldest ready clip, or the named one. Emits `clip_started` as frames begin. | already playing, unknown id, clip not ready |
 | `stop` | — | Cuts the playing clip to black; the queue is untouched. With autoplay on, acts as a skip. Emits `clip_stopped`. | nothing playing |
 | `get_queue` | — | Replies with the full queue — the same payload as `queue_update`. | — |
 | `set_autoplay` | `enabled` (bool) | On, the oldest ready clip starts on its own whenever nothing is playing. Off (default), the stream holds until `play`. Replies `autoplay_accepted`. | — |
-| `set_clip_seconds` | `seconds` (5.167–14.375) | Length for *newly enqueued* clips, snapped to what the model can produce; the effective value returns in `clip_length_accepted`. | — |
+| `set_clip_seconds` | `seconds` (5.167–14.375) | Default length for enqueues that carry no `seconds`, snapped to what the model can produce; the effective value returns in `clip_length_accepted`. | — |
 | `set_seed` | `seed` (≥ 0) | Default seed for enqueues that carry none; each such enqueue advances it by one. Replies `seed_accepted`. | — |
 | `set_canvas` | `aspect` (`16:9`, `1:1`, `9:16`, `4:3`) | Video size for the session. Replies `canvas_accepted`. | clips queued or playing, unsupported aspect |
 | `reset` | — | Drops the whole queue, cuts any playing clip, restores every default. Replies `session_reset`. | — |
