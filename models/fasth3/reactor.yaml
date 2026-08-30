@@ -1,0 +1,79 @@
+# Reactor model specification for the FastH3 continuous channel.
+$schema: reactor/v1
+
+model:
+  name: fasth3
+  version: v0.1.0
+  description: |
+    Stream an endless, prompt-driven channel of 768p video with synchronized
+    audio. MiniMax-H3 (35B), distilled by FastVideo to four transformer
+    forwards with 90% sparse video attention, builds the next clip while the
+    current one plays, so the channel never runs dry.
+  # Eight GPUs is load-bearing rather than a performance preference: sequence
+  # parallelism spans all eight, and a 15 s clip builds in 12.88 s on eight
+  # B200s against 15.5 s on four. Only the former is faster than the video
+  # plays, which is what makes the channel continuous.
+  #
+  # cpu and memory are an opening estimate. With nothing CPU-offloaded the host
+  # holds only the load-time transient of eight ranks streaming a 148 GB bundle
+  # plus one clip's pixel buffers; re-measure on real hardware and tighten. If
+  # the offload flags in fasth3.yaml are turned back on, memory must rise to
+  # several hundred Gi — see the note there.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 8
+    cpu:
+      request: "8"
+      limit: "32"
+    memory:
+      request: 32Gi
+      limit: 256Gi
+
+runtime:
+  import: fasth3:FastH3
+  config: fasth3.yaml
+  # The weights bundle lives here; nothing is downloaded at load.
+  weights_path: ~/.cache/reactor_registry/fasth3
+  # Left off deliberately. Every clip is generated independently, so a recording
+  # carries a hard cut in picture and sound at each clip boundary; enable it once
+  # that seam has been looked at.
+  recording:
+    enabled: false
+
+build:
+  runtime_version: "3.2.5"
+  python_requirements: requirements.txt
+  # CUDA 13 is the model's requirement, not a preference: the VSA-H3 sparse
+  # kernel and the FA4 CuTe kernels are both cu130 builds. Every other model in
+  # this repo builds on 12.8.1.
+  cuda_version: "13.1.2"
+  python_version: "3.12"
+  # ninja keeps any torch BuildExtension parallel — without it torch falls back
+  # to serial g++ and a 30-minute build runs for hours. git is what pip drives
+  # to resolve the `git+https` flash-attn-4 requirement. libgl1 + libglib2.0-0
+  # are for opencv: fastvideo depends on `opencv-python` (the GUI build), not
+  # `opencv-python-headless`, so the GUI shared libraries have to be present or
+  # the first `import cv2` dies on `libGL.so.1`.
+  system_packages:
+    - build-essential
+    - ffmpeg
+    - git
+    - libgl1
+    - libglib2.0-0
+    - ninja-build
+  # torch comes from the cu130 index in requirements.txt; let the resolver
+  # compare that index with PyPI for everything the index also mirrors.
+  build_env:
+    UV_INDEX_STRATEGY: unsafe-best-match
+  # Long-lived server allocating a clip's worth of pixels over and over, in two
+  # different shapes: the expandable-segments allocator is what stops
+  # fragmentation creeping across a multi-hour channel.
+  #
+  # Every component loads from the local bundle, so the HF libraries must never
+  # reach for the network — offline turns a missing file into a clear error
+  # instead of a hang.
+  runtime_env:
+    PYTORCH_ALLOC_CONF: expandable_segments:True
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"

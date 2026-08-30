@@ -1,0 +1,99 @@
+# FastH3 — continuous channel configuration.
+#
+# `inference` is the generation recipe; `runtime` is the weight layout and the
+# engine shape. fasth3.py reads this file itself (the runtime hands over the path
+# and does not parse it).
+
+inference:
+  # Aspect the session starts at. `set_canvas` can change it while idle, to any
+  # entry in clip_plan.ASPECT_CHOICES. 16:9 resolves to 1344x768 — the canvas
+  # every published FastH3 number was measured at.
+  aspect: "16:9"
+
+  # Steady-state clip length in seconds. 14.375 s is the longest the checkpoint
+  # will generate: 15.0 s is 360 frames, which aligns up to 362 (15.083 s) and is
+  # then rejected for exceeding the duration cap, so 345 frames is the ceiling.
+  #
+  # Longer is better for the channel. Build cost is sublinear in length, so a
+  # long clip has the most slack between "built" and "needed", and it cuts least
+  # often. The trade is that a new prompt takes longer to reach the viewer.
+  clip_seconds: 14.375
+
+  # Time-to-first-frame ramp: the clip lengths the channel opens with before
+  # settling on `clip_seconds`. A short first clip builds proportionally faster,
+  # so video starts in about a third of the time. Every entry is a distinct
+  # tensor shape the warm-up must cover, so keep the list short; [] disables the
+  # ramp for a uniform cadence from clip zero.
+  ramp_seconds: [5.167]
+
+  # Seed the channel starts from; each clip advances it by one. `set_seed`
+  # overrides per session.
+  seed: 1000
+
+  # Sigma-grid POINTS, not transformer forwards. The distilled schedule is
+  # t=999,749,500,250 -> 0: five points and exactly four forwards. Changing this
+  # leaves the trained schedule and is not supported by the checkpoint.
+  num_inference_steps: 5
+
+  # Video Sparse Attention. 0.9 / tile 64 / sm100a is the checkpoint's trained
+  # and measured policy (fastvideo_inference.json). `triton` is the portable
+  # fallback for a non-Blackwell box and is much slower.
+  vsa_sparsity: 0.9
+  vsa_tile_size: 64
+  vsa_kernel: sm100a
+
+  # FA4 for the dense (text and audio) attention paths, and the inference-only
+  # H3 fusions. Both are part of the measured profile. The fusions change
+  # floating-point operation order, so they are not bit-exact against the
+  # eager route; set h3_fusions: false to compare.
+  fa4: true
+  h3_fusions: true
+
+  # Regional compile of the transformer blocks, and an independently compiled
+  # video VAE decoder. Both are in the measured profile. Regional compile is
+  # shape-keyed, which is why every clip length and canvas has to be warmed.
+  inference_torch_compile: true
+  compile_vae: true
+
+  # Sequence-parallel all-to-all route. `off` reproduces the measured profile;
+  # `auto` opts into the fused NVLink kernel when the installed kernel package
+  # supports it.
+  ulysses_a2a: "off"
+
+  # Canvases warmed at load, one full build per clip shape each. Adding an entry
+  # costs pod-boot time; leaving one out means its first clip pays a one-off
+  # compile stall mid-channel. Start with the default only and widen once the
+  # boot cost is measured.
+  warmup_aspects: ["16:9"]
+
+runtime:
+  # Weight bundle layout, relative to the mounted weights root. One HF snapshot
+  # directory carries every component: transformer, text encoder, both VAEs,
+  # both schedulers, tokenizer and processor.
+  checkpoint_dir: FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree
+
+  # Sequence parallelism spans every GPU (sp_size == num_gpus, tp_size 1).
+  # Eight is what makes the channel work: the published build time for a 15 s
+  # clip is 12.88 s on eight B200s against 15.5 s on four, and only the former
+  # is faster than the video plays.
+  num_gpus: 8
+
+  # false shards the transformer with FSDP, matching the checkpoint's own
+  # contract. Sharding is what frees the VRAM to keep the text encoder resident
+  # below. true replicates it instead (~70 GB per GPU) for the fastest measured
+  # denoise; A/B them on the target hardware.
+  replicated_dit: false
+
+  # Offload policy. The text encoder is ~69 GB and every rank loads its own
+  # copy, so CPU-offloading it on eight ranks would want ~550 GB of host memory
+  # AND pay a host-to-device transfer on every clip. Keeping it resident is both
+  # cheaper and faster once the transformer is sharded — flip these back on only
+  # if VRAM measurements say otherwise.
+  offload_text_encoder: false
+  offload_vae: false
+
+  # Pinned host buffers speed up device-to-host transfer but make the
+  # per-clip pixel allocations expensive to acquire and release. With nothing
+  # offloaded there is little left to pin, so this stays off; turn it on
+  # together with the offload flags above.
+  pin_cpu_memory: false

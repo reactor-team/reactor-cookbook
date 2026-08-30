@@ -1,0 +1,30 @@
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
+--extra-index-url https://download.pytorch.org/whl/cu130
+
+# The cu130 builds the sparse-attention and FA4 kernels are compiled against.
+# 2.12.0 is what fastvideo 0.2.1 pins; torchvision and torchaudio are left to
+# the index so it picks the matching build.
+torch==2.12.0
+torchaudio
+torchvision
+
+# The inference stack: pipelines, the MiniMax-H3 model code, the VSA-H3
+# attention backend, and the VideoGenerator engine.
+fastvideo==0.2.1
+
+# The Blackwell sparse-attention kernel. fastvideo pins this exact version
+# transitively; naming it here makes the sm100a dependency explicit, because
+# without a wheel carrying the sm_100a build the model refuses to start rather
+# than silently running the slow route.
+fastvideo-kernel==0.3.5
+
+# FA4 CuTe kernels for the dense (text and audio) attention paths. Pinned to
+# the revision FastVideo's own `fasth3` extra selects: it fixes
+# nvidia-cutlass-dsl at 4.6.0.dev0, and an older cutlass-dsl breaks these
+# kernels at JIT time rather than at import.
+flash-attn-4 @ git+https://github.com/Dao-AILab/flash-attention.git@14c377950125c70b7a9dabf9c561fca53715ac7d#subdirectory=flash_attn/cute
+
+# fasth3.py parses fasth3.yaml itself: the runtime hands over the path to the
+# file `runtime.config` names and does not read it.
+pyyaml
