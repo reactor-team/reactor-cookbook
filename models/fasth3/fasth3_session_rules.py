@@ -9,7 +9,7 @@ of re-deriving these rules.
 from __future__ import annotations
 
 # Always available: they only ever record a value or report one.
-_ALWAYS = ("set_clip_seconds", "set_seed", "get_queue", "get_state", "reset")
+_ALWAYS = ("set_clip_seconds", "set_seed", "set_autoplay", "get_queue", "get_state", "reset")
 
 
 def valid_commands(*, playing: bool, queued: int, ready: int, capacity: int) -> list[str]:

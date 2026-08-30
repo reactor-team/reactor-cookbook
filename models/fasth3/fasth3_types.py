@@ -79,7 +79,16 @@ class StateUpdate(ModelMessage):
         description="Longest clip length `set_clip_seconds` accepts."
     )
     seed: int = MessageField(
-        description="Seed the next enqueued clip will use; each `enqueue` advances it by one."
+        description=(
+            "Seed the next enqueued clip will use when `enqueue` carries none; "
+            "each such enqueue advances it by one."
+        )
+    )
+    autoplay: bool = MessageField(
+        description=(
+            "Ready clips start on their own whenever nothing is playing. Off "
+            "by default: playback waits for an explicit `play`."
+        )
     )
     aspect: str = MessageField(description="Aspect ratio in effect, e.g. `16:9`.")
     width: int = MessageField(description="Width of every frame on `main_video`.")
@@ -195,7 +204,17 @@ class ClipLengthAccepted(ModelMessage):
 class SeedAccepted(ModelMessage):
     """Emitted when `set_seed` is accepted."""
 
-    seed: int = MessageField(description="Seed the next enqueued clip will use.")
+    seed: int = MessageField(
+        description="Seed the next enqueued clip will use when `enqueue` carries none."
+    )
+
+
+class AutoplayAccepted(ModelMessage):
+    """Emitted when `set_autoplay` is accepted."""
+
+    enabled: bool = MessageField(
+        description="Whether ready clips now start on their own when nothing is playing."
+    )
 
 
 class CanvasAccepted(ModelMessage):

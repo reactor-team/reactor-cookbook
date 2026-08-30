@@ -17,11 +17,13 @@ torchvision==0.27.1
 # attention backend, and the VideoGenerator engine.
 fastvideo==0.2.1
 
-# The Blackwell sparse-attention kernel. fastvideo pins this exact version
-# transitively; naming it here makes the sm100a dependency explicit, because
-# without a wheel carrying the sm_100a build the model refuses to start rather
-# than silently running the slow route.
-fastvideo-kernel==0.3.5
+# The Blackwell sparse-attention kernel, built from source at the 0.3.5
+# release commit rather than installed as the published wheel: the wheel's
+# sm_100a binary fails every launch on driver 595 with "invalid argument",
+# while the same source compiled by the image's CUDA 13.1 nvcc runs correctly
+# (build_env pins TORCH_CUDA_ARCH_LIST=10.0a for it). The PyPI sdist cannot
+# stand in either — it ships without the CUTLASS/ThunderKittens submodules.
+fastvideo-kernel @ git+https://github.com/hao-ai-lab/FastVideo.git@1aed66737739e1fd6ea7271d3306a615a2a6bd55#subdirectory=fastvideo-kernel
 
 # FA4 CuTe kernels for the dense (text and audio) attention paths. Pinned to
 # the revision FastVideo's own `fasth3` extra selects: it fixes

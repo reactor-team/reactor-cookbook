@@ -401,16 +401,14 @@ class FastH3Backend:
         samples = self._to_wire_audio(result.audio, result.audio_sample_rate, len(frames_list))
         # The line to evaluate the deployment by: build seconds against content
         # seconds (realtime_x > 1 means the clip built faster than it plays) on
-        # the GPU count that produced it, with the per-stage split.
+        # the GPU count that produced it, with the per-stage split. The numbers
+        # live in the message itself so every log formatter carries them.
         content = len(frames_list) / FRAME_RATE
+        gpus = int(self._config.runtime.get("num_gpus", 8))
         logger.info(
-            "clip built",
-            frames=len(frames_list),
-            content_s=round(content, 2),
-            build_s=round(built, 2),
-            realtime_x=round(content / built, 2) if built > 0 else None,
-            gpus=int(self._config.runtime.get("num_gpus", 8)),
-            stages=self._stage_times(result),
+            f"clip built: {len(frames_list)}f ({content:.2f}s content) in {built:.2f}s "
+            f"= {content / built:.2f}x realtime on {gpus} gpus, "
+            f"stages={self._stage_times(result)}"
         )
         return frames_list, samples
 

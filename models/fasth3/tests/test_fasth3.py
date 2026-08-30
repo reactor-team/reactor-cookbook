@@ -220,7 +220,9 @@ def test_conditions_and_reads_are_always_available():
         commands = session_rules.valid_commands(
             playing=playing, queued=queued, ready=ready, capacity=10
         )
-        assert {"set_clip_seconds", "set_seed", "get_queue", "get_state", "reset"} <= set(commands)
+        assert {
+            "set_clip_seconds", "set_seed", "set_autoplay", "get_queue", "get_state", "reset"
+        } <= set(commands)
 
 
 # --------------------------------------------------------------------- config
@@ -337,6 +339,26 @@ def test_each_enqueue_advances_the_seed(model):
     run(model.reset())
     run(model.set_seed(seed=7))
     assert run(model.enqueue(prompt="p", metadata="")).clip["seed"] == 7
+
+
+def test_an_explicit_seed_leaves_the_default_untouched(model):
+    """Explicit and automatic seeding must not interfere with each other."""
+    explicit = run(model.enqueue(prompt="p", metadata="", seed=42)).clip
+    assert explicit["seed"] == 42
+    assert model._seed == 1000  # the advancing default did not move
+    automatic = run(model.enqueue(prompt="p", metadata="")).clip
+    assert automatic["seed"] == 1000
+    assert model._seed == 1001
+
+
+def test_autoplay_is_a_session_condition(model):
+    assert run(model.get_state()).autoplay is False
+    reply = run(model.set_autoplay(enabled=True))
+    assert reply.enabled is True
+    assert run(model.get_state()).autoplay is True
+    # `reset` returns every condition to its default, autoplay included.
+    run(model.reset())
+    assert run(model.get_state()).autoplay is False
 
 
 def test_a_full_queue_refuses_the_next_enqueue(model):
@@ -761,6 +783,38 @@ def test_the_pacer_holds_24_fps(live):
     assert elapsed["playout"] < content + 0.3
 
 
+def test_autoplay_chains_ready_clips_without_play(live):
+    async def scenario():
+        await live.set_autoplay(enabled=True)
+        await live.enqueue(prompt="a", metadata="")
+        await live.enqueue(prompt="b", metadata="")
+        # No `play` anywhere in this scenario: both clips must stream on
+        # their own, oldest first, once their builds complete.
+        await eventually(
+            lambda: names(live.messages).count("ClipFinished") == 2, timeout=5.0
+        )
+        # The queue is drained and nothing else may start.
+        await asyncio.sleep(0.15)
+
+    drive(live, scenario)
+    started = [m.clip["prompt"] for m in live.messages if type(m).__name__ == "ClipStarted"]
+    assert started == ["a", "b"]
+    frames = sum(output.main_video.shape[0] for output in live.emitted)
+    assert frames == 2 * FRAMES_PER_CLIP
+    assert live.flushes, "the stream still flushes to black at each boundary"
+
+
+def test_without_autoplay_nothing_starts_on_its_own(live):
+    async def scenario():
+        await live.enqueue(prompt="a", metadata="")
+        await eventually(lambda: live._queue.ready_count() == 1)
+        await asyncio.sleep(0.2)
+
+    drive(live, scenario)
+    assert "ClipStarted" not in names(live.messages)
+    assert live.emitted == []
+
+
 def test_a_lost_audience_ends_the_playout_quietly(live):
     # A two-second clip, so the disconnect reliably lands mid-play.
     live._clip_frames = 48
@@ -806,6 +860,7 @@ EXPECTED_COMMANDS = {
     "get_state": "StateUpdate",
     "play": None,
     "reset": "SessionReset",
+    "set_autoplay": "AutoplayAccepted",
     "set_canvas": "CanvasAccepted",
     "set_clip_seconds": "ClipLengthAccepted",
     "set_seed": "SeedAccepted",
@@ -813,6 +868,7 @@ EXPECTED_COMMANDS = {
 }
 
 EXPECTED_MESSAGES = {
+    "autoplay_accepted",
     "canvas_accepted",
     "clip_failed",
     "clip_finished",
@@ -912,6 +968,15 @@ def test_free_text_fields_are_marked_for_moderation(schema):
     ]["schema"]["properties"]
     assert properties["prompt"]["x-reactor-moderate"] is True
     assert properties["metadata"]["x-reactor-moderate"] is True
+
+
+def test_the_enqueue_seed_is_optional_on_the_wire(schema):
+    """Omitted or null means the session's advancing default seed."""
+    seed = schema["paths"]["/events/enqueue"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]["properties"]["seed"]
+    types = seed.get("anyOf") or [seed]
+    assert any(entry.get("type") == "null" for entry in types), seed
 
 
 def test_the_clip_length_bounds_a_client_reads_are_generatable(schema):

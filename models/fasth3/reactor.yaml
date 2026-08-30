@@ -3,7 +3,7 @@ $schema: reactor/v1
 
 model:
   name: fasth3
-  version: v0.2.0
+  version: v0.3.0
   description: |
     Generate 768p video clips with synchronized audio from a queue of prompts.
     MiniMax-H3 (35B), distilled by FastVideo to four transformer forwards with
@@ -78,6 +78,11 @@ build:
   build_env:
     UV_INDEX_STRATEGY: unsafe-best-match
     UV_OVERRIDE: /app/requirements.txt
+    # fastvideo-kernel compiles from source during the build (see
+    # requirements.txt); target only the deployment's arch and parallelize.
+    TORCH_CUDA_ARCH_LIST: "10.0a"
+    CMAKE_BUILD_PARALLEL_LEVEL: "32"
+    MAX_JOBS: "32"
   # Long-lived server allocating a clip's worth of pixels over and over, in two
   # different shapes: the expandable-segments allocator is what stops
   # fragmentation creeping across a multi-hour channel.

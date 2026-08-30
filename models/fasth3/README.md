@@ -103,10 +103,12 @@ enqueue ──► [ queue, oldest first, up to inference.queue_size ] ──► 
 - **Builds run through the queue front to back**, one at a time, whenever an
   audience is connected — including while another clip is playing. A finished
   build turns the entry `ready: true`, announced on `queue_update`.
-- **`play` is the only way out.** Bare `play` takes the oldest ready clip; a
-  `clip_id` takes that specific one. Playing consumes the entry. When the clip
-  ends — or `stop` cuts it — the output flushes to black and the session waits
-  for the next `play`.
+- **`play` is the only way out** — unless autoplay is on. Bare `play` takes the
+  oldest ready clip; a `clip_id` takes that specific one. Playing consumes the
+  entry. When the clip ends — or `stop` cuts it — the output flushes to black
+  and the session waits for the next `play`. With `set_autoplay` on, the
+  oldest ready clip starts on its own whenever nothing is playing, so a
+  steadily fed queue plays through hands-free; `stop` then acts as a skip.
 - **Everything a clip is travels with every mention of it.** `clip_queued`,
   `queue_update`, `clip_started`, `clip_finished`, `clip_stopped` and
   `clip_failed` all embed the full `ClipInfo` structure, so a client never has
@@ -146,12 +148,13 @@ size in force.
 
 | Command | Parameters | Effect | Rejected when |
 |---|---|---|---|
-| `enqueue` | `prompt` (≤ 800 chars), `metadata` (≤ 2000 chars) | Queues one generation; replies `clip_queued` with the full `ClipInfo`. | queue full, empty prompt |
+| `enqueue` | `prompt` (≤ 800 chars), `metadata` (≤ 2000 chars), `seed` (optional, ≥ 0) | Queues one generation; replies `clip_queued` with the full `ClipInfo`. Without a seed, the session's advancing default is used. | queue full, empty prompt |
 | `play` | `clip_id` (optional UUID) | Streams the oldest ready clip, or the named one. Emits `clip_started` as frames begin. | already playing, unknown id, clip not ready |
-| `stop` | — | Cuts the playing clip to black; the queue is untouched. Emits `clip_stopped`. | nothing playing |
+| `stop` | — | Cuts the playing clip to black; the queue is untouched. With autoplay on, acts as a skip. Emits `clip_stopped`. | nothing playing |
 | `get_queue` | — | Replies with the full queue — the same payload as `queue_update`. | — |
+| `set_autoplay` | `enabled` (bool) | On, the oldest ready clip starts on its own whenever nothing is playing. Off (default), the stream holds until `play`. Replies `autoplay_accepted`. | — |
 | `set_clip_seconds` | `seconds` (5.167–14.375) | Length for *newly enqueued* clips, snapped to what the model can produce; the effective value returns in `clip_length_accepted`. | — |
-| `set_seed` | `seed` (≥ 0) | Seed the next enqueue uses; each enqueue advances it by one. Replies `seed_accepted`. | — |
+| `set_seed` | `seed` (≥ 0) | Default seed for enqueues that carry none; each such enqueue advances it by one. Replies `seed_accepted`. | — |
 | `set_canvas` | `aspect` (`16:9`, `1:1`, `9:16`, `4:3`) | Video size for the session. Replies `canvas_accepted`. | clips queued or playing, unsupported aspect |
 | `reset` | — | Drops the whole queue, cuts any playing clip, restores every default. Replies `session_reset`. | — |
 | `get_state` | — | Replies with the full `state_update` snapshot. | — |
@@ -172,6 +175,7 @@ A rejected command has no effect and is answered by a broadcast
 | `clip_failed` | everyone | A build failed; the clip left the queue and the queue moves on. |
 | `clip_length_accepted` | the caller | Reply to `set_clip_seconds`. Carries the snapped value. |
 | `seed_accepted` | the caller | Reply to `set_seed`. |
+| `autoplay_accepted` | the caller | Reply to `set_autoplay`. |
 | `canvas_accepted` | the caller | Reply to `set_canvas`. Carries the exact pixel size. |
 | `session_reset` | the caller | Reply to `reset`. Says how many clips were dropped. |
 
@@ -248,11 +252,13 @@ model can make is 345 frames, 14.375 s**.
 
 ## Determinism
 
-Each enqueued clip carries its own seed: `set_seed` fixes the next one, and
-each `enqueue` advances it by one. Re-enqueuing the same prompts in the same
-order with the same starting seed, clip length and canvas reproduces the same
-clips. Reproduction is approximate rather than bit-exact: the deployment runs
-fused and compiled kernels that can reorder floating-point operations.
+Each enqueued clip carries its own seed — passed explicitly on `enqueue`, or
+taken from the session's advancing default (`set_seed` fixes it; each seedless
+enqueue advances it by one, and explicit seeds leave it untouched).
+Re-enqueuing the same prompts with the same seeds, clip length and canvas
+reproduces the same clips. Reproduction is approximate rather than bit-exact:
+the deployment runs fused and compiled kernels that can reorder floating-point
+operations.
 
 ## Notes on the code
 

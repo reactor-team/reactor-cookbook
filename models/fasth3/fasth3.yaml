@@ -34,16 +34,14 @@ inference:
   # leaves the trained schedule and is not supported by the checkpoint.
   num_inference_steps: 5
 
-  # Video Sparse Attention, 0.9 sparsity on tile 64 — the checkpoint's trained
-  # policy (fastvideo_inference.json). The kernel is `triton`, the portable
-  # route: fastvideo-kernel 0.3.5's `sm100a` CUDA kernel fails to launch on
-  # this stack (`block_sparse_sm100a launch failed: invalid argument`, eager
-  # and compiled alike, driver 595 / CUDA 13.1 / B200). Switch back to
-  # `sm100a` when an upstream kernel release fixes it — it is the measured
-  # fast route, roughly 2.5x quicker per clip.
+  # Video Sparse Attention. 0.9 / tile 64 / sm100a is the checkpoint's trained
+  # and measured policy (fastvideo_inference.json); the sm100a kernel is built
+  # from source at image build time (see requirements.txt) because the
+  # published wheel's binary cannot launch on this driver. `triton` is the
+  # portable fallback for a non-Blackwell box and is much slower.
   vsa_sparsity: 0.9
   vsa_tile_size: 64
-  vsa_kernel: triton
+  vsa_kernel: sm100a
 
   # FA4 for the dense (text and audio) attention paths, and the inference-only
   # H3 fusions. Both are part of the measured profile. The fusions change
@@ -53,11 +51,9 @@ inference:
   h3_fusions: true
 
   # Regional compile of the transformer blocks, and an independently compiled
-  # video VAE decoder. Regional compile supports only the sm100a VSA route, so
-  # it is off while the kernel above is `triton`; turn both back on together.
-  # It is shape-keyed, which is why every clip length and canvas has to be
-  # warmed.
-  inference_torch_compile: false
+  # video VAE decoder. Both are in the measured profile. Regional compile is
+  # shape-keyed, which is why every clip length and canvas has to be warmed.
+  inference_torch_compile: true
   compile_vae: true
 
   # Sequence-parallel all-to-all route. `off` reproduces the measured profile;
@@ -88,11 +84,12 @@ runtime:
   # divide H3's 56 attention heads.
   num_gpus: 4
 
-  # false shards the transformer with FSDP, matching the checkpoint's own
-  # contract. Sharding is what frees the VRAM to keep the text encoder resident
-  # below. true replicates it instead (~70 GB per GPU) for the fastest measured
-  # denoise; A/B them on the target hardware.
-  replicated_dit: false
+  # true replicates the transformer on every rank (~66 GB per GPU) — the
+  # configuration FastVideo's published numbers were measured at, and the
+  # fastest denoise (FSDP sharding halves the per-GPU weight cost but roughly
+  # doubles the denoise time gathering layers). The offloaded text encoder
+  # below is what leaves the VRAM for it.
+  replicated_dit: true
 
   # Offload policy. The text encoder is ~63 GB and every rank loads its own
   # copy; offloading it to the host costs ~250 GB of host memory (four ranks —
@@ -103,8 +100,7 @@ runtime:
   offload_text_encoder: true
   offload_vae: false
 
-  # Pinned host buffers speed up device-to-host transfer but make the
-  # per-clip pixel allocations expensive to acquire and release. With nothing
-  # offloaded there is little left to pin, so this stays off; turn it on
-  # together with the offload flags above.
-  pin_cpu_memory: false
+  # Pinned host buffers make the per-clip text-encoder page-in several times
+  # faster than pageable memory. On together with the offload above; the cost
+  # is pinning ~63 GB of host memory per rank at load.
+  pin_cpu_memory: true
