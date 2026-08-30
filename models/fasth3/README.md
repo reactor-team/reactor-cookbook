@@ -1,14 +1,19 @@
 # FastH3
 
-An endless, prompt-driven video and audio channel. Set a prompt and the model
-streams 768p video with synchronized audio over WebRTC continuously, always
-building the next clip while the current one plays, so the stream never runs
-dry. Change the prompt live and the channel follows it.
+A queue of prompt-driven video clips with synchronized audio. Clients enqueue
+generation requests — a prompt plus their own metadata, each answered with a
+UUID — the model builds them in order into a bounded buffer, and playback is a
+separate, explicit step: `play` streams one built clip at 768p over WebRTC,
+and when it ends the stream holds on black until the next `play`. Nothing
+plays on its own.
 
-Reach for this when you want a *channel* rather than a file: a always-on
-backdrop, a live visual that responds to typed direction, a stream a room full
-of people watches together. If you want one finished clip returned to you, this
-is the wrong shape — the model never stops on its own.
+Reach for this when something else decides what plays and when: a frontend
+that lets people submit prompts and curates the order, a playlist that is
+assembled faster than it is watched, a controller that wants clips ready
+before they are needed. The model is the queue handler and the renderer; the
+scheduling brain sits on the client side of the API. If you want one finished
+clip returned as a file, this is the wrong shape — clips are streamed, not
+returned.
 
 [FastH3 Preview v1](https://huggingface.co/FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree)
 is MiniMax-H3 (35B) distilled by FastVideo with data-free DMD2 down to **four
@@ -21,8 +26,8 @@ conditioning are not.
 
 - **Eight NVIDIA B200s.** Eight is load-bearing, not a performance preference:
   sequence parallelism spans all of them, and a 15 s clip builds in 12.88 s on
-  eight against 15.5 s on four. Only the former is faster than the video plays,
-  which is the whole premise of a continuous channel.
+  eight against 15.5 s on four. Only the former keeps a queued prompt playable
+  in under its own duration, which is what makes the queue feel live.
 - **CUDA 13.** The VSA-H3 sparse kernel and the FA4 CuTe kernels are both cu130
   builds, which is why this model's `build.cuda_version` differs from every
   other model here.
@@ -64,15 +69,61 @@ reactor build
 reactor run
 ```
 
-`load()` warms one throwaway clip per shape before the pod reports ready, so the
-first real clip streams at warm speed. Every distinct frame count and canvas is
-a separate one-time cost, which is why `inference.warmup_aspects` in
-[`fasth3.yaml`](./fasth3.yaml) is a deliberately short list.
+`load()` warms one throwaway clip per configured canvas before the pod reports
+ready, so the first real build runs at warm speed. Every distinct frame count
+and canvas is a separate one-time compile cost, which is why
+`inference.warmup_aspects` in [`fasth3.yaml`](./fasth3.yaml) is a deliberately
+short list and why the first build at a non-default `set_clip_seconds` pays a
+one-off stall.
 
-Before blaming the adapter for a slow channel, baseline the recipe itself with
+Before blaming the adapter for slow builds, baseline the recipe itself with
 FastVideo's own `examples/inference/basic/basic_fasth3.py` at the same settings.
 Its median is the number this model should match; a gap is the adapter's fault,
 not the model's.
+
+## The mental model
+
+```
+enqueue ──► [ queue, oldest first, up to inference.queue_size ] ──► play ──► tracks
+              build build build ... (in order, one at a time)          │
+              ready clips wait in host memory                          ▼
+                                                            clip ends or stop:
+                                                            flush → black, wait
+```
+
+- **`enqueue` is the only way in.** Each request snapshots the session's
+  conditions (`set_clip_seconds`, `set_seed`, `set_canvas`) as they stand, gets
+  a UUID, and joins the back of the queue. The queue is bounded
+  (`inference.queue_size`, default 10); a full queue refuses further enqueues.
+- **Builds run through the queue front to back**, one at a time, whenever an
+  audience is connected — including while another clip is playing. A finished
+  build turns the entry `ready: true`, announced on `queue_update`.
+- **`play` is the only way out.** Bare `play` takes the oldest ready clip; a
+  `clip_id` takes that specific one. Playing consumes the entry. When the clip
+  ends — or `stop` cuts it — the output flushes to black and the session waits
+  for the next `play`.
+- **Everything a clip is travels with every mention of it.** `clip_queued`,
+  `queue_update`, `clip_started`, `clip_finished`, `clip_stopped` and
+  `clip_failed` all embed the full `ClipInfo` structure, so a client never has
+  to join a UUID against an earlier message.
+
+## The `ClipInfo` structure
+
+| Field | Type | Meaning |
+|---|---|---|
+| `clip_id` | string | UUID assigned at `enqueue`; every later reference uses it. |
+| `prompt` | string | What the clip shows, exactly as enqueued. |
+| `metadata` | string | Opaque client string, echoed back untouched — see below. |
+| `frames` | int | Clip length in frames, fixed at enqueue time. |
+| `seconds` | float | The same length in seconds (`frames / 24`). |
+| `seed` | int | Seed this clip generates from. |
+| `ready` | bool | Whether the clip is built and can be played. |
+
+**Metadata is for the frontend, not the model.** The model stores it and echoes
+it back on every message that references the clip; it never parses it. Use it to
+carry whatever your application needs to track — which request produced the
+clip, who asked for it, which group of enqueues it belongs to, text to show
+while it plays. Up to 2000 characters; JSON fits if you want structure.
 
 ## Tracks
 
@@ -82,52 +133,42 @@ not the model's.
 | `main_audio` | out | audio | 48 kHz | Mono, synchronized frame-for-frame with `main_video` |
 
 There are no inbound tracks: the model reads no camera and no microphone. The
-video size is fixed for the life of a channel — `set_canvas` chooses it and is
-only accepted while the channel is idle, so the track never changes size
-mid-stream.
+video track keeps one size — `set_canvas` chooses it and is only accepted while
+the queue is empty and nothing is playing, since queued clips are built at the
+size in force.
 
 ## Commands
 
-| Command | Parameters | Effect | Rejected with |
+| Command | Parameters | Effect | Rejected when |
 |---|---|---|---|
-| `set_prompt` | `prompt` (≤ 800 chars) | Sets what the channel shows. Empty clears it. Replies `prompt_accepted`. | — |
-| `set_clip_seconds` | `seconds` (5.167–14.375) | Sets clip length; the value is snapped to what the model can produce and the effective one is returned in `clip_length_accepted`. | — |
-| `set_seed` | `seed` (≥ 0) | Seed the next channel starts from; each clip advances it by one. Replies `seed_accepted`. | — |
-| `set_canvas` | `aspect` (`16:9`, `1:1`, `9:16`, `4:3`) | Sets the video size for the session. Replies `canvas_accepted`. | `channel_running`, `unsupported_aspect` |
-| `start` | — | Begins the channel. Emits `channel_started`, then streams. | `already_running`, `missing_prompt` |
-| `pause` | — | Freezes playout. Replies `channel_paused`. | `not_running`, `already_paused` |
-| `resume` | — | Continues playout. Replies `channel_resumed`. | `not_paused` |
-| `stop` | — | Ends the channel, keeping every condition. Emits `channel_stopped`. | `not_running` |
-| `reset` | — | Returns every condition to its default and clears the stream. Replies `channel_reset`. | — |
+| `enqueue` | `prompt` (≤ 800 chars), `metadata` (≤ 2000 chars) | Queues one generation; replies `clip_queued` with the full `ClipInfo`. | queue full, empty prompt |
+| `play` | `clip_id` (optional UUID) | Streams the oldest ready clip, or the named one. Emits `clip_started` as frames begin. | already playing, unknown id, clip not ready |
+| `stop` | — | Cuts the playing clip to black; the queue is untouched. Emits `clip_stopped`. | nothing playing |
+| `get_queue` | — | Replies with the full queue — the same payload as `queue_update`. | — |
+| `set_clip_seconds` | `seconds` (5.167–14.375) | Length for *newly enqueued* clips, snapped to what the model can produce; the effective value returns in `clip_length_accepted`. | — |
+| `set_seed` | `seed` (≥ 0) | Seed the next enqueue uses; each enqueue advances it by one. Replies `seed_accepted`. | — |
+| `set_canvas` | `aspect` (`16:9`, `1:1`, `9:16`, `4:3`) | Video size for the session. Replies `canvas_accepted`. | clips queued or playing, unsupported aspect |
+| `reset` | — | Drops the whole queue, cuts any playing clip, restores every default. Replies `session_reset`. | — |
 | `get_state` | — | Replies with the full `state_update` snapshot. | — |
 
-A rejected command has no effect. Rejections carry a stable `code` (the values
-above) plus a readable message, so a client can branch on the code.
-
-`stop` halts the stream within about a second. The clip already being built
-cannot be cancelled, so the model can take several more seconds to go fully
-idle; `state_update` reports `running: false` when it has.
+A rejected command has no effect and is answered by a broadcast
+`command_error` naming the command and the reason.
 
 ## Messages
 
 | Message | Reaches | When |
 |---|---|---|
-| `state_update` | everyone | On connect, and after every change. A complete snapshot — render from this alone. |
-| `prompt_accepted` | the caller | Reply to `set_prompt`. Carries where the prompt lands. |
+| `state_update` | everyone | On connect, and after every change. A complete snapshot minus the queue's contents — render from this plus `queue_update` alone. |
+| `queue_update` | everyone | On connect, and whenever the queue changes: an enqueue, a clip turning ready, a clip leaving to play, a reset. Carries every `ClipInfo`, oldest first. |
+| `clip_queued` | the caller | Reply to `enqueue`. The full `ClipInfo`, UUID included. |
+| `clip_started` | everyone | A clip's first frames reach the tracks. |
+| `clip_finished` | everyone | A clip was fully sent; the stream is now black until the next `play`. |
+| `clip_stopped` | everyone | `stop` (or `reset`) cut the clip; the rest of it is discarded. |
+| `clip_failed` | everyone | A build failed; the clip left the queue and the queue moves on. |
 | `clip_length_accepted` | the caller | Reply to `set_clip_seconds`. Carries the snapped value. |
 | `seed_accepted` | the caller | Reply to `set_seed`. |
 | `canvas_accepted` | the caller | Reply to `set_canvas`. Carries the exact pixel size. |
-| `channel_started` | everyone | `start` accepted. No frames yet. |
-| `clip_started` | everyone | A clip begins streaming — this is where the picture and sound cut. |
-| `clip_complete` | everyone | A clip has been fully sent. |
-| `channel_paused` / `channel_resumed` | the caller | Replies to `pause` / `resume`. |
-| `channel_stopped` | everyone | The channel ended via `stop`. |
-| `channel_failed` | everyone | The channel ended early because something went wrong; the model returns to idle. |
-| `channel_reset` | the caller | Reply to `reset`. |
-
-Anywhere a prompt appears on the wire — `state_update.prompt`,
-`prompt_accepted.prompt` — **"not set" is `null`, never an empty string**, so a
-client can test one thing rather than two.
+| `session_reset` | the caller | Reply to `reset`. Says how many clips were dropped. |
 
 ## Session lifecycle
 
@@ -135,73 +176,61 @@ client can test one thing rather than two.
   session starts (no clients yet)
     |
     v
-  client connects            -> state_update (a full snapshot, to this client)
+  client connects       -> state_update + queue_update (to this client)
     |
-  ┌──────────────────────────────────────────────────────────────┐
-  │ IDLE                                                         │
-  │ Valid: set_prompt, set_clip_seconds, set_seed, set_canvas,   │
-  │        reset, get_state, and start once a prompt is set      │
-  │ No frames on either track                                    │
-  └───────────────────────────┬──────────────────────────────────┘
-                              v  start
-  ┌──────────────────────────────────────────────────────────────┐
-  │ BUILDING THE FIRST CLIP                                      │
-  │ channel_started is emitted immediately; NO frames yet        │
-  │ Lasts several seconds — show progress, not a stalled player  │
-  └───────────────────────────┬──────────────────────────────────┘
-                              v
-  ┌──────────────────────────────────────────────────────────────┐
-  │ STREAMING                                                    │
-  │ Valid: set_prompt, set_clip_seconds, set_seed, pause/resume, │
-  │        stop, reset, get_state                                │
-  │ Messages: clip_started, clip_complete, state_update          │
-  │ Tracks: main_video + main_audio, continuously                │
-  └───────────────────────────┬──────────────────────────────────┘
-                              v  stop / reset / last client leaves
-                        (back to IDLE)
+  ┌───────────────────────────────────────────────────────────────┐
+  │ IDLE (black screen)                                           │
+  │ Valid: enqueue, set_clip_seconds, set_seed, reset, get_queue, │
+  │        get_state; set_canvas while the queue is empty;        │
+  │        play once a clip is ready                              │
+  │ Builds run in the background whenever the queue has work      │
+  └───────────────────────────┬───────────────────────────────────┘
+                              v  play
+  ┌───────────────────────────────────────────────────────────────┐
+  │ PLAYING one clip                                              │
+  │ Valid: enqueue, set_clip_seconds, set_seed, stop, reset,      │
+  │        get_queue, get_state                                   │
+  │ Messages: clip_started, then clip_finished or clip_stopped    │
+  │ Builds keep running behind the playout                        │
+  └───────────────────────────┬───────────────────────────────────┘
+                              v  clip ends / stop / reset
+                    (flush to black, back to IDLE)
 ```
 
-**Single session, shared state.** Several clients may watch one session, and
-they all see the same channel: a `set_prompt` or a `stop` from any client
-affects everyone, and every client receives every `state_update`. Generation is
-gated on having an audience — when the last client leaves the channel winds down
-at the next clip boundary, so nothing is generated with nobody watching.
+**Single session, shared state.** Several clients may attach to one session and
+they all see the same queue and the same stream: an `enqueue` or a `stop` from
+any client affects everyone, and every client receives every `state_update` and
+`queue_update`. Generation is gated on having an audience — with nobody
+connected no new build starts, though a build already running finishes into the
+queue.
 
-A prompt is required before `start`; everything else has a default.
+`state_update.valid_commands` names exactly what the session would accept at
+that moment, so a frontend enables and greys out controls from the snapshot
+instead of re-deriving these rules.
 
 ## What to expect from the timing
 
-Two numbers matter, and they are different things:
+- **Enqueue-to-ready** is one build: roughly the clip's own duration on eight
+  B200s (a 14.375 s clip in about 13 s), plus the wait behind earlier queued
+  builds. `queue_update` reports the clip turning `ready`.
+- **Play-to-first-frame** is near-instant for a ready clip — the frames are
+  already in host memory; the only latency is the transport.
+- **`stop`** cuts to black within a fraction of a second: the emitter checks the
+  flag every slice (about an eighth of a second) and whatever the transport
+  still holds is flushed. A build in flight for another clip is unaffected —
+  and cannot be cancelled, so `reset` may keep the GPUs busy for a few more
+  seconds finishing a clip it will then discard.
 
-- **Time to first frame.** Nothing streams until the first clip is fully built.
-  The channel deliberately opens with a *shorter* clip (`inference.ramp_seconds`),
-  which builds proportionally faster, so this is a few seconds rather than a
-  full clip build. `channel_started` fires immediately and carries
-  `first_clip_seconds`; treat it as the cue to show progress.
-- **Steady state.** From then on the model builds faster than the video plays,
-  so the stream should not stall. If the hardware cannot keep up, the symptom is
-  a brief freeze at a clip boundary, not a dropped or corrupted stream. `seam
-  late` in the log is the gate: it fires when a clip was not ready by the time
-  its predecessor ran out, and a clean multi-hour run should never print it. The
-  levers, in order, are longer clips, regional compile, and replicated rather
-  than sharded weights.
-
-Output is a strict 24 fps metronome and the audio is sample-clocked against the
-same rate, so the two tracks stay locked over hours. `pause` freezes the stream
-within about an eighth of a second; the model keeps building ahead while paused,
-so `resume` continues instantly rather than skipping forward to catch up.
+Playout is a strict 24 fps metronome and the audio is sample-clocked against
+the same rate, so the two tracks stay locked for the length of any clip.
 
 ## Clip boundaries are hard cuts
 
-Every clip is generated independently. **The picture and the sound cut at each
-boundary** — there is no continuity of subject, framing, or voice from one clip
-to the next, even with the prompt unchanged. `clip_started` marks each cut, so a
-UI can anticipate it.
-
-This checkpoint has no continuation path, and inventing one is not an adapter's
-decision. It is why [`fasth3.yaml`](./fasth3.yaml) defaults to the longest clip
-the model supports, and why `runtime.recording` is left disabled: a recording
-would carry those cuts too.
+Every clip is generated independently. There is no continuity of subject,
+framing, or voice from one clip to the next, even with identical prompts — and
+the stream holds on black between plays. This checkpoint has no continuation
+path, and inventing one is not an adapter's decision. It is why
+`runtime.recording` is left disabled: a recording would carry those cuts too.
 
 The geometry it accepts is narrow, and [`fasth3_clip_plan.py`](./fasth3_clip_plan.py)
 encodes it: 24 fps, a frame count of the form `17n + 5`, a duration between 5
@@ -210,47 +239,33 @@ multiple of 32. The duration cap has a sharp edge — 15.0 s is 360 frames, whic
 aligns *up* to 362 (15.083 s) and is then rejected, so **the longest clip this
 model can make is 345 frames, 14.375 s**.
 
-## Changing the prompt mid-channel
-
-The model is always one clip ahead. When clip *k* is playing, clip *k+1* has
-already been built with the prompt as it stood earlier, so a prompt sent now
-first appears on clip *k+2*.
-
-You never have to work this out. Both `prompt_accepted` and `state_update` carry
-`prompt_effective_clip_index` (the clip this prompt will first appear on) and
-`prompt_effective_in_seconds` (how much already-built video plays before it).
-Render the second one directly — "new prompt in ~21 s". Shorter clips
-(`set_clip_seconds`) shorten this wait, at the cost of cutting more often.
-
 ## Determinism
 
-`set_seed` fixes the seed the channel starts from, and each clip advances it by
-one, so the same seed with the same prompt, clip length and canvas reproduces
-the same sequence of clips. Reproduction is approximate rather than bit-exact:
-the deployment runs fused and compiled kernels that can reorder floating-point
-operations.
+Each enqueued clip carries its own seed: `set_seed` fixes the next one, and
+each `enqueue` advances it by one. Re-enqueuing the same prompts in the same
+order with the same starting seed, clip length and canvas reproduces the same
+clips. Reproduction is approximate rather than bit-exact: the deployment runs
+fused and compiled kernels that can reorder floating-point operations.
 
 ## Notes on the code
 
 **`ReactorModel`, not `ReactorPipeline`.** The generator base is shaped for
 frame-per-step models, where a `yield` is the natural unit of work. Here the
 unit is a whole clip produced by one blocking call, so the generator would buy
-nothing and cost the usual workarounds — `pause` holding by yielding `Idle`,
-polling the handoff with `get_nowait()`, and session state living in a
-runtime-built `InputState`. Under `ReactorModel`, command handlers and lifecycle
-hooks run on background coroutines *concurrent* with `run()`, so:
+nothing. Under `ReactorModel`, command handlers and lifecycle hooks run on
+background coroutines *concurrent* with `run()`, so:
 
 - session state is plain attributes reset in `_reset_session_state`, called from
   `@session_started` (not `@connected`: a client rejoining mid-session keeps the
-  channel it joined);
-- one persistent worker thread serialises every clip and gives teardown a single
-  handle to wait on;
-- refusals and accepts answer immediately, even mid-build.
+  queue it joined);
+- one persistent worker thread serialises every build and gives teardown a
+  single handle to wait on;
+- refusals and accepts answer immediately, even mid-build and mid-play.
 
-**The lookahead is exactly one clip.** `_run_channel` submits clip *k+1* the
-moment clip *k* is dequeued, then paces clip *k* out at a strict 24 fps while
-*k+1* builds. The handoff is a `Queue(maxsize=1)`, which is what bounds it —
-deeper would only bury prompt changes further behind.
+**Built clips live in host memory.** A ready clip is about 1 GB of uint8 pixels
+at the 16:9 canvas and the longest length, and the queue can hold
+`inference.queue_size` of them — size `resources.memory` in the manifest
+together with that knob.
 
 **Refusals are broadcast, not raised.** A handler returns only the message its
 annotation names and reports failure by broadcasting `command_error`. A raised
@@ -264,11 +279,14 @@ tree arrives through `requirements.txt` and an upgrade is a one-line bump.
 
 | Path | What it is |
 |---|---|
-| `fasth3.py` | The `ReactorModel`: weight loading, commands, and the `run()` loop |
-| `fasth3_types.py` | Everything a client sees — output tracks and messages |
+| `fasth3.py` | The `ReactorModel`: commands, lifecycle, the queue/playout loop |
+| `fasth3_types.py` | Everything a client sees — tracks, `ClipInfo`, messages |
+| `fasth3_queue.py` | The bounded clip queue and its entries |
+| `fasth3_backend.py` | The FastVideo engine, its worker thread, warm-up, audio conversion |
+| `fasth3_assets.py` | Config parsing and weights-bundle validation |
 | `fasth3_clip_plan.py` | Clip geometry: valid lengths, frame counts, canvases |
 | `fasth3_session_rules.py` | Which commands each session state accepts |
-| `fasth3.yaml` | `inference:` the generation recipe, `runtime:` weight layout and engine shape |
+| `fasth3.yaml` | `inference:` the recipe and queue size, `runtime:` weight layout and engine shape |
 | `reactor.yaml` | The manifest: identity, version, resources, runtime, image build |
 | `tests/` | Structural tests that need no GPU |
 
@@ -279,13 +297,14 @@ tree arrives through `requirements.txt` and an upgrade is a one-line bump.
   transfer per clip. `fasth3.yaml` therefore keeps it resident on the GPU, which
   the FSDP-sharded transformer leaves room for. Confirm against measured VRAM
   before changing either flag, and re-size `resources.memory` in the manifest
-  from what real hardware uses — the values there are an opening estimate.
+  from what real hardware uses — the values there are an opening estimate that
+  must also cover the built-clip buffer (`queue_size` × ~1 GB).
 - **Post-decode cost.** Asking FastVideo for frames in memory
   (`return_frames=True`) also allocates a full fp32 mirror of the decoded video
   and copies into it — several GB per clip that nothing reads, on top of the
   uint8 conversion that is actually needed. The per-clip log line carries the
-  stage timings; if `PostDecodeFrameProcessStage` eats the channel's slack, the
-  fix belongs upstream in FastVideo rather than here.
+  stage timings; if `PostDecodeFrameProcessStage` dominates the build, the fix
+  belongs upstream in FastVideo rather than here.
 - **The dependency closure is not yet exact.** `requirements.txt` lists what the
   model's own code needs and leaves torchvision/torchaudio to the cu130 index.
   Regenerate it from a `pip freeze` of the first successfully built image so a

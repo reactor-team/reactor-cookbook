@@ -1,33 +1,32 @@
-# FastH3 — continuous channel configuration.
+# FastH3 — clip queue configuration.
 #
-# `inference` is the generation recipe; `runtime` is the weight layout and the
-# engine shape. fasth3.py reads this file itself (the runtime hands over the path
-# and does not parse it).
+# `inference` is the generation recipe and the queue's shape; `runtime` is the
+# weight layout and the engine shape. fasth3_assets.py reads this file (the
+# runtime hands over the path and does not parse it).
 
 inference:
-  # Aspect the session starts at. `set_canvas` can change it while idle, to any
-  # entry in clip_plan.ASPECT_CHOICES. 16:9 resolves to 1344x768 — the canvas
-  # every published FastH3 number was measured at.
+  # Aspect the session starts at. `set_canvas` can change it while the queue is
+  # empty and nothing plays, to any entry in clip_plan.ASPECT_CHOICES. 16:9
+  # resolves to 1344x768 — the canvas every published FastH3 number was
+  # measured at.
   aspect: "16:9"
 
-  # Steady-state clip length in seconds. 14.375 s is the longest the checkpoint
-  # will generate: 15.0 s is 360 frames, which aligns up to 362 (15.083 s) and is
-  # then rejected for exceeding the duration cap, so 345 frames is the ceiling.
-  #
-  # Longer is better for the channel. Build cost is sublinear in length, so a
-  # long clip has the most slack between "built" and "needed", and it cuts least
-  # often. The trade is that a new prompt takes longer to reach the viewer.
+  # Default clip length in seconds; `set_clip_seconds` changes it per session
+  # and each `enqueue` snapshots the value in force. 14.375 s is the longest
+  # the checkpoint will generate: 15.0 s is 360 frames, which aligns up to 362
+  # (15.083 s) and is then rejected for exceeding the duration cap, so 345
+  # frames is the ceiling.
   clip_seconds: 14.375
 
-  # Time-to-first-frame ramp: the clip lengths the channel opens with before
-  # settling on `clip_seconds`. A short first clip builds proportionally faster,
-  # so video starts in about a third of the time. Every entry is a distinct
-  # tensor shape the warm-up must cover, so keep the list short; [] disables the
-  # ramp for a uniform cadence from clip zero.
-  ramp_seconds: [5.167]
+  # Most clips the queue holds; `enqueue` is refused beyond it. Every entry can
+  # hold a fully built clip in host memory — about 1 GB of uint8 pixels at the
+  # 16:9 canvas and the longest length — so this bound is also the model's
+  # host-memory budget for built clips. Size `resources.memory` in the manifest
+  # together with it.
+  queue_size: 10
 
-  # Seed the channel starts from; each clip advances it by one. `set_seed`
-  # overrides per session.
+  # Seed the first `enqueue` of a session uses; each one advances it by one.
+  # `set_seed` overrides per session.
   seed: 1000
 
   # Sigma-grid POINTS, not transformer forwards. The distilled schedule is
@@ -60,10 +59,12 @@ inference:
   # supports it.
   ulysses_a2a: "off"
 
-  # Canvases warmed at load, one full build per clip shape each. Adding an entry
-  # costs pod-boot time; leaving one out means its first clip pays a one-off
-  # compile stall mid-channel. Start with the default only and widen once the
-  # boot cost is measured.
+  # Canvases warmed at load, one full build each at the default clip length.
+  # Adding an entry costs pod-boot time; leaving one out means the first clip
+  # built at that canvas pays a one-off compile stall. A non-default
+  # `set_clip_seconds` is a new shape too and pays the same stall on its first
+  # build. Start with the default only and widen once the boot cost is
+  # measured.
   warmup_aspects: ["16:9"]
 
 runtime:
@@ -73,9 +74,9 @@ runtime:
   checkpoint_dir: FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree
 
   # Sequence parallelism spans every GPU (sp_size == num_gpus, tp_size 1).
-  # Eight is what makes the channel work: the published build time for a 15 s
-  # clip is 12.88 s on eight B200s against 15.5 s on four, and only the former
-  # is faster than the video plays.
+  # Eight is what keeps the queue responsive: the published build time for a
+  # 15 s clip is 12.88 s on eight B200s against 15.5 s on four, so a queued
+  # prompt is playable in well under its own duration.
   num_gpus: 8
 
   # false shards the transformer with FSDP, matching the checkpoint's own

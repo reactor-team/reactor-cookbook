@@ -3,22 +3,24 @@ $schema: reactor/v1
 
 model:
   name: fasth3
-  version: v0.1.0
+  version: v0.2.0
   description: |
-    Stream an endless, prompt-driven channel of 768p video with synchronized
-    audio. MiniMax-H3 (35B), distilled by FastVideo to four transformer
-    forwards with 90% sparse video attention, builds the next clip while the
-    current one plays, so the channel never runs dry.
+    Generate 768p video clips with synchronized audio from a queue of prompts.
+    MiniMax-H3 (35B), distilled by FastVideo to four transformer forwards with
+    90% sparse video attention, builds queued clips in order while playback
+    stays a separate, explicit step: enqueue prompts, play any built clip on
+    demand, and the stream holds on black in between.
   # Eight GPUs is load-bearing rather than a performance preference: sequence
   # parallelism spans all eight, and a 15 s clip builds in 12.88 s on eight
-  # B200s against 15.5 s on four. Only the former is faster than the video
-  # plays, which is what makes the channel continuous.
+  # B200s against 15.5 s on four. Only the former keeps a queued prompt
+  # playable in under its own duration.
   #
   # cpu and memory are an opening estimate. With nothing CPU-offloaded the host
-  # holds only the load-time transient of eight ranks streaming a 148 GB bundle
-  # plus one clip's pixel buffers; re-measure on real hardware and tighten. If
-  # the offload flags in fasth3.yaml are turned back on, memory must rise to
-  # several hundred Gi — see the note there.
+  # holds the load-time transient of eight ranks streaming a 148 GB bundle plus
+  # the built-clip buffer — about 1 GB of uint8 pixels per queued clip, bounded
+  # by inference.queue_size in fasth3.yaml — so re-measure on real hardware and
+  # tighten. If the offload flags in fasth3.yaml are turned back on, memory
+  # must rise to several hundred Gi — see the note there.
   resources:
     gpu:
       type: NVIDIA_B200
@@ -35,9 +37,9 @@ runtime:
   config: fasth3.yaml
   # The weights bundle lives here; nothing is downloaded at load.
   weights_path: ~/.cache/reactor_registry/fasth3
-  # Left off deliberately. Every clip is generated independently, so a recording
-  # carries a hard cut in picture and sound at each clip boundary; enable it once
-  # that seam has been looked at.
+  # Left off deliberately. Every clip is generated independently and the stream
+  # holds on black between plays, so a recording carries hard cuts in picture
+  # and sound at each boundary; enable it once that seam has been looked at.
   recording:
     enabled: false
 

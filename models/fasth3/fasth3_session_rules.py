@@ -9,27 +9,30 @@ of re-deriving these rules.
 from __future__ import annotations
 
 # Always available: they only ever record a value or report one.
-_ALWAYS = ("set_prompt", "set_clip_seconds", "set_seed", "reset", "get_state")
+_ALWAYS = ("set_clip_seconds", "set_seed", "get_queue", "get_state", "reset")
 
 
-def valid_commands(*, running: bool, paused: bool, ready: bool) -> list[str]:
+def valid_commands(*, playing: bool, queued: int, ready: int, capacity: int) -> list[str]:
     """Name every command the session would accept in this state.
 
     Args:
-        running: A channel is live and streaming clips.
-        paused: The output stream is held; only meaningful while ``running``.
-        ready: A prompt is set, so ``start`` has everything it needs.
+        playing: A clip is streaming on the output tracks.
+        queued: Clips in the queue, built and still generating alike.
+        ready: Clips in the queue that are built and playable.
+        capacity: Most clips the queue holds.
     """
     commands = list(_ALWAYS)
-    if running:
-        commands.append("resume" if paused else "pause")
+    if queued < capacity:
+        commands.append("enqueue")
+    if playing:
         commands.append("stop")
     else:
-        # The canvas fixes the video track's geometry, so it can only change
-        # while nothing is streaming.
-        commands.append("set_canvas")
-        if ready:
-            commands.append("start")
+        if ready > 0:
+            commands.append("play")
+        # The canvas fixes the video track's geometry and the shape queued
+        # clips were built at, so it can only change while both are empty.
+        if queued == 0:
+            commands.append("set_canvas")
     return sorted(commands)
 
 

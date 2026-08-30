@@ -1,17 +1,19 @@
 """Client-facing types for the FastH3 Reactor model.
 
-Everything a client can see lives here: the outbound video and audio tracks and
-the typed messages the model sends. ``fasth3.py`` imports these; a frontend
-developer reads this file to learn the whole API without opening the inference
-code.
+Everything a client can see lives here: the outbound video and audio tracks,
+the `ClipInfo` structure every clip-referencing message embeds, and the typed
+messages the model sends. ``fasth3.py`` imports these; a frontend developer
+reads this file to learn the whole API without opening the inference code.
 
-The conditions behind the `set_*` commands are not here. A ``ReactorModel`` owns
-its session state itself, so they are plain attributes on ``FastH3`` reset in
-``_reset_session_state``; their client-facing text lives on each handler's own
-``InputField`` declaration.
+The conditions behind the `set_*` commands are not here. A ``ReactorModel``
+owns its session state itself, so they are plain attributes on ``FastH3`` reset
+in ``_reset_session_state``; their client-facing text lives on each handler's
+own ``InputField`` declaration.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from reactor_runtime import (
     Audio,
@@ -22,30 +24,53 @@ from reactor_runtime import (
 )
 
 MAX_PROMPT_CHARS = 800
+MAX_METADATA_CHARS = 2000
 
 
 class FastH3Output(Output):
-    """The generated video and its synchronized audio, streamed continuously."""
+    """The generated video and its synchronized audio, streamed per clip."""
 
     main_video: Video
     main_audio: Audio
 
 
+@dataclass(frozen=True)
+class ClipInfo:
+    """One queued generation, as every clip-referencing message reports it.
+
+    Whole and self-contained on purpose: `clip_queued`, `queue_update`,
+    `clip_started`, `clip_finished`, `clip_stopped` and `clip_failed` all carry
+    this same structure, so a client never has to join a clip id against an
+    earlier message to know what a clip is.
+
+    ``clip_id`` is the UUID the session assigned at `enqueue`; every later
+    reference to the clip uses it. ``prompt`` and ``metadata`` are exactly what
+    the client enqueued — the metadata is an opaque string the model never
+    reads, for frontends to carry their own tracking data. ``frames`` and
+    ``seconds`` are the clip's length in both units, fixed when it was
+    enqueued. ``seed`` is the value this clip generates from. ``ready`` is
+    whether the clip is built and can be played.
+    """
+
+    clip_id: str
+    prompt: str
+    metadata: str
+    frames: int
+    seconds: float
+    seed: int
+    ready: bool
+
+
 class StateUpdate(ModelMessage):
     """Emitted on connect and after every change to the session's state.
 
-    One snapshot of everything observable, so a client can render its whole UI
-    from this alone instead of accumulating the individual messages below.
+    One snapshot of everything observable except the queue's contents (those
+    travel as `queue_update`), so a client can render its whole UI from this
+    alone instead of accumulating the individual messages below.
     """
 
-    prompt: str | None = MessageField(
-        description=(
-            "Prompt in effect for the next clip the model starts, or null when "
-            "none is set."
-        )
-    )
     clip_seconds: float = MessageField(
-        description="Length of each clip the channel produces, in seconds."
+        description="Length every newly enqueued clip will have, in seconds."
     )
     clip_seconds_min: float = MessageField(
         description="Shortest clip length `set_clip_seconds` accepts."
@@ -53,34 +78,27 @@ class StateUpdate(ModelMessage):
     clip_seconds_max: float = MessageField(
         description="Longest clip length `set_clip_seconds` accepts."
     )
-    seed: int = MessageField(description="Seed the channel started from; each clip advances it by one.")
+    seed: int = MessageField(
+        description="Seed the next enqueued clip will use; each `enqueue` advances it by one."
+    )
     aspect: str = MessageField(description="Aspect ratio in effect, e.g. `16:9`.")
     width: int = MessageField(description="Width of every frame on `main_video`.")
     height: int = MessageField(description="Height of every frame on `main_video`.")
-    ready: bool = MessageField(description="A prompt is set, so `start` is valid.")
-    running: bool = MessageField(description="The channel is live and streaming clips.")
-    paused: bool = MessageField(
-        description="The output stream is held; `resume` continues it instantly."
+    playing: bool = MessageField(description="A clip is streaming on the output tracks.")
+    playing_clip_id: str | None = MessageField(
+        description="UUID of the clip now playing, or null when the stream is idle."
     )
-    clip_index: int = MessageField(
-        description="Zero-based index of the clip currently streaming, or -1 before the first."
+    queued: int = MessageField(
+        description="Clips in the queue right now, built and still generating alike."
     )
-    clips_sent: int = MessageField(description="Clips fully streamed since `start`.")
+    queue_capacity: int = MessageField(
+        description="Most clips the queue holds; `enqueue` is refused beyond it."
+    )
+    clips_played: int = MessageField(
+        description="Clips that finished playing or were stopped since the session began."
+    )
     seconds_sent: float = MessageField(
-        description="Seconds of video and audio sent since `start`."
-    )
-    prompt_effective_clip_index: int = MessageField(
-        description=(
-            "Clip the prompt shown here will first appear on. The model always "
-            "builds one clip ahead, so a prompt changed mid-channel lands two "
-            "clips out, not on the next one."
-        )
-    )
-    prompt_effective_in_seconds: float = MessageField(
-        description=(
-            "Seconds of already-built video still to play before the prompt "
-            "shown here starts. Zero while the channel is idle."
-        )
+        description="Seconds of video and audio sent since the session began."
     )
     valid_commands: list[str] = MessageField(
         description=(
@@ -91,22 +109,76 @@ class StateUpdate(ModelMessage):
     )
 
 
-class PromptAccepted(ModelMessage):
-    """Emitted when `set_prompt` is accepted."""
+class QueueUpdate(ModelMessage):
+    """Emitted on connect and whenever the queue changes, and answers `get_queue`.
 
-    prompt: str | None = MessageField(
-        description="Prompt now in effect, or null when it was cleared."
-    )
-    effective_clip_index: int = MessageField(
-        description="Clip this prompt will first appear on."
-    )
-    effective_in_seconds: float = MessageField(
+    The whole queue, oldest first, each entry a complete `ClipInfo`. A change
+    is any of: a clip enqueued, a clip becoming ready, a clip leaving the queue
+    to play, or the queue being cleared by `reset`.
+    """
+
+    clips: list[ClipInfo] = MessageField(
         description=(
-            "Seconds of already-built video still to play before this prompt "
-            "starts. Zero while the channel is idle, so the next `start` uses it "
-            "immediately."
+            "Every clip in the queue, oldest first. Builds run through the "
+            "queue in this order, so entries with `ready: true` always sit at "
+            "the front."
         )
     )
+
+
+class ClipQueued(ModelMessage):
+    """Emitted when `enqueue` accepts a generation request."""
+
+    clip: ClipInfo = MessageField(
+        description=(
+            "The queued clip, UUID included. `ready` is false here; watch "
+            "`queue_update` for it turning true."
+        )
+    )
+
+
+class ClipStarted(ModelMessage):
+    """Emitted as a clip begins streaming on the output tracks."""
+
+    clip: ClipInfo = MessageField(description="The clip now playing.")
+
+
+class ClipFinished(ModelMessage):
+    """Emitted when a clip has been fully sent on the output tracks.
+
+    The stream then holds on black until the next `play`; nothing plays on its
+    own.
+    """
+
+    clip: ClipInfo = MessageField(description="The clip that just finished.")
+    seconds_sent: float = MessageField(
+        description="Seconds of video and audio sent since the session began, this clip included."
+    )
+
+
+class ClipStopped(ModelMessage):
+    """Emitted when `stop` cuts a playing clip.
+
+    The rest of the clip is discarded — a stopped clip cannot be resumed — and
+    the stream holds on black until the next `play`, exactly as after
+    `clip_finished`.
+    """
+
+    clip: ClipInfo = MessageField(description="The clip that was cut.")
+    seconds_sent: float = MessageField(
+        description="Seconds of video and audio sent since the session began."
+    )
+
+
+class ClipFailed(ModelMessage):
+    """Emitted when a clip's generation fails.
+
+    The clip leaves the queue and the queue moves on; nothing else is
+    affected.
+    """
+
+    clip: ClipInfo = MessageField(description="The clip whose build failed.")
+    reason: str = MessageField(description="What went wrong.")
 
 
 class ClipLengthAccepted(ModelMessage):
@@ -117,13 +189,13 @@ class ClipLengthAccepted(ModelMessage):
     """
 
     clip_seconds: float = MessageField(description="Clip length now in effect, in seconds.")
-    frames: int = MessageField(description="Frames each clip will carry on `main_video`.")
+    frames: int = MessageField(description="Frames each newly enqueued clip will carry.")
 
 
 class SeedAccepted(ModelMessage):
     """Emitted when `set_seed` is accepted."""
 
-    seed: int = MessageField(description="Seed the next channel run starts from.")
+    seed: int = MessageField(description="Seed the next enqueued clip will use.")
 
 
 class CanvasAccepted(ModelMessage):
@@ -134,93 +206,18 @@ class CanvasAccepted(ModelMessage):
     height: int = MessageField(description="Height of every frame on `main_video`.")
 
 
-class ChannelStarted(ModelMessage):
-    """Emitted once when `start` is accepted, before any frame is sent.
-
-    The first clip must be built before anything can stream, so expect several
-    seconds of no video. Treat this as the cue to show progress, not to expect
-    frames immediately.
-    """
-
-    width: int = MessageField(description="Width of every frame on `main_video`.")
-    height: int = MessageField(description="Height of every frame on `main_video`.")
-    clip_seconds: float = MessageField(description="Length of each steady-state clip, in seconds.")
-    first_clip_seconds: float = MessageField(
-        description=(
-            "Length of the opening clip. The channel can open with a shorter "
-            "clip so video starts sooner; it equals `clip_seconds` when it does not."
-        )
-    )
-
-
-class ClipStarted(ModelMessage):
-    """Emitted as each clip begins streaming on the output tracks.
-
-    Every clip is an independent piece of video and audio, so the picture and
-    the sound cut at this boundary rather than continuing from the last frame.
-    """
-
-    clip_index: int = MessageField(description="Zero-based index of the clip now streaming.")
-    clip_seconds: float = MessageField(description="Length of this clip, in seconds.")
-    prompt: str = MessageField(description="Prompt this clip was built from.")
-
-
-class ClipComplete(ModelMessage):
-    """Emitted when a clip has been fully sent on the output tracks."""
-
-    clip_index: int = MessageField(description="Zero-based index of the clip just finished.")
-    seconds_sent: float = MessageField(
-        description="Seconds of video and audio sent since `start`, this clip included."
-    )
-
-
-class ChannelPaused(ModelMessage):
-    """Emitted when `pause` is accepted.
-
-    The stream freezes on its current frame while the model keeps building
-    ahead, so `resume` continues without any warm-up.
-    """
-
-    seconds_sent: float = MessageField(description="Seconds streamed before the pause.")
-
-
-class ChannelResumed(ModelMessage):
-    """Emitted when `resume` is accepted. The stream continues where it froze."""
-
-    seconds_sent: float = MessageField(description="Seconds streamed so far.")
-
-
-class ChannelStopped(ModelMessage):
-    """Emitted when `stop` is accepted and the channel ends.
-
-    Every condition is kept, so `start` immediately begins a fresh channel with
-    the same setup. The clip already being built is discarded, so the model can
-    take a few seconds to go idle.
-    """
-
-    seconds_sent: float = MessageField(description="Seconds streamed before the stop.")
-    clips_sent: int = MessageField(description="Clips fully streamed before the stop.")
-
-
-class ChannelFailed(ModelMessage):
-    """Emitted when the channel ends early because something went wrong.
-
-    The model then idles; adjust the conditions and `start` again.
-    """
-
-    reason: str = MessageField(description="What went wrong.")
-    seconds_sent: float = MessageField(description="Seconds streamed before it stopped.")
-
-
-class ChannelReset(ModelMessage):
+class SessionReset(ModelMessage):
     """Emitted when `reset` is accepted.
 
-    Every condition is back to its default, the output stream is cleared, and
-    the model is waiting for new conditions.
+    Every condition is back to its default, the queue is empty, and the output
+    stream is cleared.
     """
 
-    was_running: bool = MessageField(
-        description="A channel was live and has been stopped, so no `channel_stopped` will follow it."
+    cleared_clips: int = MessageField(
+        description="Clips that were dropped from the queue, built and pending alike."
+    )
+    was_playing: bool = MessageField(
+        description="A clip was playing and has been cut; a `clip_stopped` accompanies it."
     )
 
 

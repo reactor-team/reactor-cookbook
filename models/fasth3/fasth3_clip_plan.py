@@ -136,29 +136,6 @@ def canvas_for_choice(aspect: str) -> tuple[int, int]:
     return canvas_for_aspect(*ratio)
 
 
-def clip_frames(index: int, steady_frames: int, ramp_frames: tuple[int, ...]) -> int:
-    """Frame count for clip ``index`` of a channel run.
-
-    The ramp exists purely for time-to-first-frame: the channel opens with one or
-    more short clips (which generate proportionally faster) and then settles on
-    ``steady_frames``. An empty ramp means a uniform cadence from clip zero.
-    """
-    if index < 0:
-        raise ValueError(f"clip index must be non-negative, got {index}")
-    if index < len(ramp_frames):
-        return ramp_frames[index]
-    return steady_frames
-
-
-def parse_ramp(seconds: object) -> tuple[int, ...]:
-    """Turn a config list of clip lengths in seconds into snapped frame counts."""
-    if seconds is None:
-        return ()
-    if not isinstance(seconds, list | tuple):
-        raise TypeError(f"ramp must be a list of seconds, got {type(seconds).__name__}")
-    return tuple(frames_for_seconds(float(value)) for value in seconds)
-
-
 __all__ = [
     "ASPECT_CHOICES",
     "FPS",
@@ -171,8 +148,6 @@ __all__ = [
     "align_frames",
     "canvas_for_aspect",
     "canvas_for_choice",
-    "clip_frames",
     "frames_for_seconds",
-    "parse_ramp",
     "seconds_for_frames",
 ]
