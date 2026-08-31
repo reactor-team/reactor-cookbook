@@ -39,6 +39,9 @@ client written against the generic contract will not drive them unchanged.
 `dreamzero-yam-molmoact2` to a bimanual YAM robot. Run the example with
 placeholder cameras and state, then replace three methods to connect your
 hardware. The model returns free-running `(24, 14)` action chunks.
+[`dreamzero_yam_bridge_i2rt.py`](./dreamzero_yam_bridge_i2rt.py) is the same
+bridge with the stubs pre-filled for i2rt YAM hardware (CAN arms, OpenCV
+cameras, safety limiter); `--mock` runs it without any hardware.
 
 ## Setup
 

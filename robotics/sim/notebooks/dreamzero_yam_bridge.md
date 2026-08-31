@@ -67,3 +67,17 @@ Each action row has 14 values:
 Always close the session when finished; the example does this in `finally`.
 For the shared session lifecycle, see the
 [robot policy client contract](./robot-policy-client-contract.md).
+
+## Ready-made i2rt integration
+
+[`dreamzero_yam_bridge_i2rt.py`](./dreamzero_yam_bridge_i2rt.py) is this
+bridge with the three methods already implemented against
+[i2rt](https://github.com/i2rt-robotics/i2rt), the YAM vendor's Python stack:
+real arms over CAN (`--left-channel`/`--right-channel`), OpenCV cameras
+(`--cam top=0 --cam left=1 --cam right=2`), the gripper-convention flip
+(i2rt is 0=closed, this model is 0=open), a per-tick rate limiter, and a
+startup guard that refuses to command until the first chunk is near the
+measured pose. `--mock` runs it end-to-end with stub arms and synthetic
+frames — no hardware, no CAN — which is also how it was verified against the
+hosted deployment. Its module docstring carries the RUN ON RIG checklist;
+read the safety notes there before pointing it at real arms.
