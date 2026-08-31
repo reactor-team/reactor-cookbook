@@ -293,6 +293,11 @@ def test_the_seam_removes_exactly_one_overlap_per_boundary():
     instance.emit = fake_emit
 
     async def main():
+        # The seam stitch now runs on the generation worker (off the emit
+        # metronome); its held-tail state lives in a worker-side pacer. Mirror
+        # that here — stitch, then pace — so the boundary arithmetic is exercised
+        # exactly as production runs it.
+        seam_pacer = {"pending_v": None, "pending_a": None}
         pacer = {
             "clock_start": None,
             "frames_paced": 0,
@@ -304,7 +309,10 @@ def test_the_seam_removes_exactly_one_overlap_per_boundary():
             base = 50 + 20 * index
             frames_list = [np.full((8, 8, 3), base + f, np.uint8) for f in range(n)]
             audio = np.zeros((1, n * SAMPLES_PER_FRAME), np.int16)
-            await instance._emit_paced(frames_list, audio, pacer)
+            emit_frames, emit_audio = instance._stitch_seam(
+                frames_list, audio, seam_pacer
+            )
+            await instance._emit_paced(emit_frames, emit_audio, pacer)
 
     asyncio.run(main())
     total = sum(o.main_video.shape[0] for o in emitted)
@@ -329,15 +337,18 @@ def test_the_first_continuity_clip_holds_its_tail_for_the_seam():
 
     instance.emit = fake_emit
 
+    seam_pacer = {"pending_v": None, "pending_a": None}
     pacer = {"clock_start": None, "frames_paced": 0, "pending_v": None, "pending_a": None}
     frames_list = [np.full((8, 8, 3), 60 + f, np.uint8) for f in range(n)]
     audio = np.zeros((1, n * SAMPLES_PER_FRAME), np.int16)
-    asyncio.run(instance._emit_paced(frames_list, audio, pacer))
+    # Stitch on the worker-side pacer (as production does), then pace.
+    emit_frames, emit_audio = instance._stitch_seam(frames_list, audio, seam_pacer)
+    asyncio.run(instance._emit_paced(emit_frames, emit_audio, pacer))
 
     assert sum(o.main_video.shape[0] for o in emitted) == n - k
-    assert pacer["pending_v"] is not None
-    assert pacer["pending_v"].shape[0] == k
-    assert pacer["pending_a"].shape[1] == k * SAMPLES_PER_FRAME
+    assert seam_pacer["pending_v"] is not None
+    assert seam_pacer["pending_v"].shape[0] == k
+    assert seam_pacer["pending_a"].shape[1] == k * SAMPLES_PER_FRAME
 
 
 # ================================================================ published contract

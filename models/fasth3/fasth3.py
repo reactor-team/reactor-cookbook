@@ -2137,6 +2137,10 @@ class FastH3(ReactorModel):
             "pending_v": None,
             "pending_a": None,
         }
+        # The seam crossfade's held-tail state, carried across clips on the
+        # generation worker (where the stitch now runs, off the emit metronome).
+        # Reset per channel so a restarted channel re-opens with no tail to blend.
+        self._seam_pacer = {"pending_v": None, "pending_a": None}
         # Continuity's colour-match reference: clip 0's last-frame mean RGB, set
         # once per channel by the generation worker and read by every
         # continuation clip. Reset here so a restarted channel re-anchors.
@@ -2181,7 +2185,33 @@ class FastH3(ReactorModel):
                         )
                     if self._should_abort():
                         raise _ChannelStopped
-                    results.put(("clip", index, prompt, style_prompt, origin, built))
+                    frames_list, samples = built
+                    # Seam stitch runs HERE, on the generation worker, inside the
+                    # build-ahead window -- not on the emit metronome. The
+                    # linear-light crossfade is ~0.9s at 640x1120; on the emit
+                    # thread it stalled the first slice of every clip ("seam
+                    # late"). Moved here it hides behind this clip's build slack
+                    # (build+stitch < the previous clip's playout window), so the
+                    # emitter never blocks. Output is byte-identical: same numpy
+                    # blend, same held-tail state carried in `self._seam_pacer`,
+                    # just a different thread. The FL2VA anchor is the clip's own
+                    # last (colour-matched) frame, taken before the stitch, so the
+                    # next clip's conditioning is unchanged. Hard-cut / seam-off is
+                    # untouched: `emit_frames` is then the raw clip.
+                    anchor_frame = (
+                        frames_list[-1]
+                        if (self.continuity_enabled and frames_list)
+                        else None
+                    )
+                    clip_len = len(frames_list)
+                    if self.continuity_enabled and self.seam_frames > 0:
+                        emit_frames, emit_audio = self._stitch_seam(
+                            frames_list, samples, self._seam_pacer
+                        )
+                    else:
+                        emit_frames, emit_audio = frames_list, samples
+                    payload = (anchor_frame, emit_frames, emit_audio, clip_len)
+                    results.put(("clip", index, prompt, style_prompt, origin, payload))
                 except _ChannelStopped:
                     results.put(("stopped", index, prompt, style_prompt, origin, None))
                 except BaseException as error:  # Reported to the client.
@@ -2219,7 +2249,7 @@ class FastH3(ReactorModel):
                 if kind == "stopped":
                     break
 
-                frames_list, samples = payload
+                anchor_frame, emit_frames, emit_audio, clip_len = payload
                 if index == 0:
                     logger.info(
                         "first clip ready",
@@ -2232,19 +2262,17 @@ class FastH3(ReactorModel):
                 # boundary the seam can dissolve; clip 0 was submitted with no
                 # anchor, making it the plain T2VA opener.
                 next_anchor = None
-                if self.continuity_enabled and frames_list:
+                if self.continuity_enabled and anchor_frame is not None:
                     from PIL import Image
 
-                    next_anchor = Image.fromarray(frames_list[-1])
+                    next_anchor = Image.fromarray(anchor_frame)
                 pending = submit(index + 1, next_anchor)
 
                 self._clip_index = index
                 self._current_prompt = prompt
                 self._current_style_prompt = style_prompt
                 self._current_prompt_origin = origin
-                self._current_clip_seconds = clip_plan.seconds_for_frames(
-                    len(frames_list)
-                )
+                self._current_clip_seconds = clip_plan.seconds_for_frames(clip_len)
                 self._clip_start_seconds = self._seconds_sent
 
                 async def announce_clip_started(
@@ -2268,7 +2296,7 @@ class FastH3(ReactorModel):
                     await self._send_state_update()
 
                 await self._emit_paced(
-                    frames_list, samples, pacer, on_started=announce_clip_started
+                    emit_frames, emit_audio, pacer, on_started=announce_clip_started
                 )
                 if self._should_abort():
                     break
@@ -2436,14 +2464,12 @@ class FastH3(ReactorModel):
         """
         import numpy as np
 
-        # Continuity mode replaces the clip with its seam-stitched form before a
-        # single frame is paced: the previous clip's held tail is crossfaded onto
-        # this clip's head, and this clip's own tail is held back for the next
-        # boundary. The pacing below — cadence, lateness, pause, the start
-        # callback — is then identical for both modes.
-        if self.continuity_enabled and self.seam_frames > 0:
-            frames_list, samples = self._stitch_seam(frames_list, samples, pacer)
-
+        # In continuity mode the clip arrives already seam-stitched: the crossfade
+        # of the previous clip's held tail onto this clip's head now runs on the
+        # generation worker (see the channel loop) so it never stalls this
+        # metronome. `frames_list`/`samples` here are the emit-ready frames and
+        # audio for both modes; the pacing below — cadence, lateness, pause, the
+        # start callback — is identical for both.
         samples_per_frame = OUTPUT_SAMPLE_RATE / FRAME_RATE
         total = len(frames_list)
         for lo in range(0, total, EMIT_FRAMES):
