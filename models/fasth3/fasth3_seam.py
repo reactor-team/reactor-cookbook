@@ -65,7 +65,7 @@ def reference_rgb(frame_u8: np.ndarray) -> np.ndarray:
     Locked once to clip 0's last frame and held constant for the whole chain, so
     exposure stays anchored instead of ratcheting.
     """
-    return frame_u8.reshape(-1, 3).mean(axis=0).astype(np.float32)
+    return frame_u8.reshape(-1, 3).mean(axis=0, dtype=np.float64).astype(np.float32)
 
 
 def color_match_to_reference(frames_u8: np.ndarray, target_rgb: np.ndarray) -> np.ndarray:
@@ -77,7 +77,11 @@ def color_match_to_reference(frames_u8: np.ndarray, target_rgb: np.ndarray) -> n
     the chain, which is what stops exposure drift from compounding.
     """
     f = frames_u8.astype(np.float32)
-    src = f.reshape(-1, 3).mean(axis=0)
+    # Reduce in float64: a float32 mean over a whole clip (~10^8 samples)
+    # saturates the 24-bit mantissa and collapses — at 124f/768p it returns
+    # ~33.6 instead of the true ~124.5, which would shove every continuation
+    # clip ~90 levels brighter and blow the highlights to white.
+    src = frames_u8.reshape(-1, 3).mean(axis=0, dtype=np.float64).astype(np.float32)
     f += (target_rgb - src).astype(np.float32)[None, None, None, :]
     return np.clip(f, 0.0, 255.0).astype(np.uint8)
 
