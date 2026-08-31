@@ -240,6 +240,21 @@ warmed transformer graph.
 - Session state is shared by connected viewers, so every client sees the same
   stream and prompt progression.
 
+### Continuity mode (optional, off by default)
+
+Setting `inference.continuity: true` turns the hard-cut channel into one
+continuous stream. Every clip after the first is generated FL2VA-anchored on the
+previous clip's last frame, and the two are crossfaded at the seam — video in
+linear light with complementary weights, audio equal-power — so the picture and
+sound carry across clip boundaries instead of cutting. Continuation clips are
+colour-matched to clip 0's last frame, so exposure cannot drift across a long
+chain. `state_update.continuity` reports whether the channel is stitched, and
+`clip_started` then marks where a new prompt's content begins rather than a hard
+cut. It is a deployment setting, not a runtime command; continuity uses a shorter
+steady clip (`inference.continuity_clip_seconds`, default 5.167 s) and a
+`inference.seam_frames`-wide overlap (default 12). Off, the behaviour above is
+byte-for-byte unchanged. See `fasth3_seam.py` for the pure-numpy seam math.
+
 ## Reactor contract
 
 ### Tracks

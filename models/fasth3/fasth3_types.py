@@ -137,6 +137,15 @@ class StateUpdate(ModelMessage):
     clip_seconds_max: float = MessageField(
         description="Longest clip length `set_clip_seconds` accepts."
     )
+    continuity: bool = MessageField(
+        description=(
+            "Whether the channel stitches clips into one continuous stream. When "
+            "true, each clip after the first is anchored on the previous clip's "
+            "last frame and crossfaded onto it, so scene boundaries are soft "
+            "transitions rather than hard cuts. A deployment setting, fixed for "
+            "the session."
+        )
+    )
     seed: int = MessageField(
         description="Seed the channel started from; each clip advances it by one."
     )
@@ -348,8 +357,11 @@ class ChannelStarted(ModelMessage):
 class ClipStarted(ModelMessage):
     """Emitted as each clip begins streaming on the output tracks.
 
-    Every clip is an independent piece of video and audio, so the picture and
-    the sound cut at this boundary rather than continuing from the last frame.
+    By default every clip is an independent piece of video and audio, so the
+    picture and the sound cut at this boundary rather than continuing from the
+    last frame. When the channel runs in continuity mode (`state_update.continuity`
+    is true) the boundary is instead a short crossfade onto the previous clip, so
+    this marks where a new prompt's content begins rather than a hard cut.
     """
 
     clip_index: int = MessageField(

@@ -30,6 +30,27 @@ inference:
   # ramp for a uniform cadence from clip zero.
   ramp_seconds: [5.167]
 
+  # Continuity mode (default off = the hard-cut channel above, unchanged). When
+  # true, every clip after the first is generated FL2VA-anchored on the previous
+  # clip's last frame and the two are crossfaded, so the picture and sound carry
+  # across clip boundaries as one continuous stream instead of cutting. This is a
+  # deployment setting, not a runtime command — the whole channel is either a
+  # cut channel or a continuous one.
+  continuity: false
+
+  # Steady clip length used ONLY in continuity mode (`clip_seconds` above still
+  # governs the hard-cut channel). Continuity wants short clips: the FL2VA anchor
+  # is a single still, so a shorter clip re-anchors more often, drifts less, and
+  # keeps the builder further ahead of playout. 5.167 s is the shortest
+  # generatable length.
+  continuity_clip_seconds: 5.167
+
+  # Seam overlap width in frames (continuity mode only). The tail of each clip
+  # and the head of the next are crossfaded across this many frames — linear
+  # light for video, equal-power for audio. Must be at most half a continuity
+  # clip. 12 frames is 0.5 s at 24 fps.
+  seam_frames: 12
+
   # Seed the channel starts from; each clip advances it by one. `set_seed`
   # overrides per session.
   seed: 1000

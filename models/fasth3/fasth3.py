@@ -420,6 +420,12 @@ class FastH3(ReactorModel):
     # late dents the buffer instead of dropping frames.
     buffer_size = 48
 
+    # Continuity defaults, overridden by `load()` from `inference.continuity`.
+    # Class-level so the hard-cut path — and every test that drives the channel
+    # without calling `load()` — sees exactly the original behaviour: off.
+    continuity_enabled = False
+    seam_frames = 12
+
     # ------------------------------------------------------------------ load
 
     def load(self, config_path: Path | None) -> None:
@@ -459,6 +465,40 @@ class FastH3(ReactorModel):
         self.ramp_frames = clip_plan.parse_ramp(
             self.inference_cfg.get("ramp_seconds", [clip_plan.MIN_SECONDS])
         )
+
+        # Continuity mode (default off). When set, every clip after the first is
+        # FL2VA-anchored on the previous clip's last frame and the two are
+        # seam-stitched, turning the independent-clip channel into one visually
+        # continuous stream. Off leaves the hard-cut path untouched — every
+        # branch guarded by `continuity_enabled` below is skipped.
+        self.continuity_enabled = bool(self.inference_cfg.get("continuity", False))
+        # Seam overlap width in frames: the tail of one clip and the head of the
+        # next are crossfaded across this many frames (linear light, video;
+        # equal-power, audio). Ignored when continuity is off.
+        self.seam_frames = int(self.inference_cfg.get("seam_frames", 12))
+        if self.seam_frames < 0:
+            raise ValueError("inference.seam_frames must be non-negative")
+        if self.continuity_enabled:
+            # Continuity wants short clips: the FL2VA anchor is a single still, so
+            # a shorter clip re-anchors more often, drifts less, and keeps the
+            # lookahead builder further ahead of playout. A separate knob leaves
+            # the hard-cut `clip_seconds` above untouched.
+            self.default_clip_frames = clip_plan.frames_for_seconds(
+                float(
+                    self.inference_cfg.get("continuity_clip_seconds", clip_plan.MIN_SECONDS)
+                )
+            )
+            # One uniform length: the ramp's short opener already equals this
+            # steady length, and a mixed ramp would add a second FL2VA compile
+            # shape for no benefit.
+            self.ramp_frames = ()
+            if 2 * self.seam_frames > self.default_clip_frames:
+                raise ValueError(
+                    f"inference.seam_frames ({self.seam_frames}) is too wide: two seam "
+                    f"windows must fit inside a continuity clip "
+                    f"({self.default_clip_frames} frames), so it must be at most "
+                    f"{self.default_clip_frames // 2}"
+                )
         self.default_seed = int(self.inference_cfg.get("seed", 1000))
         self.default_style_prompt = str(
             self.inference_cfg.get("style_prompt", DEFAULT_STYLE_PROMPT)
@@ -811,6 +851,37 @@ class FastH3(ReactorModel):
                     width=width,
                     seconds=round(time.monotonic() - started, 2),
                 )
+                # Continuity's continuation clips are FL2VA, a separate compiled
+                # shape from T2VA. Warm it here with a throwaway grey anchor, or
+                # the first continuation clip eats that one-off stall (~20s) live.
+                if self.continuity_enabled:
+                    anchor_started = time.monotonic()
+                    self.generator.generate(
+                        self._request(
+                            frames=frames,
+                            prompt=WARMUP_PROMPT,
+                            seed=self.default_seed,
+                            height=height,
+                            width=width,
+                            keep_output=False,
+                            anchor=self._grey_anchor(height, width),
+                        )
+                    )
+                    logger.info(
+                        "warmed FL2VA clip shape",
+                        aspect=aspect,
+                        frames=frames,
+                        height=height,
+                        width=width,
+                        seconds=round(time.monotonic() - anchor_started, 2),
+                    )
+
+    @staticmethod
+    def _grey_anchor(height: int, width: int):
+        """A neutral mid-grey still, sized to the canvas — the warm-up FL2VA anchor."""
+        from PIL import Image
+
+        return Image.new("RGB", (width, height), (128, 128, 128))
 
     # -------------------------------------------------------- session state
 
@@ -834,6 +905,10 @@ class FastH3(ReactorModel):
         self._clip_frames: int = self.default_clip_frames
         self._seed: int = self.default_seed
         self._aspect: str = self.default_aspect
+        # Continuity's colour-match reference (clip 0's last-frame mean RGB),
+        # rebuilt per channel by the generation worker. Cleared here so a new
+        # session never inherits the previous one's exposure anchor.
+        self._clip0_reference = None
 
         # Channel lifecycle. `_started` arms the run loop; `_running` is true
         # while a channel is live; `_do_reset` asks it to wind down; `_stop_only`
@@ -1527,6 +1602,7 @@ class FastH3(ReactorModel):
             clip_seconds=round(clip_plan.seconds_for_frames(self._clip_frames), 3),
             clip_seconds_min=clip_plan.MIN_SECONDS_PUBLISHED,
             clip_seconds_max=clip_plan.MAX_SECONDS_PUBLISHED,
+            continuity=self.continuity_enabled,
             seed=self._seed,
             aspect=self._aspect,
             width=width,
@@ -2051,10 +2127,28 @@ class FastH3(ReactorModel):
         results: queue.Queue = queue.Queue(maxsize=1)
         pending: _Job | None = None
         # Emission pacing carried across clips, so a clip seam costs no time.
-        pacer = {"clock_start": None, "frames_paced": 0}
+        # `pending_v`/`pending_a` are the held seam overlap in continuity mode —
+        # a clip's last `seam_frames` frames and their audio, waiting to be
+        # crossfaded onto the next clip's head. Unused (and never written) when
+        # continuity is off.
+        pacer = {
+            "clock_start": None,
+            "frames_paced": 0,
+            "pending_v": None,
+            "pending_a": None,
+        }
+        # Continuity's colour-match reference: clip 0's last-frame mean RGB, set
+        # once per channel by the generation worker and read by every
+        # continuation clip. Reset here so a restarted channel re-anchors.
+        self._clip0_reference = None
 
-        def submit(index: int) -> _Job:
-            """Queue clip ``index``, capturing the conditions as they stand now."""
+        def submit(index: int, anchor=None) -> _Job:
+            """Queue clip ``index``, capturing the conditions as they stand now.
+
+            ``anchor`` is the FL2VA condition for continuity mode — the previous
+            clip's colour-matched last frame — and is None for clip 0 and for
+            every clip in hard-cut mode.
+            """
             frames = self._frames_for_clip(index)
             prompt = self._take_prompt()
             origin = self._active_prompt_origin or _MANUAL_ORIGIN
@@ -2068,9 +2162,23 @@ class FastH3(ReactorModel):
                 try:
                     if self._should_abort():
                         raise _ChannelStopped
-                    built = self._generate_clip(
-                        index, frames, prompt, style_prompt, seed, height, width
-                    )
+                    # Pass `anchor` only in continuity mode, so the hard-cut path
+                    # calls `_generate_clip` with its original argument list.
+                    if self.continuity_enabled:
+                        built = self._generate_clip(
+                            index,
+                            frames,
+                            prompt,
+                            style_prompt,
+                            seed,
+                            height,
+                            width,
+                            anchor=anchor,
+                        )
+                    else:
+                        built = self._generate_clip(
+                            index, frames, prompt, style_prompt, seed, height, width
+                        )
                     if self._should_abort():
                         raise _ChannelStopped
                     results.put(("clip", index, prompt, style_prompt, origin, built))
@@ -2119,7 +2227,16 @@ class FastH3(ReactorModel):
                     )
                 # Submit the next clip BEFORE emitting this one, so it is built
                 # while this one plays. This is what makes the channel endless.
-                pending = submit(index + 1)
+                # In continuity mode the next clip is FL2VA-anchored on this
+                # clip's already-colour-matched last frame, so the two share a
+                # boundary the seam can dissolve; clip 0 was submitted with no
+                # anchor, making it the plain T2VA opener.
+                next_anchor = None
+                if self.continuity_enabled and frames_list:
+                    from PIL import Image
+
+                    next_anchor = Image.fromarray(frames_list[-1])
+                pending = submit(index + 1, next_anchor)
 
                 self._clip_index = index
                 self._current_prompt = prompt
@@ -2242,6 +2359,61 @@ class FastH3(ReactorModel):
 
     # -------------------------------------------------------------- emitter
 
+    def _stitch_seam(self, frames_list, samples, pacer: dict):
+        """Turn one clip into its seam-stitched contribution to the stream.
+
+        Runs only in continuity mode. Holds each clip's last ``seam_frames``
+        frames (and their audio) in ``pacer`` and, on the next clip, crossfades
+        that held tail onto this clip's head — video in linear light with
+        complementary weights, audio equal-power — before the untouched middle.
+        The result is that consecutive clips dissolve into one another instead of
+        cutting.
+
+        Frame arithmetic, ``n`` frames per clip and ``k = seam_frames``:
+
+        * clip 0: emit ``frames[0 : n-k]``, hold ``frames[n-k :]`` (``k`` frames).
+        * clip i>0: emit ``blend(held_tail, frames[:k])`` then ``frames[k : n-k]``
+          — ``n-k`` frames — and hold ``frames[n-k :]``.
+
+        So every boundary removes exactly ``k`` frames (the two overlapping
+        windows become one), and the final held tail is simply dropped when the
+        channel stops — an unseen cut at the very end of a live stream. Audio is
+        sliced by the same frame indices, so the two tracks stay locked.
+        """
+        import numpy as np
+
+        import fasth3_seam as seam
+
+        k = self.seam_frames
+        n = len(frames_list)
+        spf = OUTPUT_SAMPLE_RATE / FRAME_RATE
+
+        def audio_for(a: int, b: int):
+            return samples[:, round(a * spf) : round(b * spf)]
+
+        prev_v = pacer["pending_v"]
+        prev_a = pacer["pending_a"]
+
+        # Hold this clip's tail for the next boundary before touching the head.
+        new_tail_v = np.ascontiguousarray(np.stack(frames_list[n - k :]))
+        new_tail_a = np.ascontiguousarray(audio_for(n - k, n))
+
+        if prev_v is None:
+            # First clip of the channel: no tail to blend onto, just open.
+            emit_frames = frames_list[: n - k]
+            emit_audio = audio_for(0, n - k)
+        else:
+            head_v = np.ascontiguousarray(np.stack(frames_list[:k]))
+            head_a = audio_for(0, k)
+            blended_v = seam.blend_video_linear(prev_v, head_v)
+            blended_a = seam.blend_audio_equal_power(prev_a, head_a)
+            emit_frames = [np.ascontiguousarray(f) for f in blended_v] + frames_list[k : n - k]
+            emit_audio = np.concatenate([blended_a, audio_for(k, n - k)], axis=1)
+
+        pacer["pending_v"] = new_tail_v
+        pacer["pending_a"] = new_tail_a
+        return emit_frames, emit_audio
+
     async def _emit_paced(
         self, frames_list, samples, pacer: dict, on_started=None
     ) -> None:
@@ -2263,6 +2435,14 @@ class FastH3(ReactorModel):
           coroutine, so this starves nothing.
         """
         import numpy as np
+
+        # Continuity mode replaces the clip with its seam-stitched form before a
+        # single frame is paced: the previous clip's held tail is crossfaded onto
+        # this clip's head, and this clip's own tail is held back for the next
+        # boundary. The pacing below — cadence, lateness, pause, the start
+        # callback — is then identical for both modes.
+        if self.continuity_enabled and self.seam_frames > 0:
+            frames_list, samples = self._stitch_seam(frames_list, samples, pacer)
 
         samples_per_frame = OUTPUT_SAMPLE_RATE / FRAME_RATE
         total = len(frames_list)
@@ -2309,16 +2489,29 @@ class FastH3(ReactorModel):
         height: int,
         width: int,
         keep_output: bool,
+        anchor=None,
     ):
         """Build one generation request.
 
         Mirrors ``basic_fasth3.py:build_request``. ``keep_output=False`` is the
         warm-up shape: it skips the whole post-decode path, so a warm-up costs
-        generation time and nothing else.
+        generation time and nothing else. ``anchor``, set only in continuity
+        mode, is a PIL image passed as the FL2VA first-frame condition — the
+        previous clip's last frame — which is what carries the scene across the
+        seam; None is a plain T2VA build (the chain's first clip and every
+        hard-cut clip).
         """
         from fastvideo.api import GenerationRequest, OutputConfig, SamplingConfig
 
-        return GenerationRequest(
+        inputs = None
+        if anchor is not None:
+            try:
+                from fastvideo.api import InputConfig
+            except ImportError:  # Layout drift across fastvideo releases.
+                from fastvideo.api.schema import InputConfig
+            inputs = InputConfig(pil_image=anchor)
+
+        request_kwargs: dict[str, Any] = dict(
             prompt=self._model_prompt(prompt),
             # MiniMax-H3 is guidance-distilled, so there is no negative branch
             # to steer and no CFG pass to pay for.
@@ -2335,6 +2528,9 @@ class FastH3(ReactorModel):
             ),
             output=OutputConfig(save_video=False, return_frames=keep_output),
         )
+        if inputs is not None:
+            request_kwargs["inputs"] = inputs
+        return GenerationRequest(**request_kwargs)
 
     def _generate_clip(
         self,
@@ -2345,12 +2541,20 @@ class FastH3(ReactorModel):
         seed: int,
         height: int,
         width: int,
+        *,
+        anchor=None,
     ):
         """Build one clip and convert it to what the output tracks want.
 
         Returns ``(frames_list, samples)``: a list of RGB uint8 ``[h, w, 3]``
         arrays and int16 ``[1, samples]`` at 48 kHz, trimmed to exactly
         ``len(frames_list) / 24`` seconds so the two tracks stay in lockstep.
+
+        ``anchor`` (continuity mode only) is the previous clip's last frame,
+        passed as the FL2VA first-frame condition. In continuity mode the decoded
+        frames are also colour-matched to clip 0's last-frame mean before return,
+        so a downstream seam blend and the next clip's anchor both work off an
+        exposure that cannot ratchet across the chain.
         """
         started = time.monotonic()
         result = self.generator.generate(
@@ -2361,6 +2565,7 @@ class FastH3(ReactorModel):
                 height=height,
                 width=width,
                 keep_output=True,
+                anchor=anchor,
             )
         )
         built = time.monotonic() - started
@@ -2368,6 +2573,8 @@ class FastH3(ReactorModel):
         frames_list = result.frames
         if not frames_list:
             raise RuntimeError("the generator returned no frames")
+        if self.continuity_enabled:
+            frames_list = self._colour_match_clip(index, frames_list)
         samples = self._to_wire_audio(
             result.audio, result.audio_sample_rate, len(frames_list)
         )
@@ -2377,9 +2584,31 @@ class FastH3(ReactorModel):
             frames=len(frames_list),
             content_s=round(len(frames_list) / FRAME_RATE, 2),
             build_s=round(built, 2),
+            anchored=anchor is not None,
             stages=self._stage_times(result),
         )
         return frames_list, samples
+
+    def _colour_match_clip(self, index: int, frames_list: list) -> list:
+        """Lock a continuation clip's exposure to clip 0's last frame.
+
+        Clip 0 sets the reference and is returned untouched; every clip after is
+        shifted by one per-channel offset onto that reference. Runs on the
+        generation worker (off the event loop). The builds are serialised, so
+        clip 0's reference is always set before any continuation clip reaches
+        here. Returns a fresh frame list; the reference is a plain array so no
+        clip's pixels are pinned alive by it.
+        """
+        import numpy as np
+
+        import fasth3_seam as seam
+
+        stacked = np.stack(frames_list)
+        if index == 0 or self._clip0_reference is None:
+            self._clip0_reference = seam.reference_rgb(stacked[-1])
+            return frames_list
+        matched = seam.color_match_to_reference(stacked, self._clip0_reference)
+        return [np.ascontiguousarray(frame) for frame in matched]
 
     @staticmethod
     def _stage_times(result) -> dict:
