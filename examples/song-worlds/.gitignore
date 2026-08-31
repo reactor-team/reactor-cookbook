@@ -1,0 +1,21 @@
+node_modules/
+.next/
+*.tsbuildinfo
+next-env.d.ts
+*.log
+.DS_Store
+.env*
+!.env.example
+
+# Songs (yours or uploaded through the app) and the local extractor
+# bundles BeatLens produces from them. Never committed — this repo ships
+# no audio, only the two reference summaries in data/summaries/ — see the
+# README's "What a MusicalSummary looks like" section.
+uploads/
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.ogg
+data/songs/
+data/bundles/

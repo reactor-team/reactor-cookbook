@@ -1,0 +1,84 @@
+{
+  "summary": {
+    "songId": "let_it_happen_tameimpala",
+    "durationSec": 90,
+    "bpm": 125,
+    "beatConfidence": 0.94,
+    "lowConfidenceRhythm": false,
+    "downbeatPhaseUncertain": true,
+    "keyEstimate": "F# minor",
+    "keyMode": "minor",
+    "harmonicCharacter": "50% minor · A, G#7, F#m, A7",
+    "brightnessLabel": "bright",
+    "harmonicPercussiveBalance": "balanced",
+    "spectralMotion": "flowing",
+    "spectralWidth": "full",
+    "integratedLufs": -14,
+    "dynamicRangeLufs": 0.52,
+    "labelRegime": "semantic",
+    "structureBackend": "songformer_hf",
+    "sectionsDerivedFromEnergy": false,
+    "sections": [
+      {
+        "start": 0,
+        "end": 23.04,
+        "label": "verse",
+        "energyMean": 0.427,
+        "energyPeak": 1,
+        "brightness": 0.518,
+        "onsetRate": 3.1,
+        "trend": "steady",
+        "dominance": "vocal-led"
+      },
+      {
+        "start": 23.04,
+        "end": 45.96,
+        "label": "chorus",
+        "energyMean": 0.43,
+        "energyPeak": 1,
+        "brightness": 0.512,
+        "onsetRate": 3.3,
+        "trend": "steady",
+        "dominance": "vocal-led"
+      },
+      {
+        "start": 45.96,
+        "end": 69,
+        "label": "inst",
+        "energyMean": 0.357,
+        "energyPeak": 1,
+        "brightness": 0.376,
+        "onsetRate": 3.6,
+        "trend": "steady",
+        "dominance": "vocal-led"
+      },
+      {
+        "start": 69,
+        "end": 86.28,
+        "label": "chorus",
+        "energyMean": 0.444,
+        "energyPeak": 1,
+        "brightness": 0.541,
+        "onsetRate": 3,
+        "trend": "steady",
+        "dominance": "vocal-led"
+      },
+      {
+        "start": 86.28,
+        "end": 90,
+        "label": "verse",
+        "energyMean": 0.463,
+        "energyPeak": 1,
+        "brightness": 0.436,
+        "onsetRate": 3.2,
+        "trend": "steady",
+        "dominance": "vocal-led"
+      }
+    ],
+    "notableMoments": [
+      { "time": 1, "kind": "energy-jump", "strength": 0.58 },
+      { "time": 46.17, "kind": "loudest", "strength": 1 },
+      { "time": 53.5, "kind": "energy-jump", "strength": 0.27 }
+    ]
+  }
+}
