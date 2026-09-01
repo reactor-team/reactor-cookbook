@@ -16,13 +16,12 @@ on the wire:
     `capture_time_us`. The value, not the moment the push landed, is what the
     server aligns on.
 
-  * *Where does this chunk belong on my timeline?* The model decides its own
-    inference timing and pushes results when they are ready, so an arriving chunk
-    carries no inherent position in the client's loop. So: stamp the tick
-    (`capture_us`, `seq`), and the model echoes those values back on the chunk as
-    `source_capture_us` / `source_seq`. `now - source_capture_us` is then the true
-    age of the observation this chunk was computed from — measured entirely on the
-    client's own clock, with no clock-offset guesswork.
+  * *Where does this chunk belong on my timeline?* In streaming mode, stamp the
+    tick (`capture_us`, `seq`) and use the echoed `source_capture_us` /
+    `source_seq`. In RTC mode, the client additionally sends `request_action`
+    with its plan id, logical install step, and the actions it will keep executing
+    while inference runs. The response echoes that schedule, so the client can
+    reject a late result instead of splicing it into the wrong control step.
 
 The state rides along the same seam. Rather than sending proprioception as a
 separate data-channel message that the server then has to pair up with frames by
@@ -49,9 +48,12 @@ import logging
 import math
 import os
 import time
+from contextlib import suppress
 
 import numpy as np
 from reactor_sdk import Reactor, ReactorStatus, time_micros
+
+from rtc_scheduler import RTCPlanScheduler, RTCProtocolError
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -134,6 +136,13 @@ class Client:
         self.schema: dict | None = None
         self.schema_event = asyncio.Event()
         self.loop: asyncio.AbstractEventLoop | None = None
+        self.rtc_scheduler: RTCPlanScheduler | None = None
+        self.rtc_events: asyncio.Queue[tuple[str, dict]] | None = None
+        self.rtc_task: asyncio.Task | None = None
+        self.rtc_requests = 0
+        self.rtc_resets = 0
+        self.rtc_resetting = False
+        self.executed_actions = 0
 
         # What we sent, so an echo can be checked against it rather than trusted.
         self.sent_capture_us: dict[int, int] = {}
@@ -172,9 +181,19 @@ class Client:
                 self.schema_event.set()
         elif mtype == "action_prediction":
             self.on_action(body)
+            self.queue_rtc_event("action", body)
         elif mtype == "command_error":
             self.command_errors.append(body)
             print(f"[command_error] {body.get('command')}: {body.get('reason')}")
+            if body.get("command") == "request_action":
+                self.queue_rtc_event("error", body)
+
+    def queue_rtc_event(self, kind: str, body: dict) -> None:
+        """Move callback-thread RTC messages onto the asyncio control loop."""
+
+        if self.loop is None or self.rtc_events is None:
+            return
+        self.loop.call_soon_threadsafe(self.rtc_events.put_nowait, (kind, body))
 
     def on_action(self, body: dict) -> None:
         """Place one action chunk on the client's own timeline."""
@@ -248,6 +267,47 @@ class Client:
             return None
         return self.schema
 
+    async def consume_rtc_events(self) -> None:
+        """Validate action responses immediately, independent of the camera tick."""
+
+        assert self.rtc_events is not None
+        while True:
+            kind, body = await self.rtc_events.get()
+            scheduler = self.rtc_scheduler
+            if scheduler is None:
+                continue
+            if kind == "error":
+                await self.reset_rtc(f"server rejected request: {body.get('reason')}")
+                continue
+            try:
+                plan = scheduler.accept(body)
+                if plan.base_plan_id == -1:
+                    print(f"[rtc] cold plan {plan.plan_id} ready; starting control step 0")
+            except RTCProtocolError as exc:
+                await self.reset_rtc(str(exc))
+
+    async def reset_rtc(self, reason: str) -> None:
+        """Stop plan execution and restart RTC from a cold request."""
+
+        scheduler = self.rtc_scheduler
+        if scheduler is None or self.rtc_resetting:
+            return
+        self.rtc_resetting = True
+        try:
+            print(f"[rtc reset] {reason}; holding until a fresh plan arrives")
+            scheduler.reset()
+            self.rtc_resets += 1
+            await self.reactor.send_command("reset", {})
+        finally:
+            self.rtc_resetting = False
+
+    def execute_action(self, control_step: int, action: dict[str, list[float]]) -> None:
+        """Synthetic executor seam; replace this body with the robot controller."""
+
+        self.executed_actions += 1
+        if self.executed_actions == 1:
+            print(f"[rtc] executing control_step={control_step}: {action}")
+
     # -------------------------------------------------------------------- main
 
     async def run(self) -> None:
@@ -302,6 +362,24 @@ class Client:
               f"exec_horizon={as_int(schema.get('exec_horizon'))} "
               f"state_fallback={schema.get('state_fallback')}")
         print(f"[schema] state_dims={state_dims}")
+
+        inference_trigger = schema.get("inference_trigger") or "streaming"
+        if inference_trigger == "client_request":
+            try:
+                self.rtc_scheduler = RTCPlanScheduler.from_schema(schema)
+            except RTCProtocolError as exc:
+                print(f"[rtc] invalid model_schema: {exc}")
+                await self.reactor.disconnect()
+                return
+            self.rtc_events = asyncio.Queue()
+            self.rtc_task = asyncio.create_task(self.consume_rtc_events())
+            print(
+                f"[rtc] client-owned timing: delay={self.rtc_scheduler.rtc_delay} "
+                f"exec_horizon={self.rtc_scheduler.exec_horizon}; holding until "
+                "the cold plan arrives"
+            )
+        else:
+            print("[inference] server-paced streaming")
 
         # ---- carrier selection: the handshake decides, not a command-line flag ----
         if state_source == "frame_metadata":
@@ -373,6 +451,21 @@ class Client:
                         capture_time_us=capture_us,
                     )
 
+                scheduler = self.rtc_scheduler
+                if scheduler is not None and not self.rtc_resetting:
+                    try:
+                        request = scheduler.next_request()
+                        if request is not None:
+                            await self.reactor.send_command("request_action", request)
+                            self.rtc_requests += 1
+                        control_step = scheduler.current_step
+                        action = scheduler.action_for_current_step()
+                        if action is not None:
+                            self.execute_action(control_step, action)
+                            scheduler.advance()
+                    except RTCProtocolError as exc:
+                        await self.reset_rtc(str(exc))
+
                 # Keep only enough history to correlate chunks still in flight.
                 if len(self.sent_capture_us) > 512:
                     for old in sorted(self.sent_capture_us)[:256]:
@@ -380,6 +473,10 @@ class Client:
 
                 await asyncio.sleep(max(0.0, period - (time.monotonic() - tick_start)))
         finally:
+            if self.rtc_task is not None:
+                self.rtc_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self.rtc_task
             await self.reactor.disconnect()
 
         self.summary(tag_frames, bool(tag_keys))
@@ -390,6 +487,11 @@ class Client:
         print("\n===== RLDX-1 sync summary =====")
         print(f"ticks published: {self.ticks} ; action chunks received: {self.chunks}")
         print(f"state carrier: {'frame metadata' if tag_frames else 'set_state_json command'}")
+        if self.rtc_scheduler is not None:
+            print(
+                f"RTC: requests={self.rtc_requests} "
+                f"actions_executed={self.executed_actions} resets={self.rtc_resets}"
+            )
 
         if len(self.arrivals) >= 4:
             deltas = np.diff(self.arrivals)[2:] * 1000.0  # drop warmup intervals
