@@ -55,6 +55,16 @@ Each action row has 14 values:
 [left joints × 6, left gripper, right joints × 6, right gripper]
 ```
 
+## Capture-time alignment (model >= 1.1.0)
+
+Each `action_chunk` reports `obs_capture_time_us` (newest capture stamp the
+chunk consumed) and `view_skew_us` (spread across the three cameras' newest
+stamps). Sending `set_pair_by_capture_time` `{"pair_by_capture_time": true}`
+turns on server-side cross-camera alignment for your session — off by
+default because it changes what the model sees. The script enables it when
+run with `PAIR_BY_CAPTURE_TIME=1`; watch `view_skew_us` first to see whether
+your rig's cameras are skewed enough to matter.
+
 ## Control-loop rules
 
 1. **Keep state flowing.** The example sends state at 10 Hz. If updates stop,

@@ -15,6 +15,10 @@ from av import VideoFrame
 from reactor_sdk import Reactor, ReactorStatus
 
 MODEL = "reactor/dreamzero-yam-molmoact2"
+# Model >= 1.1.0: ask the server to align the three cameras' frames by their
+# capture stamps for this session (default off server-side; changes model
+# inputs). Older deployments reject the unknown command.
+PAIR_BY_CAPTURE_TIME = os.environ.get("PAIR_BY_CAPTURE_TIME", "") == "1"
 API_URL = os.environ.get("REACTOR_API_URL", "https://api.reactor.inc")
 CAMERAS = ["top", "left", "right"]  # model expects exactly these three views
 STATE_HZ = 10.0
@@ -81,8 +85,10 @@ async def main() -> None:
         if message.get("type") == "action_chunk":
             actions = np.asarray(data["actions"], dtype=np.float64)  # (24, 14)
             robot.execute_chunk(actions)
+            skew = data.get("view_skew_us")  # model >= 1.1.0
             print(
                 f"chunk {data['chunk_index']}: inference {data['inference_seconds']:.3f}s"
+                + (f" | view_skew {skew}us" if skew is not None else "")
             )
         else:
             print(f"message: {message}")
@@ -96,6 +102,10 @@ async def main() -> None:
 
     # Set the task once; the episode starts when prompt + state are in.
     await reactor.send_command("set_prompt", {"prompt": "fold the towel neatly with both arms"})
+    if PAIR_BY_CAPTURE_TIME:
+        await reactor.send_command(
+            "set_pair_by_capture_time", {"pair_by_capture_time": True}
+        )
 
     # Closed loop: stream measured state continuously. This is what paces
     # the model — every chunk is conditioned on the latest state.
