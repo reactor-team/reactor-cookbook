@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@reactor-team/js-sdk": "2.12.3",
+    "@reactor-team/js-sdk": "^3.0.0",
     "hls.js": "^1.6.15",
     "next": "15.5.18",
     "react": "19.1.0",

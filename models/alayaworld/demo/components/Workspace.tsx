@@ -5,7 +5,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   useAlayaWorld,
-  useAlayaWorldImageSelected,
   useAlayaWorldRolloutResetQueued,
   useAlayaWorldStateUpdate,
 } from "@/lib/alayaworld/client.react";
@@ -45,15 +44,10 @@ export function Workspace({ config }: { config: DemoConfig }) {
   // actually do next, rather than guessing from the commands this tab sent.
   useAlayaWorldStateUpdate(setWorld);
 
-  useAlayaWorldImageSelected((message) => {
-    notify(
-      "info",
-      message.source === "built_in"
-        ? `Loaded built-in scene ${message.filename}`
-        : `Loaded ${message.filename}`,
-    );
-  });
-
+  // `rollout_reset_queued` travels both ways: the `reset` command answers with
+  // it, and the rollout loop broadcasts it when it restarts on its own. Only the
+  // broadcast is news to this tab, which is what the trigger check selects — a
+  // reset this tab asked for is already known at its call site.
   useAlayaWorldRolloutResetQueued((message) => {
     if (message.trigger === "automatic_chunk_limit") {
       notify(

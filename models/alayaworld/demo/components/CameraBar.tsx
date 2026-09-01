@@ -8,8 +8,19 @@ import type { Model, WorldState } from "@/lib/model";
 import { useCameraKeys } from "./useCameraKeys";
 import { AxisMeter, cx } from "./ui";
 
-/** One command per axis, so a key press maps to exactly one call. */
-function sendAxis(model: Model, axis: Axis, value: number): Promise<void> {
+/**
+ * One command per axis, so a key press maps to exactly one call.
+ *
+ * The return type is derived from the generated client rather than written out,
+ * so it tracks what the model's schema declares. All six axes answer with
+ * `camera_motion_changed`; the caller fires and forgets, but the answer is
+ * there for anything that wants to confirm the axis the model actually applied.
+ */
+function sendAxis(
+  model: Model,
+  axis: Axis,
+  value: number,
+): ReturnType<Model["setForward"]> {
   switch (axis) {
     case "forward":
       return model.setForward({ forward: value });

@@ -36,14 +36,31 @@ export function ScenePanel({
   const hasImage = Boolean(world?.image_name);
   const trimmed = draft.trim();
 
+  // `image_selected` answers the command that chose the image — it is addressed
+  // to this connection rather than broadcast, so it arrives on the call and not
+  // through a message hook. Both entry points announce it the same way.
+  const announceImage = (
+    image: Awaited<ReturnType<Model["setImage"]>>,
+  ): void => {
+    if (!image) return;
+    notify(
+      "info",
+      image.source === "built_in"
+        ? `Loaded built-in scene ${image.filename}`
+        : `Loaded ${image.filename}`,
+    );
+  };
+
   const upload = async (file: File) => {
     setUploading(true);
     try {
       const reference = await model.uploadFile(file);
-      await model.setImage(
-        dirty && trimmed
-          ? { image: reference, prompt: trimmed }
-          : { image: reference },
+      announceImage(
+        await model.setImage(
+          dirty && trimmed
+            ? { image: reference, prompt: trimmed }
+            : { image: reference },
+        ),
       );
       setDirty(false);
     } catch (error) {
@@ -65,7 +82,10 @@ export function ScenePanel({
       disabled={!connected}
     >
       <div className="flex gap-2">
-        <Button full onClick={() => void model.randomImage()}>
+        <Button
+          full
+          onClick={() => void model.randomImage().then(announceImage)}
+        >
           Random scene
         </Button>
         <Button

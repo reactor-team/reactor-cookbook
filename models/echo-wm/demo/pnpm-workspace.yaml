@@ -6,3 +6,6 @@ packages: []
 # images to optimise, so the build is declined rather than approved.
 allowBuilds:
   sharp: false
+
+minimumReleaseAgeExclude:
+  - '@reactor-team/js-sdk@3.0.0'
