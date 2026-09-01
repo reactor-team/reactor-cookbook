@@ -1,0 +1,6 @@
+source_path: /opt/lyra/Lyra-2
+cache_path: /opt/dlami/nvme/.cache_hf
+output_path: outputs
+default_prompt: "A realistic stable exploration of the visible scene with natural lighting and coherent geometry."
+translation_per_frame: 0.0021875
+rotation_degrees_per_frame: 0.125

@@ -1,0 +1,67 @@
+$schema: reactor/v2
+model:
+  name: lyra-2-dmd
+  version: v0.1.0
+  description: Autoregressively explore an image-conditioned Lyra 2.0 video world one native 80-frame chunk at a time.
+  resources:
+    gpu: {type: NVIDIA_B200, count: 1}
+    cpu: {request: "8", limit: "24"}
+    memory: {request: 64Gi, limit: 192Gi}
+runtime:
+  import: lyra2:Lyra2
+  config: lyra2.yaml
+  weights_path: ~/.cache/reactor_registry/lyra-2
+  recording:
+    enabled: true
+    chunk_seconds: 5
+    clip_max_seconds: 600
+    video_track: main_video
+    video: {codec: h264, preset: veryfast, crf: 20}
+build:
+  runtime_version: "3.2.5"
+  python_requirements: requirements.txt
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  system_packages:
+    - build-essential
+    - cmake
+    - ffmpeg
+    - git
+    - libeigen3-dev
+    - libgl1
+    - libglib2.0-0
+    - ninja-build
+  build_env:
+    UV_INDEX_STRATEGY: unsafe-best-match
+    TORCH_CUDA_ARCH_LIST: "10.0a"
+    MAX_JOBS: "32"
+  runtime_env:
+    PYTORCH_ALLOC_CONF: expandable_segments:True
+    TOKENIZERS_PARALLELISM: "false"
+  run:
+    - >-
+      python -m pip install --no-cache-dir --no-deps
+      git+https://github.com/microsoft/MoGe.git@74fbce054ebed49800de42d0ad0e83495065719a
+    - >-
+      git init /opt/lyra &&
+      git -C /opt/lyra remote add origin https://github.com/nv-tlabs/lyra.git &&
+      git -C /opt/lyra fetch --depth 1 origin 9fffc9adc37004091ecf26ef03abfb3abdf4d59a &&
+      git -C /opt/lyra checkout --detach FETCH_HEAD &&
+      git -C /opt/lyra submodule update --init --depth 1
+      Lyra-2/lyra_2/_src/inference/vipe
+      Lyra-2/lyra_2/_src/inference/depth_anything_3 &&
+      rm -rf /opt/lyra/.git
+    - >-
+      USE_SYSTEM_EIGEN=1 python -m pip install --no-cache-dir --no-build-isolation
+      /opt/lyra/Lyra-2/lyra_2/_src/inference/vipe
+    - >-
+      python -m pip install --no-cache-dir --no-build-isolation
+      '/opt/lyra/Lyra-2/lyra_2/_src/inference/depth_anything_3[gs]'
+    - python -m pip install --no-cache-dir 'numpy>=2.1,<2.5'
+    - >-
+      CPATH=/opt/venv/lib/python3.12/site-packages/nvidia/cudnn/include
+      LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/nvidia/cudnn/lib
+      LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/nvidia/cudnn/lib
+      MAX_JOBS=4 python -m pip install --no-cache-dir --no-build-isolation
+      'transformer-engine[pytorch]==2.7.0'
+    - python -m pip install --no-cache-dir --no-build-isolation flash-attn==2.8.1
