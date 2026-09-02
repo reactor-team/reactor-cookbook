@@ -1,4 +1,4 @@
-# Infinite Cooking Show
+# FastH3 Streaming App
 
 A continuously directed cooking show built on
 [`reactor/fast-h3`](https://docs.reactor.inc/model-api-reference/fast-h3/overview).
@@ -32,7 +32,7 @@ Create a key from **API Keys** in the
 
 ```bash
 git clone https://github.com/reactor-team/reactor-cookbook.git
-cd reactor-cookbook/examples/infinite-cooking-show
+cd reactor-cookbook/examples/fast-h3-streaming-app
 cp .env.example .env.local
 ```
 
