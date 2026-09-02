@@ -1,21 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  CEREBRAS_MAX_IMAGE_PAYLOAD,
-  CEREBRAS_MAX_IMAGES,
-  CEREBRAS_STORY_MODEL,
+  OPENAI_MAX_IMAGE_PAYLOAD,
+  OPENAI_MAX_IMAGES,
+  OPENAI_STORY_MODEL,
   type StoryHistoryItem,
   type StoryPlanRequest,
-} from "@/lib/cerebras-contract";
+} from "@/lib/openai-contract";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions";
+const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const VISION_DATA_URL = /^data:image\/(?:jpeg|png);base64,[A-Za-z0-9+/=]+$/;
 
 function credentialFrom() {
-  const credential = process.env.CEREBRAS_API_KEY?.trim();
-  if (!credential) throw new Error("Missing CEREBRAS_API_KEY.");
+  const credential = process.env.OPENAI_API_KEY?.trim();
+  if (!credential) throw new Error("Missing OPENAI_API_KEY.");
   return credential;
 }
 
@@ -34,11 +34,11 @@ function historyFrom(value: unknown): StoryHistoryItem[] {
 
 function imagesFrom(value: unknown) {
   if (!Array.isArray(value)) return [];
-  const images = value.slice(0, CEREBRAS_MAX_IMAGES).filter((item): item is string => (
+  const images = value.slice(0, OPENAI_MAX_IMAGES).filter((item): item is string => (
     typeof item === "string" && VISION_DATA_URL.test(item)
   ));
-  if (images.reduce((sum, image) => sum + image.length, 0) > CEREBRAS_MAX_IMAGE_PAYLOAD) {
-    throw new Error("Cerebras image context is too large.");
+  if (images.reduce((sum, image) => sum + image.length, 0) > OPENAI_MAX_IMAGE_PAYLOAD) {
+    throw new Error("OpenAI image context is too large.");
   }
   return images;
 }
@@ -61,9 +61,36 @@ function upstreamMessage(value: unknown) {
   return null;
 }
 
+function outputTextFrom(value: Record<string, unknown>) {
+  if (typeof value.output_text === "string") return value.output_text;
+  if (!Array.isArray(value.output)) return null;
+  for (const item of value.output) {
+    if (!item || typeof item !== "object") continue;
+    const content = (item as Record<string, unknown>).content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const record = part as Record<string, unknown>;
+      if (record.type === "output_text" && typeof record.text === "string") return record.text;
+    }
+  }
+  return null;
+}
+
+const STORY_SCHEMA = {
+  type: "object",
+  properties: {
+    videoPrompt: { type: "string" },
+    sceneSummary: { type: "string" },
+    dialogue: { type: "string" },
+  },
+  required: ["videoPrompt", "sceneSummary", "dialogue"],
+  additionalProperties: false,
+};
+
 export function GET() {
   return NextResponse.json(
-    { enabled: Boolean(process.env.CEREBRAS_API_KEY?.trim()) },
+    { enabled: Boolean(process.env.OPENAI_API_KEY?.trim()) },
     { headers: { "Cache-Control": "no-store, max-age=0" } },
   );
 }
@@ -91,53 +118,42 @@ export async function POST(request: NextRequest) {
       `Plan only the next ${duration} seconds.`,
     ].join("\n\n");
 
-    const content: Array<Record<string, unknown>> = [{ type: "text", text: userText }];
+    const inputContent: Array<Record<string, unknown>> = [{ type: "input_text", text: userText }];
     for (const image of images) {
-      content.push({ type: "image_url", image_url: { url: image } });
+      inputContent.push({ type: "input_image", image_url: image, detail: "low" });
     }
 
     const startedAt = Date.now();
-    const response = await fetch(CEREBRAS_URL, {
+    const response = await fetch(OPENAI_RESPONSES_URL, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${credential}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: CEREBRAS_STORY_MODEL,
-        messages: [
-          {
-            role: "system",
-            content: [
-              "You are the live showrunner for an infinite audiovisual stream built from continuous short video clips.",
-              "Continue the story causally from the newest history and visual frame while preserving character identity, location, lighting, screen direction, props, and camera language.",
-              "Treat the operator direction as the requested next beat. Treat every named persistent prop as mandatory scene state and visibly incorporate it into the established scene in the most intuitive way.",
-              "All newly added objects and images arrive as textual scene cues. Incorporate each named cue intuitively without cutting away from the established scene. Keep every named persistent prop visible or logically present across frames; subjects may receive, notice, pick up, prepare, move, or cook with them, but the props must not vanish.",
-              `Write a concrete FastH3 generation prompt describing visible action over ${duration} seconds, camera behavior, ambience, sound effects, and a spoken line when dialogue helps the story.`,
-              `Keep dialogue speakable within ${duration} seconds and quote the exact words inside videoPrompt. Do not mention prompts, source images, chunks, models, or continuity systems.`,
-            ].join(" "),
-          },
-          { role: "user", content },
-        ],
-        temperature: 0.8,
-        max_completion_tokens: 650,
-        response_format: {
-          type: "json_schema",
-          json_schema: {
+        model: OPENAI_STORY_MODEL,
+        instructions: [
+          "You are the live showrunner for an infinite audiovisual stream built from continuous short video clips.",
+          "Continue the story causally from the newest history and visual frame while preserving character identity, location, lighting, screen direction, props, and camera language.",
+          "Treat the operator direction as the requested next beat. Treat every named persistent prop as mandatory scene state and visibly incorporate it into the established scene in the most intuitive way.",
+          "All newly added objects and images arrive as textual scene cues. Incorporate each named cue intuitively without cutting away from the established scene. Keep every named persistent prop visible or logically present across frames; subjects may receive, notice, pick up, prepare, move, or cook with them, but the props must not vanish.",
+          `Write a concrete FastH3 generation prompt describing visible action over ${duration} seconds, camera behavior, ambience, sound effects, and a spoken line when dialogue helps the story.`,
+          `Keep dialogue speakable within ${duration} seconds and quote the exact words inside videoPrompt. Do not mention prompts, source images, chunks, models, or continuity systems.`,
+        ].join(" "),
+        input: [{ role: "user", content: inputContent }],
+        reasoning: { effort: "none" },
+        service_tier: "priority",
+        text: {
+          verbosity: "low",
+          format: {
+            type: "json_schema",
             name: "next_story_beat",
             strict: true,
-            schema: {
-              type: "object",
-              properties: {
-                videoPrompt: { type: "string" },
-                sceneSummary: { type: "string" },
-                dialogue: { type: "string" },
-              },
-              required: ["videoPrompt", "sceneSummary", "dialogue"],
-              additionalProperties: false,
-            },
+            schema: STORY_SCHEMA,
           },
         },
+        max_output_tokens: 650,
+        store: false,
       }),
       cache: "no-store",
       signal: AbortSignal.timeout(10_000),
@@ -145,32 +161,27 @@ export async function POST(request: NextRequest) {
     const data = await response.json().catch(() => ({})) as Record<string, unknown>;
     if (!response.ok) {
       return NextResponse.json(
-        { error: upstreamMessage(data) || `Cerebras returned ${response.status}.` },
+        { error: upstreamMessage(data) || `OpenAI returned ${response.status}.` },
         { status: response.status >= 400 && response.status <= 599 ? response.status : 502 },
       );
     }
 
-    const choices = Array.isArray(data.choices) ? data.choices : [];
-    const first = choices[0] as { message?: { content?: unknown } } | undefined;
-    const rawContent = first?.message?.content;
-    if (typeof rawContent !== "string") throw new Error("Cerebras returned no story plan.");
+    const rawContent = outputTextFrom(data);
+    if (!rawContent) throw new Error("OpenAI returned no story plan.");
     const plan = JSON.parse(rawContent) as Record<string, unknown>;
     const videoPrompt = typeof plan.videoPrompt === "string" ? plan.videoPrompt.trim().slice(0, 8_000) : "";
-    if (!videoPrompt) throw new Error("Cerebras returned an empty video prompt.");
+    if (!videoPrompt) throw new Error("OpenAI returned an empty video prompt.");
 
-    const timeInfo = data.time_info as Record<string, unknown> | undefined;
     return NextResponse.json({
       videoPrompt,
       sceneSummary: typeof plan.sceneSummary === "string" ? plan.sceneSummary.trim().slice(0, 2_000) : "",
       dialogue: typeof plan.dialogue === "string" ? plan.dialogue.trim().slice(0, 500) : "",
-      model: CEREBRAS_STORY_MODEL,
-      latencyMs: typeof timeInfo?.total_time === "number"
-        ? Math.round(timeInfo.total_time * 1_000)
-        : Date.now() - startedAt,
+      model: OPENAI_STORY_MODEL,
+      latencyMs: Date.now() - startedAt,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not plan the next story beat.";
-    const status = message.startsWith("Missing CEREBRAS_API_KEY") ? 503 : 502;
+    const status = message.startsWith("Missing OPENAI_API_KEY") ? 503 : 502;
     return NextResponse.json({ error: message }, { status });
   }
 }

@@ -1,6 +1,6 @@
-export const CEREBRAS_STORY_MODEL = "gemma-4-31b";
-export const CEREBRAS_MAX_IMAGES = 2;
-export const CEREBRAS_MAX_IMAGE_PAYLOAD = 9 * 1024 * 1024;
+export const OPENAI_STORY_MODEL = "gpt-5.6-luna";
+export const OPENAI_MAX_IMAGES = 2;
+export const OPENAI_MAX_IMAGE_PAYLOAD = 9 * 1024 * 1024;
 
 export type StoryHistoryItem = {
   sceneSummary: string;

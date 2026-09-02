@@ -1,6 +1,6 @@
 # Workspace instructions
 
-- Keep `REACTOR_API_KEY` and the optional `CEREBRAS_API_KEY` server-side in `.env.local`; never send raw keys to the browser or commit the file.
+- Keep `REACTOR_API_KEY` and the optional `OPENAI_API_KEY` server-side in `.env.local`; never send raw keys to the browser or commit the file.
 - Keep FastH3 command and event details isolated in `lib/h3-contract.ts`; mint scoped session JWTs in `app/api/reactor/token/route.ts`.
 - The selected library image is the opening `starting_frame`. Every continuation uses Reactor's native `continue_from_clip_id`; do not extract final frames in the browser.
 - FastH3 does not accept reference images yet. Mid-stream images and all props must become textual prompt context rather than uploads.

@@ -35,7 +35,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { CEREBRAS_STORY_MODEL, type StoryHistoryItem, type StoryPlan } from "@/lib/cerebras-contract";
+import { OPENAI_STORY_MODEL, type StoryHistoryItem, type StoryPlan } from "@/lib/openai-contract";
 import { COOKING_PROPS, type CookingProp } from "@/lib/cooking-props";
 import {
   FAST_H3_CANVAS,
@@ -248,7 +248,7 @@ export function H3Studio() {
   const [nextPrompt, setNextPrompt] = useState("");
   const [chunkSeconds, setChunkSeconds] = useState<FastH3ClipSeconds>(FAST_H3_DEFAULT_CLIP_SECONDS);
   const [prebufferChunks, setPrebufferChunks] = useState<PrebufferChunks>(DEFAULT_PREBUFFER_CHUNKS);
-  const [hasCerebrasKey, setHasCerebrasKey] = useState(false);
+  const [hasOpenAIKey, setHasOpenAIKey] = useState(false);
   const [phase, setPhase] = useState<StreamPhase>("idle");
   const [reactorStatus, setReactorStatus] = useState<ReactorStatus>("disconnected");
   const [clips, setClips] = useState<StreamClip[]>([]);
@@ -384,8 +384,8 @@ export function H3Studio() {
   useEffect(() => {
     void fetch("/api/story", { cache: "no-store" })
       .then((response) => response.json())
-      .then((body: { enabled?: boolean }) => setHasCerebrasKey(Boolean(body.enabled)))
-      .catch(() => setHasCerebrasKey(false));
+      .then((body: { enabled?: boolean }) => setHasOpenAIKey(Boolean(body.enabled)))
+      .catch(() => setHasOpenAIKey(false));
   }, []);
 
   useEffect(() => {
@@ -435,7 +435,7 @@ export function H3Studio() {
   }, []);
 
   const planStoryBeat = useCallback(async (direction: string, history: StoryHistoryItem[], props: CookingProp[], cues: TextCue[]): Promise<StoryPlan | null> => {
-    if (!hasCerebrasKey) return null;
+    if (!hasOpenAIKey) return null;
     try {
       const response = await fetch("/api/story", {
         method: "POST",
@@ -452,24 +452,24 @@ export function H3Studio() {
         }),
       });
       const body = await response.json().catch(() => ({})) as Partial<StoryPlan> & { error?: string };
-      if (!response.ok || !body.videoPrompt) throw new Error(body.error || "Cerebras did not return a story plan.");
+      if (!response.ok || !body.videoPrompt) throw new Error(body.error || "OpenAI did not return a story plan.");
       storyFallbackNotifiedRef.current = false;
       return {
         videoPrompt: body.videoPrompt,
         sceneSummary: body.sceneSummary ?? "",
         dialogue: body.dialogue ?? "",
-        model: body.model ?? CEREBRAS_STORY_MODEL,
+        model: body.model ?? OPENAI_STORY_MODEL,
         latencyMs: typeof body.latencyMs === "number" ? body.latencyMs : null,
       };
     } catch (storyError) {
       if (!storyFallbackNotifiedRef.current) {
-        setNotice(`Cerebras is unavailable; continuing directly. ${storyError instanceof Error ? storyError.message : ""}`.trim());
-        pushActivity("Cerebras skipped; direct prompt fallback is active.", "bad");
+        setNotice(`OpenAI is unavailable; continuing directly. ${storyError instanceof Error ? storyError.message : ""}`.trim());
+        pushActivity("OpenAI skipped; direct prompt fallback is active.", "bad");
         storyFallbackNotifiedRef.current = true;
       }
       return null;
     }
-  }, [hasCerebrasKey, pushActivity]);
+  }, [hasOpenAIKey, pushActivity]);
 
   const maybeEnableAutoplay = useCallback(async () => {
     const reactor = reactorRef.current;
@@ -1151,8 +1151,8 @@ export function H3Studio() {
               <div className="setting-row"><div><span>REACTOR_API_KEY</span><small>Required in .env.local</small></div><strong>Server only</strong></div>
               <p>The token route exchanges the server key for a short-lived token scoped to {FAST_H3_MODEL}. The raw key never reaches the browser.</p>
               <div className="credential-divider" />
-              <div className="setting-row"><div><span>CEREBRAS_API_KEY</span><small>Optional in .env.local</small></div><strong>{hasCerebrasKey ? "Configured" : "Direct fallback"}</strong></div>
-              <p>{CEREBRAS_STORY_MODEL} turns direction, persistent props, and story history into the next scene.</p>
+              <div className="setting-row"><div><span>OPENAI_API_KEY</span><small>Optional in .env.local</small></div><strong>{hasOpenAIKey ? "Configured" : "Direct fallback"}</strong></div>
+              <p>{OPENAI_STORY_MODEL} plans each next scene at low latency from direction, persistent props, and story history.</p>
             </section>
 
             <section className="director-section settings-section">

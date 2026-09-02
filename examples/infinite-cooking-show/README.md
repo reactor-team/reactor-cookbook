@@ -18,8 +18,8 @@ This example demonstrates how to:
 - turn image-based props into persistent textual scene instructions while
   FastH3 has no reference-image input;
 - receive synchronized `main_video` and `main_audio` WebRTC tracks; and
-- optionally use Cerebras to plan the next beat and dialogue, with direct
-  FastH3 prompting as the fallback.
+- optionally use OpenAI GPT-5.6 Luna to plan the next beat and dialogue, with
+  direct FastH3 prompting as the fallback.
 
 The moustached Galton opening frame and all 16 cooking props are bundled demo
 fixtures. User-added images remain in the local browser library.
@@ -71,9 +71,10 @@ Reactor clip ID directly.
 
 ## Optional story planning
 
-Set `CEREBRAS_API_KEY` in `.env.local` to enable the optional low-latency story
-planner. Without it, operator directions and prop instructions go directly to
-FastH3, so the demo remains fully usable.
+Set `OPENAI_API_KEY` in `.env.local` to enable the optional low-latency story
+planner. It uses GPT-5.6 Luna through the Responses API with reasoning disabled
+and priority processing. Without the key, operator directions and prop
+instructions go directly to FastH3, so the demo remains fully usable.
 
 ## Where to change things
 
@@ -85,7 +86,7 @@ FastH3, so the demo remains fully usable.
   queue message contract used by the client.
 - [`app/api/reactor/token/route.ts`](./app/api/reactor/token/route.ts) exchanges
   the server-side API key for a short-lived token scoped to `reactor/fast-h3`.
-- [`app/api/story/route.ts`](./app/api/story/route.ts) is the optional Cerebras
+- [`app/api/story/route.ts`](./app/api/story/route.ts) is the optional OpenAI
   planning proxy.
 
 ## Verify changes
