@@ -8,11 +8,10 @@ Streams three camera views and both arms' measured state. Replace
 
 import asyncio
 import os
+from typing import Any
 
 import numpy as np
-from aiortc import VideoStreamTrack
-from av import VideoFrame
-from reactor_sdk import Reactor, ReactorStatus
+from reactor_sdk import Reactor, ReactorStatus, time_micros
 
 MODEL = "reactor/dreamzero-yam-molmoact2"
 # Model >= 1.1.0: ask the server to align the three cameras' frames by their
@@ -22,28 +21,44 @@ PAIR_BY_CAPTURE_TIME = os.environ.get("PAIR_BY_CAPTURE_TIME", "") == "1"
 API_URL = os.environ.get("REACTOR_API_URL", "https://api.reactor.inc")
 CAMERAS = ["top", "left", "right"]  # model expects exactly these three views
 STATE_HZ = 10.0
+CAMERA_HZ = 15.0
 
 
-class CameraTrack(VideoStreamTrack):
-    """Publishes one camera as a WebRTC video track.
+class CameraSource:
+    """Captures one camera view and its sender-clock timestamp.
 
-    Replace `read_frame` with your camera driver. The model was trained on
-    176x320 RGB; sending at/near that resolution avoids wasting bandwidth.
+    Replace ``read_frame`` with your camera driver. Return the timestamp taken
+    with ``reactor_sdk.time_micros()`` as close as possible to sensor capture.
+    The model was trained on 176x320 RGB; sending at/near that resolution
+    avoids wasting bandwidth.
     """
 
     def __init__(self, camera_name: str):
-        super().__init__()
         self.camera_name = camera_name
 
-    def read_frame(self) -> np.ndarray:
+    def read_frame(self) -> tuple[np.ndarray, int]:
         # TODO: return the latest RGB frame from your camera as HxWx3 uint8.
-        return np.zeros((176, 320, 3), dtype=np.uint8)
+        frame = np.zeros((176, 320, 3), dtype=np.uint8)
+        return frame, time_micros()
 
-    async def recv(self) -> VideoFrame:
-        pts, time_base = await self.next_timestamp()
-        frame = VideoFrame.from_ndarray(self.read_frame(), format="rgb24")
-        frame.pts, frame.time_base = pts, time_base
-        return frame
+
+async def publish_cameras(
+    tracks: dict[str, Any],
+    sources: dict[str, CameraSource],
+) -> None:
+    """Push captured frames with their sender-authored capture timestamps."""
+    period = 1.0 / CAMERA_HZ
+    while True:
+        started = asyncio.get_running_loop().time()
+        for name, source in sources.items():
+            frame, capture_time_us = source.read_frame()
+            tracks[name].push_frame(
+                frame,
+                capture_time_us=capture_time_us,
+            )
+        await asyncio.sleep(
+            max(0.0, period - (asyncio.get_running_loop().time() - started))
+        )
 
 
 class RobotInterface:
@@ -70,6 +85,9 @@ class RobotInterface:
 async def main() -> None:
     robot = RobotInterface()
     ready = asyncio.Event()
+    camera_sources = {name: CameraSource(name) for name in CAMERAS}
+    camera_task: asyncio.Task | None = None
+    connected = False
 
     reactor = Reactor(MODEL, api_key=os.environ["REACTOR_API_KEY"], api_url=API_URL)
 
@@ -93,23 +111,25 @@ async def main() -> None:
         else:
             print(f"message: {message}")
 
-    await reactor.connect()
-    await asyncio.wait_for(ready.wait(), timeout=120)
-
-    # Publish the three camera views.
-    for name in CAMERAS:
-        await reactor.publish_track(name, CameraTrack(name))
-
-    # Set the task once; the episode starts when prompt + state are in.
-    await reactor.send_command("set_prompt", {"prompt": "fold the towel neatly with both arms"})
-    if PAIR_BY_CAPTURE_TIME:
-        await reactor.send_command(
-            "set_pair_by_capture_time", {"pair_by_capture_time": True}
-        )
-
-    # Closed loop: stream measured state continuously. This is what paces
-    # the model — every chunk is conditioned on the latest state.
     try:
+        await reactor.connect()
+        connected = True
+        await asyncio.wait_for(ready.wait(), timeout=120)
+
+        tracks = {name: await reactor.publish_track(name) for name in CAMERAS}
+        camera_task = asyncio.create_task(publish_cameras(tracks, camera_sources))
+
+        # Set the task once; the episode starts when prompt + state are in.
+        await reactor.send_command(
+            "set_prompt", {"prompt": "fold the towel neatly with both arms"}
+        )
+        if PAIR_BY_CAPTURE_TIME:
+            await reactor.send_command(
+                "set_pair_by_capture_time", {"pair_by_capture_time": True}
+            )
+
+        # Closed loop: stream measured state continuously. This is what paces
+        # the model — every chunk is conditioned on the latest state.
         while True:
             state = robot.get_state()
             await reactor.send_command("set_left_joint_pos", {"left_joint_pos": state["left_joint_pos"]})
@@ -118,7 +138,14 @@ async def main() -> None:
             await reactor.send_command("set_right_gripper_pos", {"right_gripper_pos": state["right_gripper_pos"]})
             await asyncio.sleep(1.0 / STATE_HZ)
     finally:
-        await reactor.disconnect()
+        if camera_task is not None:
+            camera_task.cancel()
+            try:
+                await camera_task
+            except asyncio.CancelledError:
+                pass
+        if connected:
+            await reactor.disconnect()
 
 
 if __name__ == "__main__":

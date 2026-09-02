@@ -19,10 +19,11 @@ On model >= 1.1.0 each ``action_chunk`` also reports ``obs_capture_time_us``
 and ``view_skew_us`` (spread of the three cameras' newest capture stamps for
 that chunk); the bridge logs the skew. ``--pair-by-capture-time`` sends
 ``set_pair_by_capture_time`` after the prompt, turning on server-side
-cross-camera alignment for this session. Note: reactor-sdk 0.8.0 does not
-stamp frames at capture -- the transport backfills the stamp at send time --
-so skew reflects send-path timing until a stamping SDK ships; the alignment
-toggle is still honored either way.
+cross-camera alignment for this session. Each camera frame is explicitly
+stamped with ``reactor_sdk.time_micros()`` as soon as OpenCV returns it, and
+that stamp is preserved until ``push_frame`` puts the frame on the wire. A
+camera-specific integration should stamp in its capture callback, closer to
+the sensor exposure boundary.
 
 Actions: ``action_chunk`` messages carry ``data.actions``, 24x14 rows of
 [left_joint(6) rad, left_gripper, right_joint(6) rad, right_gripper]. With both
@@ -34,10 +35,10 @@ RUN ON RIG
 Hardware assumed: two YAM arms (one per side of the workspace), each on its own
 CANable, plus three USB cameras.
 
-0. Dependencies: ``reactor-sdk``, ``aiortc``, ``av``, ``numpy``,
-   ``opencv-python``, and i2rt itself (``pip install -e /path/to/i2rt``, or put
-   the checkout on ``PYTHONPATH``). i2rt is imported lazily, so ``--mock`` runs
-   without it.
+0. Dependencies: ``reactor-sdk>=1.1.1``, ``numpy``, ``opencv-python``, and
+   i2rt itself (``pip install -e /path/to/i2rt``, or put the checkout on
+   ``PYTHONPATH``). i2rt and OpenCV are imported lazily, so ``--mock`` runs
+   without either one.
 
 1. CAN bring-up. Give each adapter a persistent name (i2rt
    ``docs/guides/set-persistent-can-ids.md``); the i2rt bimanual example names
@@ -117,12 +118,11 @@ import os
 import sys
 import threading
 import time
-from typing import Any, Optional, Protocol
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 import numpy as np
-from aiortc import VideoStreamTrack
-from av import VideoFrame
-from reactor_sdk import Reactor, ReactorStatus
+from reactor_sdk import Reactor, ReactorError, ReactorStatus, time_micros
 
 MODEL = "reactor/dreamzero-yam-molmoact2"
 CAMERAS = ("top", "left", "right")  # model expects exactly these three views
@@ -151,9 +151,17 @@ def flip_gripper(value: float) -> float:
 # ---------------------------------------------------------------------------
 # Cameras
 # ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class CapturedFrame:
+    """One RGB frame and its timestamp on the Reactor sender clock."""
+
+    data: np.ndarray
+    capture_time_us: int
+
+
 class CameraSource(Protocol):
-    def read_rgb(self) -> np.ndarray:
-        """Latest frame as (176, 320, 3) uint8 RGB."""
+    def read_rgb(self) -> CapturedFrame:
+        """Latest frame and when it was captured on the sender clock."""
 
     def close(self) -> None: ...
 
@@ -163,7 +171,9 @@ class OpenCVCamera:
 
     Grabbing runs on its own thread so a slow USB read never stalls the WebRTC
     sender, and so the frame we publish is the newest one rather than the oldest
-    one still sitting in the driver's queue.
+    one still sitting in the driver's queue. The timestamp marks when
+    ``VideoCapture.read`` returned; use a camera callback for a tighter capture
+    boundary when the driver exposes one.
     """
 
     def __init__(self, name: str, spec: str):
@@ -177,7 +187,10 @@ class OpenCVCamera:
             raise RuntimeError(f"camera {name!r}: cannot open capture source {spec!r}")
         self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        self._frame = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
+        self._frame = CapturedFrame(
+            np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8),
+            time_micros(),
+        )
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._grab_loop, name=f"cam_{name}", daemon=True)
@@ -189,12 +202,13 @@ class OpenCVCamera:
             if not ok:
                 time.sleep(0.01)
                 continue
+            capture_time_us = time_micros()
             resized = self._cv2.resize(bgr, (FRAME_W, FRAME_H), interpolation=self._cv2.INTER_AREA)
             rgb = self._cv2.cvtColor(resized, self._cv2.COLOR_BGR2RGB)
             with self._lock:
-                self._frame = rgb
+                self._frame = CapturedFrame(rgb, capture_time_us)
 
-    def read_rgb(self) -> np.ndarray:
+    def read_rgb(self) -> CapturedFrame:
         with self._lock:
             return self._frame
 
@@ -212,29 +226,40 @@ class SyntheticCamera:
         self._t0 = time.monotonic()
         self._tint = {"top": 0, "left": 1, "right": 2}.get(name, 0)
 
-    def read_rgb(self) -> np.ndarray:
+    def read_rgb(self) -> CapturedFrame:
         frame = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
         frame[:, :, self._tint] = 40
         x = int(((time.monotonic() - self._t0) * 60) % FRAME_W)
         frame[:, max(0, x - 8) : x + 8, :] = 200
-        return frame
+        return CapturedFrame(frame, time_micros())
 
     def close(self) -> None:
         pass
 
 
-class CameraTrack(VideoStreamTrack):
-    """Publishes one camera as a WebRTC video track."""
-
-    def __init__(self, source: CameraSource):
-        super().__init__()
-        self.source = source
-
-    async def recv(self) -> VideoFrame:
-        pts, time_base = await self.next_timestamp()
-        frame = VideoFrame.from_ndarray(self.source.read_rgb(), format="rgb24")
-        frame.pts, frame.time_base = pts, time_base
-        return frame
+async def publish_camera_frames(
+    tracks: dict[str, Any],
+    sources: dict[str, CameraSource],
+    poll_hz: float,
+) -> None:
+    """Push each newly captured camera frame with its original timestamp."""
+    if poll_hz <= 0:
+        raise ValueError("poll_hz must be positive")
+    period = 1.0 / poll_hz
+    last_capture_time_us: dict[str, int] = {}
+    loop = asyncio.get_running_loop()
+    while True:
+        started = loop.time()
+        for name, source in sources.items():
+            captured = source.read_rgb()
+            if captured.capture_time_us == last_capture_time_us.get(name):
+                continue
+            tracks[name].push_frame(
+                captured.data,
+                capture_time_us=captured.capture_time_us,
+            )
+            last_capture_time_us[name] = captured.capture_time_us
+        await asyncio.sleep(max(0.0, period - (loop.time() - started)))
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +300,7 @@ def make_arm(
     channel: str,
     arm_type: str,
     gripper_type: str,
-    gripper_limits: Optional[np.ndarray],
+    gripper_limits: np.ndarray | None,
 ) -> Any:
     """Build one real i2rt YAM arm on ``channel``.
 
@@ -315,7 +340,7 @@ class RobotInterface:
         self.arm_tolerance = arm_tolerance
 
         self._lock = threading.Lock()
-        self._pending: Optional[np.ndarray] = None
+        self._pending: np.ndarray | None = None
         self._row = 0
         self._armed = False
         self._refusals = 0
@@ -325,7 +350,7 @@ class RobotInterface:
         self._targets: dict[str, np.ndarray] = {}
 
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
     # ---- model-facing -----------------------------------------------------
     def get_state(self) -> dict:
@@ -363,10 +388,10 @@ class RobotInterface:
                 if hasattr(arm, "enter_gravity_comp_idle"):
                     arm.enter_gravity_comp_idle()
                 arm.close()
-            except Exception as exc:  # a failing arm must not block the other
+            except Exception as exc:  # noqa: BLE001 - keep closing the other arm
                 print(f"  ! {side} arm shutdown: {exc}")
 
-    def _next_row(self) -> Optional[np.ndarray]:
+    def _next_row(self) -> np.ndarray | None:
         with self._lock:
             if self._pending is None:
                 return None
@@ -455,10 +480,10 @@ class Session:
         self.chunks = 0
         self.inference: list[float] = []
         self.skew_us: list[int] = []
-        self.first: Optional[float] = None
-        self.last: Optional[float] = None
+        self.first: float | None = None
+        self.last: float | None = None
 
-    def record(self, inference_seconds: float, view_skew_us: Optional[int] = None) -> None:
+    def record(self, inference_seconds: float, view_skew_us: int | None = None) -> None:
         now = time.monotonic()
         self.chunks += 1
         self.inference.append(inference_seconds)
@@ -524,7 +549,7 @@ async def connect_with_capacity_retry(build: Any, retry_wait: float = 60.0) -> R
         try:
             await reactor.connect()
             return reactor
-        except RuntimeError as exc:
+        except (ReactorError, RuntimeError) as exc:
             if "429" not in str(exc) or attempt == 2:
                 raise
             print(f"session slot busy ({exc}); retrying in {retry_wait:.0f}s")
@@ -594,8 +619,10 @@ async def dry_run(robot: RobotInterface, args: argparse.Namespace) -> int:
     checks.append((
         "gripper flip on write",
         write_ok,
-        f"chunk commanded closing (model 0->1), i2rt gripper opened value fell "
-        f"{before_raw['left'][ARM_DOF]:.3f} -> {after_raw['left'][ARM_DOF]:.3f}",
+        (
+            f"chunk commanded closing (model 0->1), i2rt gripper opened value fell "
+            f"{before_raw['left'][ARM_DOF]:.3f} -> {after_raw['left'][ARM_DOF]:.3f}"
+        ),
     ))
 
     # 3. Rate limiter: demand a far pose and confirm no tick ever exceeds the clamp.
@@ -606,8 +633,10 @@ async def dry_run(robot: RobotInterface, args: argparse.Namespace) -> int:
     checks.append((
         "rate limiter clamps",
         stats["clamped"] > 0 and stats["max_step"] <= args.max_joint_step + 1e-9,
-        f"max per-tick step {stats['max_step']:.4f} rad <= {args.max_joint_step} "
-        f"({stats['clamped']} clamped ticks)",
+        (
+            f"max per-tick step {stats['max_step']:.4f} rad <= {args.max_joint_step} "
+            f"({stats['clamped']} clamped ticks)"
+        ),
     ))
 
     # 4. Startup guard: a fresh pair whose first chunk is far away must refuse.
@@ -665,7 +694,8 @@ async def run(args: argparse.Namespace) -> int:
     )
     print(f"initial state: {robot.get_state()}")
     for name, source in sources.items():
-        print(f"camera {name}: {source.read_rgb().shape} {source.read_rgb().dtype}")
+        captured = source.read_rgb()
+        print(f"camera {name}: {captured.data.shape} {captured.data.dtype}")
     robot.start()
 
     if args.dry_run:
@@ -679,7 +709,8 @@ async def run(args: argparse.Namespace) -> int:
 
     session = Session()
     ready = asyncio.Event()
-    reactor: Optional[Reactor] = None
+    reactor: Reactor | None = None
+    camera_task: asyncio.Task | None = None
     deadline = time.monotonic() + args.duration if args.duration else None
 
     try:
@@ -688,8 +719,10 @@ async def run(args: argparse.Namespace) -> int:
         )
         await asyncio.wait_for(ready.wait(), timeout=120)
 
-        for name in CAMERAS:
-            await reactor.publish_track(name, CameraTrack(sources[name]))
+        tracks = {name: await reactor.publish_track(name) for name in CAMERAS}
+        camera_task = asyncio.create_task(
+            publish_camera_frames(tracks, sources, args.camera_hz)
+        )
 
         # Set the task once; the episode starts when prompt + state are in.
         await reactor.send_command("set_prompt", {"prompt": args.prompt})
@@ -716,6 +749,12 @@ async def run(args: argparse.Namespace) -> int:
                 print(f"       R {rq} g={state['right_gripper_pos']:.3f}")
             await asyncio.sleep(1.0 / args.state_hz)
     finally:
+        if camera_task is not None:
+            camera_task.cancel()
+            try:
+                await camera_task
+            except asyncio.CancelledError:
+                pass
         if reactor is not None:
             await reactor.disconnect()
         robot.stop()
@@ -729,14 +768,14 @@ async def run(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-def _limits(text: Optional[str]) -> Optional[np.ndarray]:
+def _limits(text: str | None) -> np.ndarray | None:
     if not text:
         return None
     closed, opened = (float(v) for v in text.split(","))
     return np.array([closed, opened])
 
 
-def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--left-channel", default="can_follower_l", help="CAN interface for the left arm")
     p.add_argument("--right-channel", default="can_follower_r", help="CAN interface for the right arm")
@@ -755,6 +794,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                    help="skip Reactor: feed a synthetic chunk to the control loop for N seconds")
     p.add_argument("--duration", type=float, default=0.0, help="stop after N seconds (0 = run until Ctrl-C)")
     p.add_argument("--state-hz", type=float, default=10.0)
+    p.add_argument("--camera-hz", type=float, default=30.0)
     p.add_argument("--control-hz", type=float, default=30.0)
     p.add_argument("--max-joint-step", type=float, default=0.15, help="rad per control tick")
     p.add_argument("--max-gripper-step", type=float, default=0.10, help="normalized units per control tick")

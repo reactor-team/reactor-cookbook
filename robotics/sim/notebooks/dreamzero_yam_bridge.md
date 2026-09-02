@@ -7,7 +7,7 @@ receives `(24, 14)` action chunks.
 The script runs with placeholder cameras and state, so try it before adding
 robot hardware. To integrate your robot, replace three methods:
 
-- `CameraTrack.read_frame`
+- `CameraSource.read_frame`
 - `RobotInterface.get_state`
 - `RobotInterface.execute_chunk`
 
@@ -28,8 +28,9 @@ wait and retry.
 
 ## Connect your robot
 
-- `read_frame` returns the latest `uint8` RGB frame for each view. Keep the
-  `top`, `left`, and `right` camera roles consistent.
+- `read_frame` returns the latest `uint8` RGB frame plus the capture timestamp
+  from `reactor_sdk.time_micros()`. Take that timestamp as close as possible to
+  sensor capture. Keep the `top`, `left`, and `right` camera roles consistent.
 - `get_state` returns six joint positions and one gripper position for each
   arm. Joint positions are radians; grippers use 0 for open and 1 for closed.
 - `execute_chunk` replaces the pending action buffer with the newest chunk
@@ -63,7 +64,9 @@ stamps). Sending `set_pair_by_capture_time` `{"pair_by_capture_time": true}`
 turns on server-side cross-camera alignment for your session — off by
 default because it changes what the model sees. The script enables it when
 run with `PAIR_BY_CAPTURE_TIME=1`; watch `view_skew_us` first to see whether
-your rig's cameras are skewed enough to matter.
+your rig's cameras are skewed enough to matter. The bridge uses
+`reactor-sdk>=1.1.1` and passes each stamp explicitly to `push_frame`; PTS and
+send time are not substitutes for camera capture time.
 
 ## Control-loop rules
 
@@ -91,3 +94,11 @@ measured pose. `--mock` runs it end-to-end with stub arms and synthetic
 frames — no hardware, no CAN — which is also how it was verified against the
 hosted deployment. Its module docstring carries the RUN ON RIG checklist;
 read the safety notes there before pointing it at real arms.
+
+For a real i2rt run, install the optional OpenCV dependency and your i2rt
+checkout in this environment:
+
+```sh
+uv sync --extra i2rt --python 3.12
+uv pip install -e /path/to/i2rt
+```

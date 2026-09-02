@@ -5,17 +5,14 @@ description = "Quickstart scripts + minimal clients for Reactor-served robotics 
 requires-python = ">=3.10"
 
 dependencies = [
-    # Pinned exactly, not floored. 0.8.0 is the version these scripts were
-    # verified against, and it has a specific known gap the clients work
-    # around: no client keepalive (see reactor_robotics/session.py). A newer
-    # SDK that grows one would make the scripts' own ping loop redundant but
-    # not wrong; an older one has a different track API. Pin, then re-verify
-    # deliberately when bumping.
-    "reactor-sdk==0.8.0",
-    "aiortc>=1.9",
-    "av>=12.0",
+    # 1.1.1 is the first release that carries a caller-supplied
+    # capture_time_us through push_frame instead of replacing it at send time.
+    "reactor-sdk>=1.1.1",
     "numpy>=1.26",
 ]
+
+[project.optional-dependencies]
+i2rt = ["opencv-python>=4.10"]
 
 # No simulator dependency. Every script replays recorded observations against
 # the hosted model, so it needs no sim, no GPU and no model weights. The

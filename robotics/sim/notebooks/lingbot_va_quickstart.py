@@ -37,7 +37,7 @@ async def main():
     print("seed skip          :", SEED_SKIP_STEPS, "rows on an episode's first chunk")
     print(f"frame window hold  : {client.window_s:.2f}s per chunk "
           f"({client.fps} fps tracks)")
-    print("keepalive          : ping every 10s (runtime kills at 20s of silence)")
+    print("keepalive          : SDK heartbeat every 10s")
 
     import numpy as np
 
@@ -194,11 +194,9 @@ async def main():
         print("identical echo: no chunk in 12s, as documented.")
         print("=> the echo signals by changing. A repeat produces no reply at all.")
 
-    # (2) The keepalive matters. The runtime disconnects a client that stays quiet
-    #     for 20 s, and this protocol sends nothing while a robot executes a chunk.
-    #     Sit idle for longer than that and confirm the session is still usable --
-    #     session.py has been pinging every 10 s the whole time.
-    print("\nsitting idle for 25 s to exercise the keepalive...")
+    # (2) The SDK heartbeat matters. Sit idle past the runtime's 20 s timeout
+    #     and confirm the session is still usable.
+    print("\nsitting idle for 25 s to exercise the SDK heartbeat...")
     await asyncio.sleep(25.0)
     print("status after 25s idle:", " -> ".join(client.session.status_log))
 

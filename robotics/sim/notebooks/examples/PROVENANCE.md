@@ -452,7 +452,7 @@ The notebook was executed top to bottom against PROD on 2026-08-11, twice.
 
 Both runs also passed the negative tests: a byte-identical echo produced no
 chunk in 12 s, and 25 s of client silence did not drop the session (the 10 s
-keepalive in `session.py` carried it).
+keepalive in `session.py` carried it at the time).
 
 **Run 2 landing outside the band is the reason the band is not a gate**, and it is worth
 recording rather than smoothing over. 3.93 is ~97% of chunk magnitude — the

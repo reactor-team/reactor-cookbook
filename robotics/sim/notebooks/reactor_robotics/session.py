@@ -1,20 +1,18 @@
 # Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
-"""One live model session: connect, publish named video tracks, stay alive.
+"""One live model session: connect and publish named video tracks.
 
 This module manages the connection lifecycle (handler registration,
-readiness, keepalive) so the scripts don't have to. Three orderings
+readiness, publishing) so the scripts don't have to. Three orderings
 matter:
 
 1. Handlers are registered before ``connect()``, because ``READY`` can arrive
    before the first ``await`` after ``connect()`` returns.
-2. Tracks are published only after ``READY``. The runtime creates no track
-   for an earlier ``publish_track``, and the model then waits for frames that
-   never arrive. Status goes ``CONNECTING`` -> ``WAITING`` -> ``READY``
-   asynchronously after ``connect()``; we await the event.
-3. A ``ping`` goes out every 10 s for the life of the session, including
-   while the caller sits in ``predict()``. The runtime disconnects a client
-   that sends nothing for 20 s, and ``reactor-sdk==0.8.0`` leaves keepalive
-   to the client.
+2. Tracks are published only after ``READY``. The current SDK rejects an early
+   ``publish_track`` instead of dropping it, but the client still has to await
+   the asynchronous ``CONNECTING`` -> ``WAITING`` -> ``READY`` transition.
+3. One publisher loop pushes every view at the configured frame rate. Frames
+   from one observation retain the shared capture stamp assigned by
+   :meth:`set_frames` even though their pushes land separately.
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 import numpy as np
 
@@ -31,9 +29,6 @@ from .track import RepeatingFrameTrack
 #: The production API, where the served models live. ``REACTOR_API_URL`` is
 #: kept as an escape hatch for pointing a script at another deployment.
 DEFAULT_API_URL = "https://api.reactor.inc"
-
-#: The runtime's watchdog fires at 20 s of client silence; ping at half that.
-PING_INTERVAL_S = 10.0
 
 log = logging.getLogger("reactor_robotics.session")
 
@@ -82,7 +77,7 @@ def describe_api_key() -> str:
 
 
 class ReactorSession:
-    """A connected model session with named video tracks and a keepalive.
+    """A connected model session with named video publishers.
 
     Usage::
 
@@ -106,7 +101,6 @@ class ReactorSession:
         api_url_: str | None = None,
         fps: int = 15,
         frame_size: tuple[int, int] = (240, 320),
-        ping_interval_s: float = PING_INTERVAL_S,
     ) -> None:
         from reactor_sdk import Reactor
 
@@ -114,15 +108,13 @@ class ReactorSession:
         self.api_url = api_url_ or api_url()
         self.fps = fps
         self.frame_size = frame_size
-        self._ping_interval_s = ping_interval_s
-
         self._reactor = Reactor(
             model, api_key=api_key or require_api_key(), api_url=self.api_url
         )
         self.tracks: dict[str, RepeatingFrameTrack] = {}
         self._queues: dict[str, asyncio.Queue] = {}
         self._ready = asyncio.Event()
-        self._keepalive_task: asyncio.Task | None = None
+        self._publisher_task: asyncio.Task | None = None
         self._connected = False
         #: Handlers are registered on the SDK object, which outlives a failed
         #: connect(). Registering them twice would deliver every reply twice,
@@ -150,7 +142,7 @@ class ReactorSession:
         subscribe: Iterable[str] = (),
         ready_timeout_s: float = 120.0,
     ) -> None:
-        """Register handlers, connect, await READY, publish tracks, start ping.
+        """Register handlers, connect, await READY, and publish tracks.
 
         The order of the first three is the whole point of this method; see
         the module docstring.
@@ -199,7 +191,7 @@ class ReactorSession:
     async def _finish_connect(
         self, track_names: Sequence[str], ready_timeout_s: float
     ) -> None:
-        """Steps (2) and (3): connect, await READY, publish tracks, ping.
+        """Steps (2) and (3): connect, await READY, then publish frames.
 
         Split out from :meth:`connect` so a retried attempt re-runs only this
         part and never re-registers handlers.
@@ -208,7 +200,7 @@ class ReactorSession:
         await self._reactor.connect()
         self._connected = True
 
-        # (2) READY before publish_track; an earlier publish creates no track.
+        # (2) READY before publish_track; the SDK rejects an early publish.
         await asyncio.wait_for(self._ready.wait(), timeout=ready_timeout_s)
 
         for name in track_names:
@@ -218,7 +210,7 @@ class ReactorSession:
                 name,
                 RepeatingFrameTrack(name, fps=self.fps, size=self.frame_size),
             )
-            await self._reactor.publish_track(name, self.tracks[name])
+            self.tracks[name].bind(await self._reactor.publish_track(name))
         log.info(
             "connected to %s at %s; tracks published: %s",
             self.model,
@@ -226,21 +218,24 @@ class ReactorSession:
             ", ".join(track_names),
         )
 
-        # (3) Keepalive, or the runtime drops us after 20 s of quiet.
-        if self._keepalive_task is None or self._keepalive_task.done():
-            self._keepalive_task = asyncio.create_task(self._keepalive())
+        # (3) Push all views from one task so their wire cadence stays together.
+        if self._publisher_task is None or self._publisher_task.done():
+            self._publisher_task = asyncio.create_task(self._publish_frames())
 
-    async def _keepalive(self) -> None:
-        from reactor_sdk.types import MessageScope
-
+    async def _publish_frames(self) -> None:
+        """Repeat the current observation on every track at ``self.fps``."""
+        loop = asyncio.get_running_loop()
+        period = 1.0 / self.fps
+        next_send = loop.time()
         while True:
-            try:
-                await self._reactor.send_command("ping", {}, scope=MessageScope.RUNTIME)
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # pragma: no cover - transport hiccup
-                log.warning("keepalive ping failed", exc_info=True)
-            await asyncio.sleep(self._ping_interval_s)
+            for track in self.tracks.values():
+                track.push_current()
+            next_send += period
+            delay = next_send - loop.time()
+            if delay < -1.0:
+                next_send = loop.time()
+                delay = 0.0
+            await asyncio.sleep(max(0.0, delay))
 
     # -------------------------------------------------------------- messages
 
@@ -263,7 +258,12 @@ class ReactorSession:
             except asyncio.QueueEmpty:
                 return out
 
-    def set_frames(self, frames: dict[str, np.ndarray]) -> None:
+    def set_frames(
+        self,
+        frames: dict[str, np.ndarray],
+        *,
+        capture_time_us: int | None = None,
+    ) -> None:
         """Replace the repeating frame on each named track.
 
         Raises on an unknown track name: the server accepts a wrist frame
@@ -281,23 +281,34 @@ class ReactorSession:
                 f"missing frames for track(s): {missing}. Every view must get "
                 "a frame; the model waits for all of them before answering."
             )
+        if capture_time_us is None:
+            from reactor_sdk import time_micros
+
+            capture_time_us = time_micros()
         for name, frame in frames.items():
-            self.tracks[name].set_frame(frame)
+            self.tracks[name].set_frame(
+                frame,
+                capture_time_us=capture_time_us,
+            )
 
     # ----------------------------------------------------------------- close
 
     async def close(self) -> None:
-        """Stop the keepalive and disconnect. Safe to call twice.
+        """Stop publishing and disconnect. Safe to call twice.
 
         Always call this: a live session holds a real GPU worker.
         """
-        if self._keepalive_task is not None:
-            self._keepalive_task.cancel()
+        if self._publisher_task is not None:
+            self._publisher_task.cancel()
             try:
-                await self._keepalive_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._keepalive_task = None
+                await self._publisher_task
+            except asyncio.CancelledError:
+                log.debug("frame publisher stopped")
+            except Exception:
+                log.warning("frame publisher failed during close", exc_info=True)
+            self._publisher_task = None
+        for track in self.tracks.values():
+            track.unbind()
         if self._connected:
             try:
                 await self._reactor.disconnect()
