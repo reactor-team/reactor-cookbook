@@ -1,0 +1,35 @@
+$schema: reactor/v2
+model:
+  name: zing-0-5
+  version: v0.1.0
+  description: Explore Zing 0.5 through prompt, image, and its native W/A/S/D/I/J/K/L controls.
+  resources:
+    gpu:
+      type: NVIDIA_H100_80GB
+      count: 1
+runtime:
+  import: zing:Zing
+  config: zing.yaml
+  weights_path: /opt/dlami/nvme/.cache_hf/zing-0.5
+  recording:
+    enabled: true
+    video_track: main_video
+build:
+  runtime_version: "3.2.5"
+  python_requirements: requirements.txt
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  python_indexes:
+    - https://download.pytorch.org/whl/cu128
+  system_packages:
+    - build-essential
+    - git
+  build_env:
+    CUDA_HOME: /usr/local/cuda
+    MAX_JOBS: "16"
+    TORCH_CUDA_ARCH_LIST: "10.0"
+  runtime_env:
+    PYTORCH_ALLOC_CONF: expandable_segments:True
+  run:
+    - pip install --no-build-isolation "flash-attn==2.8.3.post1"
+    - mkdir -p /opt/dlami/nvme/.cache_hf/sources && git clone https://github.com/seedleap/zing-world-model.git /opt/dlami/nvme/.cache_hf/sources/zing-world-model && git -C /opt/dlami/nvme/.cache_hf/sources/zing-world-model checkout --detach 8dd446798f2dec160351c17484c53e8deaaf7ef4

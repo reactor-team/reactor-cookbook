@@ -1,0 +1,17 @@
+source:
+  path: /opt/dlami/nvme/.cache_hf/sources/zing-world-model
+  url: https://github.com/seedleap/zing-world-model.git
+  revision: 8dd446798f2dec160351c17484c53e8deaaf7ef4
+assets:
+  repo_id: seedleap/Zing-0.5
+  revision: b7a6f480d5f36ec6a1e82a489cde8d8305a28438
+  path: .
+inference:
+  width: 1248
+  height: 704
+  seed: 42
+  max_chunks: 32
+  local_attn_size: 97
+  sink_size: 9
+  default_prompt: A photorealistic first-person view of a coherent interactive world.
+  example_prompt: A colorful side-scrolling pixel-art adventure game. A small explorer stands before a huge circular golden portal, looking toward a bright fantasy castle, floating islands, trees, and glowing collectibles under a vivid blue sky.
