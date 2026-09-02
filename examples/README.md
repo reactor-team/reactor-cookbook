@@ -11,3 +11,6 @@ customization guide.
 - [`world-model-arcade`](./world-model-arcade): a navigable 3D arcade that turns
   LingBot World 2 into seven controller-first games with shared input and HUD
   systems.
+- [`fast-h3-streaming-app`](./fast-h3-streaming-app): an endlessly directed
+  FastH3 cooking show with native audio, clip-ID continuity, live prompt
+  steering, and persistent text-driven props.
