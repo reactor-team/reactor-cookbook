@@ -23,24 +23,22 @@ works.
 - `models/` — deployable models; each folder is a `reactor` CLI workspace
   governed by GUIDELINES.md.
 - `examples/` — complete applications built on hosted Reactor models.
-  - `examples/api-models-examples/` — the per-model reference frontends, one
-    folder per model Reactor serves on the API. See below before editing one.
 - `robotics/` — Python SDK integrations that drive already-served models.
 
-## `examples/api-models-examples/`
+## `examples/`
 
-One standalone Next.js app per API model, each carrying a `skill/SKILL.md` that
-holds the reasoning behind its code. These are the templates
-`npx create-reactor-app` scaffolds from, and the CLI is being repointed at this
-folder — so a folder name here is a public identifier (`--model <name>`), not an
-internal label. Renaming one breaks the CLI.
+Complete applications built on models Reactor already serves. The per-model
+reference frontends that `npx create-reactor-app` scaffolds from are **not**
+here — they live beside that CLI in
+[reactor-team/create-reactor-app](https://github.com/reactor-team/create-reactor-app),
+because a folder name there is the public `--model` identifier. A new
+per-model reference frontend belongs in that repository, under the
+[`scaffold-model-example`](https://github.com/reactor-team/ai-skills/blob/main/workflow/scaffold-model-example.md)
+standard. A complete application or demo belongs here.
 
-Three rules when you touch one:
+Two rules when you touch a frontend here, because both are things a reader
+copies verbatim:
 
-- **The folder's `skill/SKILL.md` is part of the deliverable.** A change to how
-  the example works that leaves the skill describing the old behaviour is
-  incomplete — the skill is what agents read, so a stale one actively teaches the
-  wrong thing.
 - **Auth is an API key server-side, exchanged for a session-scoped JWT.** That is
   the only auth model these examples document. Do not add a third-party identity
   provider, and do not name one: readers copy verbatim, and a session-scoped
@@ -58,7 +56,7 @@ Three rules when you touch one:
 Verify a change the way a reader would:
 
 ```sh
-cd examples/api-models-examples/<model>
+cd examples/<name>
 pnpm install && pnpm build   # `tsc --noEmit` runs as part of next build
 ```
 
