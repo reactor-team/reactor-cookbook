@@ -1,7 +1,7 @@
 # RLDX-1 with RTC
 
-This recipe deploys RLDX-1 on one NVIDIA B200. It contains the Reactor adapter
-and the vendored RLDX-1 inference source used by the model image.
+This recipe deploys RLDX-1 on one NVIDIA Blackwell GPU. It contains the
+Reactor adapter and the vendored RLDX-1 inference source used by the model image.
 
 The default configuration enables guided Real-Time Chunking (RTC):
 
