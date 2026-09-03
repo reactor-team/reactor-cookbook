@@ -143,6 +143,8 @@ class Client:
         self.rtc_resets = 0
         self.rtc_resetting = False
         self.executed_actions = 0
+        self.rtc_request_started: dict[int, float] = {}
+        self.rtc_latency_ms: list[float] = []
 
         # What we sent, so an echo can be checked against it rather than trusted.
         self.sent_capture_us: dict[int, int] = {}
@@ -205,6 +207,13 @@ class Client:
         self.chunks += 1
         self.arrivals.append(now)
 
+        request_id = as_int(body.get("request_id"))
+        request_started = self.rtc_request_started.pop(request_id, None)
+        rtc_latency_ms = None
+        if request_started is not None:
+            rtc_latency_ms = (now - request_started) * 1000.0
+            self.rtc_latency_ms.append(rtc_latency_ms)
+
         source_capture_us = as_int(body.get("source_capture_us"))
         source_seq = as_int(body.get("source_seq"))
         skew_us = as_int(body.get("view_skew_us"))
@@ -245,6 +254,8 @@ class Client:
                       f"(we pushed seq={source_seq} at capture_us={sent})")
             print(f"  age of source snapshot on our clock: "
                   f"{f'{age_ms:.0f} ms' if age_ms is not None else 'unavailable (no echo)'}")
+            if rtc_latency_ms is not None:
+                print(f"  RTC request-to-response latency: {rtc_latency_ms:.0f} ms")
             print(f"  view_skew_us={skew_us}  "
                   f"({'cross-view capture spread of the frames this chunk used' if skew_us is not None else 'transport carried no per-frame stamps'})")
             print(f"  first action step: {body.get('end_effector_position', [[]])[0]}\n")
@@ -296,6 +307,7 @@ class Client:
         try:
             print(f"[rtc reset] {reason}; holding until a fresh plan arrives")
             scheduler.reset()
+            self.rtc_request_started.clear()
             self.rtc_resets += 1
             await self.reactor.send_command("reset", {})
         finally:
@@ -456,6 +468,8 @@ class Client:
                     try:
                         request = scheduler.next_request()
                         if request is not None:
+                            request_id = int(request["request_id"])
+                            self.rtc_request_started[request_id] = time.monotonic()
                             await self.reactor.send_command("request_action", request)
                             self.rtc_requests += 1
                         control_step = scheduler.current_step
@@ -492,18 +506,25 @@ class Client:
                 f"RTC: requests={self.rtc_requests} "
                 f"actions_executed={self.executed_actions} resets={self.rtc_resets}"
             )
+            if self.rtc_latency_ms:
+                print(
+                    "RTC request-to-response ms: "
+                    f"p50={pct(self.rtc_latency_ms, 50):.0f} "
+                    f"p99={pct(self.rtc_latency_ms, 99):.0f} "
+                    f"(from {len(self.rtc_latency_ms)} responses)"
+                )
 
         if len(self.arrivals) >= 4:
             deltas = np.diff(self.arrivals)[2:] * 1000.0  # drop warmup intervals
             print(f"inter-arrival ms: p50={pct(list(deltas), 50):.0f} "
-                  f"p90={pct(list(deltas), 90):.0f} "
+                  f"p99={pct(list(deltas), 99):.0f} "
                   f"({1000.0 / max(pct(list(deltas), 50), 1e-9):.1f} chunks/s)")
 
         # The number that matters for control: how stale the observation behind a
         # chunk already is by the time the chunk is in the client's hands.
         if self.ages_ms:
             print(f"chunk age on our clock ms: p50={pct(self.ages_ms, 50):.0f} "
-                  f"p90={pct(self.ages_ms, 90):.0f} "
+                  f"p99={pct(self.ages_ms, 99):.0f} "
                   f"(from {len(self.ages_ms)} echoed chunks)")
         else:
             print("chunk age on our clock: unavailable — no chunk carried "
@@ -524,6 +545,7 @@ class Client:
 
         if self.skews_us:
             print(f"view_skew_us: p50={pct([float(s) for s in self.skews_us], 50):.0f} "
+                  f"p99={pct([float(s) for s in self.skews_us], 99):.0f} "
                   f"max={max(self.skews_us)} (across {len(self.skews_us)} chunks)")
         else:
             print("view_skew_us: not reported — the transport carried no per-frame "

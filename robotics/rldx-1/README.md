@@ -27,6 +27,9 @@ current checkpoint, that contract is:
 The client reads the announced views, resolution, control rate, state layout,
 and state carrier instead of hardcoding them.
 
+To deploy the matching B200 model with guided RTC, use the
+[`models/rldx-1`](../../models/rldx-1) workspace.
+
 ## Why frame metadata matters
 
 WebRTC delivers each camera view on a separate track, while action chunks arrive
@@ -126,10 +129,10 @@ Build the vectors from `state_dims`; a vector with the wrong length causes the
 whole state payload to be rejected. The two optional tag keys are announced in
 `state_tag_keys`:
 
-| Key | Meaning | Echoed as |
-| --- | --- | --- |
+| Key          | Meaning                                           | Echoed as           |
+| ------------ | ------------------------------------------------- | ------------------- |
 | `capture_us` | Snapshot time in microseconds on the client clock | `source_capture_us` |
-| `seq` | Client tick counter | `source_seq` |
+| `seq`        | Client tick counter                               | `source_seq`        |
 
 Only include keys announced in `state_tag_keys`. Unknown keys can prevent the
 state payload from parsing.
@@ -203,14 +206,16 @@ carrier, first correlated chunk, and a final summary:
 ===== RLDX-1 sync summary =====
 ticks published: 787 ; action chunks received: 49
 state carrier: frame metadata
-inter-arrival ms: p50=803 p90=806 (1.2 chunks/s)
-chunk age on our clock ms: p50=177 p90=196 (from 49 echoed chunks)
+RTC: requests=<count> actions_executed=<count> resets=0
+RTC request-to-response ms: p50=<measured> p99=<measured>
+inter-arrival ms: p50=<measured> p99=<measured>
+chunk age on our clock ms: p50=<measured> p99=<measured>
 echo correlation: 49/49 chunks echoed a stamp matching the tick we sent
-view_skew_us: p50=0 max=0 (across 49 chunks)
+view_skew_us: p50=0 p99=0 max=0 (across 49 chunks)
 command_errors: none — the state carrier worked
 ```
 
-Two numbers are worth reading carefully. In server-paced streaming mode,
+The placeholders above are populated by the test run. In server-paced streaming mode,
 `inter-arrival` follows the server's execution horizon. In RTC mode, requests
 follow the client's announced `exec_horizon`; a late response is rejected
 instead of shifting that control timeline. `view_skew_us` should be **0** when
@@ -219,12 +224,13 @@ a frame from the same declared instant.
 
 The metrics answer different questions:
 
-| Metric | Meaning |
-| --- | --- |
-| `inter-arrival` | How often action chunks arrive; this is cadence, not per-chunk latency. |
-| `chunk age` | How old the source observation is when the client receives its action chunk. |
-| `echo correlation` | Whether each returned tag matches a tick the client actually sent. |
-| `view_skew_us` | Capture-time spread across the views used for the chunk. Expect 0 when a tick is stamped once; a value near one control period means a view lagged a whole step and the rest were held back to match it. |
+| Metric                    | Meaning                                                                                                                                                                                                  |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RTC request-to-response` | Time from sending `request_action` until its matching action chunk reaches the client.                                                                                                                   |
+| `inter-arrival`           | How often action chunks arrive; this is cadence, not per-chunk latency.                                                                                                                                  |
+| `chunk age`               | How old the source observation is when the client receives its action chunk.                                                                                                                             |
+| `echo correlation`        | Whether each returned tag matches a tick the client actually sent.                                                                                                                                       |
+| `view_skew_us`            | Capture-time spread across the views used for the chunk. Expect 0 when a tick is stamped once; a value near one control period means a view lagged a whole step and the rest were held back to match it. |
 
 If the deployment does not announce `state_source`, the client falls back to
 `set_state_json`. It reports chunk age and echo correlation as unavailable when

@@ -1,6 +1,6 @@
 [project]
 name = "rldx-1-client-python"
-version = "0.3.0"
+version = "0.4.0"
 description = "Reactor Python SDK client for RLDX-1 — synchronized input and client-owned RTC scheduling"
 requires-python = ">=3.10"
 dependencies = [
