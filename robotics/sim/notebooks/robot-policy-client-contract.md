@@ -26,7 +26,7 @@
        that can read xwam/ and diff it against the text.
     2. Internal references removed rather than labelled. Upstream's
        private-repo paths and bare tracker ids are gone from the body: the
-       keepalive example points at this repository's
+       session-lifecycle example points at this repository's
        reactor_robotics/session.py, and the conformance checklist asks for
        published behaviour documentation without naming model_behaviour.md.
     3. Three extra rows in the per-model table: dreamzero,
@@ -40,8 +40,8 @@
        re-checked against the model's source and unchanged.
 
   TRACKER IDS, kept here and never in the body: REA-5036 this contract;
-  REA-5037 the SDK/runtime gaps the body states behaviourally (silent
-  publish_track before READY, client-side keepalive pings, frame
+  REA-5037 the SDK/runtime gaps the body states behaviourally (publishing
+  before READY, frame
   watermarking); REA-5038 the generic client notebook.
   ─────────────────────────────────────────────────────────────────────────
 -->
@@ -77,17 +77,14 @@ fixed.
 1. **Register your status and message handlers, then connect** with the
    Reactor SDK (`reactor-sdk`).
 2. **Wait for `READY`.** Status goes `CONNECTING` → `WAITING` → `READY`
-   asynchronously after `connect()`. `publish_track` before `READY` does
-   nothing at all (no error, no track) and the model waits forever for frames
-   that never arrive. Await the status event; do not sleep and hope.
+   asynchronously after `connect()`. The current SDK rejects `publish_track`
+   before `READY`; await the status event rather than sleeping and hoping.
 3. **Publish one track per view the model declares**, using its exact track
    names.
 4. **Keep the session alive.** The runtime kills a connection after 20 s of
-   client silence, and some SDK builds do not ping for you. Send a
-   runtime-scope `ping` at least every 10 s for the whole session, including
-   while your robot is executing a chunk and sending nothing else.
-   [`reactor_robotics/session.py`](./reactor_robotics/session.py) is a working
-   keepalive loop to copy.
+   client silence. `reactor-sdk>=1.1.1` sends a runtime heartbeat every 10 s,
+   including while your robot is executing a chunk and sending nothing else;
+   do not add an application command as a second keepalive.
 5. **Set the task** once per episode, then loop over requests.
 6. **Reset or reconnect freely when the model implements this stateless
    contract.** A prediction then depends only on the frames and state that came
@@ -202,16 +199,17 @@ works with any model where all of these hold:
 - [ ] Publishes N, A, K and both layouts in its behaviour documentation, and
       has a row in the table above.
 
-## What the tooling does not do for you
+## Tooling boundaries
 
-Three of the rules above are there because the tooling does not yet cover
-them, not because the protocol requires them:
+The current SDK covers track publication errors, frame timestamps, and the
+runtime heartbeat, but the client still owns the surrounding protocol:
 
-- `publish_track` before `READY` fails silently, so your client has to wait
-  for the status event rather than assume the track landed.
-- The SDK does not keep the session alive. Your client sends the pings.
-- Nothing tags a chunk with the frame it came from, so push-then-request
-  ordering is the only thing pairing an observation with its reply.
+- Await `READY`; an early `publish_track` raises instead of creating a sender.
+- Do not send an application command as a keepalive; the SDK sends the runtime
+  heartbeat itself.
+- `capture_time_us` aligns camera frames but does not identify the resulting
+  action chunk. The model must echo an observation or request identifier for
+  causal response correlation.
 
 If a model behaves differently from this document, or you hit something these
 rules do not cover, tell your Reactor contact.

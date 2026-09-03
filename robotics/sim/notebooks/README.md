@@ -39,6 +39,9 @@ client written against the generic contract will not drive them unchanged.
 `dreamzero-yam-molmoact2` to a bimanual YAM robot. Run the example with
 placeholder cameras and state, then replace three methods to connect your
 hardware. The model returns free-running `(24, 14)` action chunks.
+[`dreamzero_yam_bridge_i2rt.py`](./dreamzero_yam_bridge_i2rt.py) is the same
+bridge with the stubs pre-filled for i2rt YAM hardware (CAN arms, OpenCV
+cameras, safety limiter); `--mock` runs it without any hardware.
 
 ## Setup
 
@@ -56,16 +59,12 @@ For an explicit package install instead of the project environment:
 
 ```sh
 uv venv --python 3.12
-uv pip install "reactor-sdk==0.8.0" "aiortc>=1.9" "av>=12.0" "numpy>=1.26"
+uv pip install "reactor-sdk>=1.1.1" "numpy>=1.26"
 ```
 
 Set the key in your shell, not in a script: a key pasted into a script is
 committed. Nothing in these quickstarts prints it; the key check reports only
 its length.
-
-At session close the SDK may log `WARNING Control channel not open; dropping
-'unpublish_track' notification` a few times. That is benign teardown noise —
-the session is already closing — not a failure.
 
 `REACTOR_API_URL` defaults to `https://api.reactor.inc` (PROD, where all seven
 models are served). It exists as an escape hatch for pointing at another
@@ -79,8 +78,8 @@ deployment.
 dreamzero_yam_bridge.py          live bimanual YAM bridge
 dreamzero_yam_bridge.md          integration guide and safety boundary
 reactor_robotics/
-  session.py       connect + READY + tracks + keepalive; the shared plumbing
-  track.py         a video track that repeats one frame until you replace it
+  session.py       connect + READY + stamped frame publisher; shared plumbing
+  track.py         holds one captured frame until you replace it
   xwam.py          XwamClient.predict():        lock-step, chunk_id echoed
   lingbot_va.py    LingbotVaClient.predict():   lock-step, executed-action echo
   cosmos_droid.py  CosmosDroidClient.predict(): stateless, executed-step report
@@ -119,17 +118,16 @@ same code path that produced the published X-WAM evaluation numbers.
 ## Session lifecycle
 
 `reactor_robotics/session.py` manages the connection lifecycle (handler
-registration, readiness, keepalive) so no script has to:
+registration, readiness, publishing) so no script has to:
 
 1. Register handlers before `connect()`. `READY` can arrive before your
    first `await` after `connect()` returns.
-2. Publish tracks only after `READY`. An earlier `publish_track` creates no
-   track, and the model then waits for frames that never arrive.
-3. Ping every 10 s, for the whole session. The runtime disconnects a client
-   that stays quiet for 20 s, and 0.8.0 leaves keepalive to the client. This
-   matters most when you are not sending anything else, for example while a
-   robot executes a chunk. Three scripts demonstrate it by sitting idle for
-   25 s.
+2. Publish tracks only after `READY`; the current SDK rejects an early
+   `publish_track`.
+3. Push all views from one paced loop. One observation receives one shared
+   `capture_time_us`, so independently delivered tracks can still be paired.
+   The current SDK sends the runtime keepalive itself every 10 s; the idle
+   checks demonstrate that the session survives past the 20 s timeout.
 
 Keep `logging.basicConfig(level=INFO)` on: dropped commands are logged, not
 raised.

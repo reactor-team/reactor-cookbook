@@ -4,10 +4,9 @@ version = "0.3.0"
 description = "Reactor Python SDK client for RLDX-1 — synchronized input and client-owned RTC scheduling"
 requires-python = ">=3.10"
 dependencies = [
-    # The only 1.x pin in this cookbook, deliberately. Per-frame metadata does
-    # not exist in the 0.x SDK: `push_frame(..., user_data=, capture_time_us=)`
-    # and `time_micros()` — the whole subject of this example — arrived with 1.0.
-    # Do not "fix" this pin downward to match the other examples.
+    # Per-frame metadata does not exist in the 0.x SDK:
+    # `push_frame(..., user_data=, capture_time_us=)` and `time_micros()` — the
+    # whole subject of this example — arrived with 1.0.
     #
     # The floor is 1.1.1 rather than 1.1.0 because 1.1.0 accepted
     # `capture_time_us` and then dropped it, stamping the engine's own send

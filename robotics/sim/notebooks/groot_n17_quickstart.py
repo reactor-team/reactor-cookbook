@@ -39,7 +39,7 @@ async def main():
     print(f"frame window       : stride {STRIDE} ticks, hold {client.window_s:.2f}s "
           f"at {client.fps} fps")
     print("pairing            : drain, discard", client.discard_chunks, "chunk, take the next")
-    print("keepalive          : ping every 10s (runtime kills at 20s of silence)")
+    print("keepalive          : SDK heartbeat every 10s")
 
     import numpy as np
 
@@ -225,10 +225,9 @@ async def main():
                                     float(examples["gripper_position"][0]))},
     )
 
-    # (2) The keepalive matters. The runtime disconnects a client quiet for 20 s,
-    #     and a robot sends nothing while it executes a chunk. Sit idle longer
-    #     than that; session.py has been pinging every 10 s.
-    print("\nsitting idle for 25 s to exercise the keepalive...")
+    # (2) The SDK heartbeat matters. Sit idle past the runtime's 20 s timeout
+    #     and confirm the session is still usable.
+    print("\nsitting idle for 25 s to exercise the SDK heartbeat...")
     await asyncio.sleep(25.0)
     print("status after 25s idle:", " -> ".join(client.session.status_log))
     pred = await client.predict(

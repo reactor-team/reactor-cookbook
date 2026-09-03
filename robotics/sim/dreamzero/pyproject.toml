@@ -5,9 +5,8 @@ description = "Minimal RoboLab gateway example: Isaac Sim's DROID benchmark driv
 requires-python = ">=3.10"
 
 dependencies = [
-    # Pinned exactly, matching notebooks/pyproject.toml. 0.8.0 is the version
-    # this path was verified against, and the bridge works around a specific
-    # gap in it (no client keepalive, so it pings on its own; see
+    # Pinned exactly at 0.8.0, the version this path was verified against. The
+    # bridge works around a specific gap in it (no client keepalive; see
     # bridge.py). The three older examples in this repo floor at >=0.2.2;
     # this one needs 0.8.0's API, in particular the runtime-scoped ping.
     "reactor-sdk==0.8.0",

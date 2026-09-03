@@ -66,7 +66,7 @@ async def main():
     print(f"frame settle       : {client.settle_s:.2f}s so the fresh frame set "
           "lands first")
     print("reset event        : yes -- this model holds a per-session history")
-    print("keepalive          : ping every 10s (runtime kills at 20s of silence)")
+    print("keepalive          : SDK heartbeat every 10s")
 
     import numpy as np
     from pathlib import Path
@@ -267,11 +267,9 @@ async def main():
         print("=> the model advances only on a strictly greater step, never on bad")
         print("   input, so a stalled control loop cannot run it ahead.")
 
-    # (2) The keepalive matters. The runtime disconnects a client that stays quiet
-    #     for 20 s, and a robot executing a full 16-step window can easily be
-    #     silent that long. Sit idle past the watchdog and confirm the session
-    #     survives; session.py has been pinging every 10 s.
-    print("\nsitting idle for 25 s to exercise the keepalive...")
+    # (2) The SDK heartbeat matters. Sit idle past the runtime's 20 s timeout
+    #     and confirm the session is still usable.
+    print("\nsitting idle for 25 s to exercise the SDK heartbeat...")
     await asyncio.sleep(25.0)
     print("status after 25s idle:", " -> ".join(client.session.status_log))
 

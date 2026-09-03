@@ -19,7 +19,7 @@ each client's module docstring states how.
 
 All six sit on :class:`~reactor_robotics.session.ReactorSession`, which
 manages the connection lifecycle: handlers registered before ``connect()``,
-tracks published only after ``READY``, and a 10 s keepalive ping.
+tracks published only after ``READY``, and one paced stamped-frame publisher.
 
 An evaluation harness and a controller for a physical robot use the *same
 client*: they differ only in where the frames and the state come from, never

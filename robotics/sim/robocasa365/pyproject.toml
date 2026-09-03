@@ -5,9 +5,8 @@ description = "RoboCasa365 evaluation example: the vendor's rollout loop, unmodi
 requires-python = ">=3.10"
 
 dependencies = [
-    # Pinned exactly, matching notebooks/pyproject.toml. 0.8.0 is the version
-    # this path was verified against, and the client works around a specific
-    # gap in it (no client keepalive, so it pings on its own; see client.py).
+    # Pinned exactly at 0.8.0, the version this path was verified against. The
+    # client works around its missing keepalive by pinging; see client.py.
     "reactor-sdk==0.8.0",
     "aiortc>=1.9",
     "av>=12.0",

@@ -23,12 +23,12 @@ async def main():
     from reactor_robotics.xwam import VIEWS, XwamClient
 
     client = XwamClient()          # model="xwam", 15 fps tracks
-    await client.connect()         # handlers -> connect -> await READY -> tracks -> ping
+    await client.connect()         # handlers -> connect -> await READY -> tracks
 
     print("status transitions :", " -> ".join(client.session.status_log))
     print("tracks published   :", ", ".join(client.session.tracks))
     print("endpoint           :", client.session.api_url)
-    print("keepalive          : ping every 10s (runtime kills at 20s of silence)")
+    print("keepalive          : SDK heartbeat every 10s")
 
     import numpy as np
 
