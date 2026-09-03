@@ -23,7 +23,7 @@ model:
 runtime:
   import: rldx1:RLDXPipeline
   config: config.yml
-  weights_path: ~/.cache/reactor_registry/rldx-1
+  weights_path: ./weights
 
 build:
   runtime_version: "3.2.6"
