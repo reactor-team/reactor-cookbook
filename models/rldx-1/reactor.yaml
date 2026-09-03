@@ -27,3 +27,8 @@ runtime:
 
 build:
   runtime_version: "3.2.6"
+
+deployment:
+  instances:
+    - region: us-west
+      count: 1
