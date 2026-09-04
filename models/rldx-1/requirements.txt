@@ -1,18 +1,23 @@
 # Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
-# Model dependencies installed with Reactor Runtime during the image build.
-# Keep the Runtime pin aligned with `build.runtime_version` in reactor.yaml.
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
 #
 # The model code itself is vendored in ./rldx (the inference subset, from
 # github.com/RLWRLD/RLDX-1 @ ecbfaf8) and imported off /app's sys.path — it is
-# NOT pip-installed. This file pins the upstream
-# rldx runtime dependencies (from its pyproject.toml), MINUS the ones the
-# Dockerfile installs explicitly for Blackwell/B200:
-#   torch==2.7.0, torchvision==0.22.0  -> cu128 wheel index (Dockerfile)
-#   flash-attn==2.7.4.post1            -> built from source (Dockerfile)
-#   torchcodec==0.4.0                  -> omitted (video decode; unused at serving)
-# The Dockerfile installs this complete, pinned serving environment directly.
+# NOT pip-installed. This file pins the upstream rldx runtime dependencies
+# (from its pyproject.toml) with two exceptions:
+#   flash-attn==2.7.4.post1  -> built from source by `build.run` in reactor.yaml
+#   torchcodec==0.4.0        -> omitted (video decode; unused at serving)
 
-reactor-runtime==3.2.6
+# The cu128 builds carry Blackwell (B200) kernels; the PyPI wheels do not.
+torch @ https://download.pytorch.org/whl/cu128/torch-2.7.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl
+torchvision @ https://download.pytorch.org/whl/cu128/torchvision-0.22.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl
+
+# The flash-attn source build runs without build isolation, so its build
+# dependencies must already be in the environment.
+setuptools==80.9.0
+wheel==0.45.1
+psutil==7.2.2
 
 albumentations==1.4.18
 av==18.1.0

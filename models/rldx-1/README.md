@@ -31,19 +31,24 @@ uvx --from 'huggingface_hub[cli]' hf download RLWRLD/RLDX-1-FT-ROBOCASA \
   --local-dir ./weights
 ```
 
-The `weights/` directory is excluded from the image build. Reactor uploads it
-as the release's weight bundle.
+The `weights/` directory is excluded from the image build. `reactor.yaml`
+names it in `runtime.weights_path`, so the publish command uploads it as the
+release's weight bundle.
 
 ## Publish and deploy
 
-Run these commands from this directory. The publish command registers the
-source image and prints the model name used by the weights command.
+Run these commands from this directory. The publish command builds the image
+from the `build:` block of `reactor.yaml`, pushes it, and uploads the weights.
+The build compiles FlashAttention 2 for Blackwell from source, so the first
+build takes a while; later builds reuse the cached layer until the
+dependencies change.
 
 ```bash
-reactor model publish --source <source-docker-image-id>
-reactor weights upload <model-name-from-publish-output> ./weights
+reactor model publish
 reactor model deploy
 ```
+
+To build the image without publishing, run `reactor build`.
 
 The deployment target is part of `reactor.yaml`:
 

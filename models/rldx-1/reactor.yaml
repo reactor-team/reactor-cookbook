@@ -4,7 +4,7 @@ $schema: reactor/v2
 
 model:
   name: rldx-1
-  version: v0.6.0
+  version: v0.6.1
   description: |
     Serve RLDX-1 as a three-camera vision-language-action policy. The model
     aligns camera frames and robot state by capture time and returns RTC action
@@ -27,6 +27,35 @@ runtime:
 
 build:
   runtime_version: "3.2.6"
+  python_requirements: requirements.txt
+  python_version: "3.12"
+  # Named directly rather than through `cuda_version`, which also adds the
+  # PyTorch index to the dependency resolution. That index carries `packaging`,
+  # `requests` and `tqdm` at versions older than the pins in requirements.txt,
+  # and uv stops at the first index that has a package. The torch wheels are
+  # pinned by URL in requirements.txt instead.
+  base_image: nvidia/cuda:12.8.1-devel-ubuntu24.04
+  system_packages:
+    - build-essential
+    - ca-certificates
+    - ffmpeg
+    - git
+    - ninja-build
+  # FlashAttention 2.7.4 has no prebuilt Blackwell wheel, so the build hook
+  # compiles it for B200 against the torch wheel installed above.
+  build_env:
+    CUDA_HOME: /usr/local/cuda
+    FLASH_ATTENTION_FORCE_BUILD: "TRUE"
+    TORCH_CUDA_ARCH_LIST: "10.0+PTX"
+    MAX_JOBS: "16"
+    NVCC_THREADS: "2"
+  runtime_env:
+    OMP_NUM_THREADS: "4"
+    MKL_NUM_THREADS: "4"
+    OPENBLAS_NUM_THREADS: "4"
+    ORPHAN_TIMEOUT_SECONDS: "30"
+  run:
+    - pip install --no-cache-dir --no-build-isolation flash-attn==2.7.4.post1
 
 deployment:
   instances:
