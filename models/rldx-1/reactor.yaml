@@ -1,0 +1,34 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
+# Reactor model specification for RLDX-1 with guided RTC.
+$schema: reactor/v1
+
+model:
+  name: rldx-1
+  version: v0.6.0
+  description: |
+    Serve RLDX-1 as a three-camera vision-language-action policy. The model
+    aligns camera frames and robot state by capture time and returns RTC action
+    chunks over the data channel.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    cpu:
+      request: "2"
+      limit: "6"
+    memory:
+      request: 8Gi
+      limit: 32Gi
+
+runtime:
+  import: rldx1:RLDXPipeline
+  config: config.yml
+  weights_path: ./weights
+
+build:
+  runtime_version: "3.2.6"
+
+deployment:
+  instances:
+    - region: us-west
+      count: 1
