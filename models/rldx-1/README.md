@@ -50,6 +50,24 @@ reactor model deploy
 
 To build the image without publishing, run `reactor build`.
 
+### Build on a remote machine
+
+The build and the publish both use the Docker daemon the CLI is pointed at,
+and the publish exports the image from that daemon before it pushes. For an
+image this size, run both on the build machine rather than through a laptop.
+On that machine, clone this folder, download the weights as above, then build
+and publish from the built image:
+
+```bash
+reactor build
+reactor model publish --source reactor-local/rldx-1:dev
+reactor model deploy
+```
+
+`reactor build` tags the image `reactor-local/<folder name>:dev`. With
+`--source`, publish skips the build, pushes that image, and still uploads
+`./weights`.
+
 The deployment target is part of `reactor.yaml`:
 
 ```yaml
