@@ -56,8 +56,11 @@ and the proprioceptive state.
 cd ../../robotics/rldx-1/client-python
 uv sync
 export REACTOR_API_KEY=rk_your_key_here
-uv run python main.py --model rldx-1 --duration 60
+uv run python main.py --model <account-slug>/rldx-1 --duration 60
 ```
+
+Replace `<account-slug>` with the account slug printed by Reactor when the
+model is published.
 
 The summary reports RTC request-to-response latency, observation age, and
 cross-view capture skew at p50 and p99. The returned actions are model outputs

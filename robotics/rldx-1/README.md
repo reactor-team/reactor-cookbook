@@ -173,13 +173,17 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 cd robotics/rldx-1/client-python
 uv sync
 export REACTOR_API_KEY=rk_your_key_here
-uv run python main.py
+uv run python main.py --model <account-slug>/rldx-1 --duration 60
 ```
+
+Replace `<account-slug>` with the account slug printed by Reactor when the
+model is published.
 
 Optionally provide a task:
 
 ```bash
 uv run python main.py \
+  --model <account-slug>/rldx-1 \
   --task "put the cup on the tray"
 ```
 
