@@ -54,8 +54,7 @@ deployment:
       count: 1
 ```
 
-`reactor model deploy` reads this section directly; a separate
-`deployment.yaml` file is not required.
+`reactor model deploy` reads this section directly.
 
 ## Run the test client
 
