@@ -27,7 +27,7 @@ current checkpoint, that contract is:
 The client reads the announced views, resolution, control rate, state layout,
 and state carrier instead of hardcoding them.
 
-To deploy the matching B200 model with guided RTC, use the
+To deploy the matching model with guided RTC, use the
 [parent RLDX-1 workspace](..).
 
 ## Why frame metadata matters
@@ -176,14 +176,13 @@ export REACTOR_API_KEY=rk_your_key_here
 uv run python main.py --model <account-slug>/rldx-1 --duration 60
 ```
 
-Replace `<account-slug>` with the account slug printed by Reactor when the
-model is published.
+To use the hosted RLDX-1 model from Reactor, pass `--model rldx-1`.
 
 Optionally provide a task:
 
 ```bash
 uv run python main.py \
-  --model <account-slug>/rldx-1 \
+  --model rldx-1 \
   --task "put the cup on the tray"
 ```
 
