@@ -1,0 +1,13 @@
+source:
+  path: /opt/open-oasis
+  revision: f59deef2c019c212bd0c5a3a5b986a51f3701847
+checkpoint:
+  repo_id: Etched/oasis-500m
+  revision: 4ca7d2d811f4f0c6fd1d5719bf83f14af3446c0c
+  model_filename: oasis500m.safetensors
+  vae_filename: vit-l-20.safetensors
+inference:
+  seed: 0
+  ddim_steps: 10
+  context_frames: 32
+  fps: 20

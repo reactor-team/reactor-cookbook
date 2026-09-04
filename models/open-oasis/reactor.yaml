@@ -1,0 +1,37 @@
+$schema: reactor/v2
+model:
+  name: open-oasis-500m
+  version: v0.1.0
+  description: Stream an autoregressive Minecraft world from image or video context using Open-Oasis's native keyboard, mouse-button, and camera actions.
+  resources:
+    gpu: {type: NVIDIA_B200, count: 1}
+    cpu: {request: "4", limit: "12"}
+    memory: {request: 24Gi, limit: 64Gi}
+runtime:
+  import: open_oasis:OpenOasis
+  config: open_oasis.yaml
+  weights_path: /opt/dlami/nvme/.cache_hf/reactor_registry/open-oasis/weights
+  recording:
+    enabled: true
+    chunk_seconds: 4
+    clip_max_seconds: 300
+    video_track: main_video
+    video: {codec: h264, preset: veryfast, crf: 23}
+build:
+  runtime_version: "3.2.5"
+  python_requirements: requirements.txt
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  python_indexes:
+    - https://download.pytorch.org/whl/cu128
+    - https://pypi.org/simple
+  system_packages: [ffmpeg, git]
+  runtime_env:
+    OPEN_OASIS_PATH: /opt/open-oasis
+  run:
+    - >-
+      git init /opt/open-oasis
+      && git -C /opt/open-oasis fetch --depth 1
+      https://github.com/etched-ai/open-oasis.git
+      f59deef2c019c212bd0c5a3a5b986a51f3701847
+      && git -C /opt/open-oasis checkout --detach FETCH_HEAD
