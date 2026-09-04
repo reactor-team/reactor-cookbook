@@ -1,0 +1,51 @@
+$schema: reactor/v2
+
+model:
+  name: solarwm-5b-stage2
+  version: v0.1.0
+  description: |
+    Explore SolarWM's autoregressive Wan2.2 TI2V-5B world from an uploaded
+    image, a prompt, and six-axis camera motion.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    cpu:
+      request: "8"
+      limit: "16"
+    memory:
+      request: 64Gi
+      limit: 160Gi
+
+runtime:
+  import: solarwm:SolarWM
+  config: solarwm.yaml
+  # Mount the shared HF root so SolarWM can reuse existing Wan2.2 base files
+  # through symlinks without duplicating tens of gigabytes.
+  weights_path: /opt/dlami/nvme/.cache_hf
+
+build:
+  runtime_version: "3.2.5"
+  python_requirements: requirements.txt
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  system_packages:
+    - build-essential
+    - git
+    - libgl1
+    - libglib2.0-0
+  runtime_env:
+    HF_HOME: /opt/dlami/nvme/.cache_hf
+    UV_CACHE_DIR: /opt/dlami/nvme/.cache_uv
+    XDG_CACHE_HOME: /opt/dlami/nvme/.cache_hf
+    CUDA_CACHE_PATH: /opt/dlami/nvme/.cache_hf/cuda
+    PYTORCH_ALLOC_CONF: expandable_segments:True
+    TOKENIZERS_PARALLELISM: "false"
+  run:
+    - >-
+      pip install --no-cache-dir --index-url https://pypi.org/simple
+      "packaging>=24.2" "setuptools>=77"
+    - >-
+      pip install --no-cache-dir --no-deps --no-build-isolation
+      "solarwm @ git+https://github.com/Junchao-cs/SolarWM.git@7c52987bd9c7c387884c4d963338b3ab6069c394"
+    - pip install --no-cache-dir --no-build-isolation "flash-attn==2.8.3"
