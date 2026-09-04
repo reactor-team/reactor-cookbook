@@ -63,7 +63,7 @@ tracks every control tick. Each tick uses one capture timestamp for all frames
 and the proprioceptive state.
 
 ```bash
-cd ../../robotics/rldx-1/client-python
+cd client
 uv sync
 export REACTOR_API_KEY=rk_your_key_here
 uv run python main.py --model <account-slug>/rldx-1 --duration 60

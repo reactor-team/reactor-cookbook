@@ -28,7 +28,7 @@ The client reads the announced views, resolution, control rate, state layout,
 and state carrier instead of hardcoding them.
 
 To deploy the matching B200 model with guided RTC, use the
-[`models/rldx-1`](../../models/rldx-1) workspace.
+[parent RLDX-1 workspace](..).
 
 ## Why frame metadata matters
 
@@ -170,7 +170,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ## Run
 
 ```bash
-cd robotics/rldx-1/client-python
+cd models/rldx-1/client
 uv sync
 export REACTOR_API_KEY=rk_your_key_here
 uv run python main.py --model <account-slug>/rldx-1 --duration 60
