@@ -36,15 +36,26 @@ as the release's weight bundle.
 
 ## Publish and deploy
 
-A new release must be published once before it can be deployed:
+Run these commands from this directory. The publish command registers the
+source image and prints the model name used by the weights command.
 
 ```bash
-reactor model publish --weights ./weights
+reactor model publish --source <source-docker-image-id>
+reactor weights upload <model-name-from-publish-output> ./weights
 reactor model deploy
 ```
 
-After publication, run `reactor model deploy` from this directory whenever you
-want to activate the release named in `reactor.yaml`.
+The deployment target is part of `reactor.yaml`:
+
+```yaml
+deployment:
+  instances:
+    - region: us-west
+      count: 1
+```
+
+`reactor model deploy` reads this section directly; a separate
+`deployment.yaml` file is not required.
 
 ## Run the test client
 

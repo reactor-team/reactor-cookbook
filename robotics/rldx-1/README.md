@@ -212,8 +212,9 @@ ticks published: 787 ; action chunks received: 49
 state carrier: frame metadata
 RTC: requests=<count> actions_executed=<count> resets=0
 RTC request-to-response ms: p50=<measured> p99=<measured>
+clock basis: E2E and RTC round-trip use only the client clock; no client/server clock comparison
 inter-arrival ms: p50=<measured> p99=<measured>
-chunk age on our clock ms: p50=<measured> p99=<measured>
+observation-to-action E2E ms: p50=<measured> p99=<measured>
 echo correlation: 49/49 chunks echoed a stamp matching the tick we sent
 view_skew_us: p50=0 p99=0 max=0 (across 49 chunks)
 command_errors: none — the state carrier worked
@@ -232,14 +233,15 @@ The metrics answer different questions:
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `RTC request-to-response` | Time from sending `request_action` until its matching action chunk reaches the client.                                                                                                                   |
 | `inter-arrival`           | How often action chunks arrive; this is cadence, not per-chunk latency.                                                                                                                                  |
-| `chunk age`               | How old the source observation is when the client receives its action chunk.                                                                                                                             |
+| `observation-to-action E2E` | Time from the client capturing the source observation until that client receives its action chunk. Both timestamps use the client clock.                                                               |
 | `echo correlation`        | Whether each returned tag matches a tick the client actually sent.                                                                                                                                       |
 | `view_skew_us`            | Capture-time spread across the views used for the chunk. Expect 0 when a tick is stamped once; a value near one control period means a view lagged a whole step and the rest were held back to match it. |
 
 If the deployment does not announce `state_source`, the client falls back to
-`set_state_json`. It reports chunk age and echo correlation as unavailable when
-the deployment does not return the echo fields. `view_skew_us` can still be
-available because the frames retain their shared `capture_time_us`.
+`set_state_json`. It reports observation-to-action E2E and echo correlation as
+unavailable when the deployment does not return the echo fields. `view_skew_us`
+can still be available because the frames retain their shared
+`capture_time_us`.
 
 ## Apply the pattern in your own client
 

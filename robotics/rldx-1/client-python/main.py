@@ -513,6 +513,10 @@ class Client:
                     f"p99={pct(self.rtc_latency_ms, 99):.0f} "
                     f"(from {len(self.rtc_latency_ms)} responses)"
                 )
+                print(
+                    "clock basis: E2E and RTC round-trip use only the client clock; "
+                    "no client/server clock comparison"
+                )
 
         if len(self.arrivals) >= 4:
             deltas = np.diff(self.arrivals)[2:] * 1000.0  # drop warmup intervals
@@ -523,11 +527,11 @@ class Client:
         # The number that matters for control: how stale the observation behind a
         # chunk already is by the time the chunk is in the client's hands.
         if self.ages_ms:
-            print(f"chunk age on our clock ms: p50={pct(self.ages_ms, 50):.0f} "
+            print(f"observation-to-action E2E ms: p50={pct(self.ages_ms, 50):.0f} "
                   f"p99={pct(self.ages_ms, 99):.0f} "
                   f"(from {len(self.ages_ms)} echoed chunks)")
         else:
-            print("chunk age on our clock: unavailable — no chunk carried "
+            print("observation-to-action E2E: unavailable — no chunk carried "
                   "source_capture_us")
 
         total_echo = self.echo_ok + self.echo_mismatch
