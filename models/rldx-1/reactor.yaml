@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
 # Reactor model specification for RLDX-1 with guided RTC.
-$schema: reactor/v1
+$schema: reactor/v2
 
 model:
   name: rldx-1
