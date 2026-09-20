@@ -14,3 +14,5 @@ Looking for the one reference frontend per API model — the templates
 - [`fast-h3-streaming-app`](./fast-h3-streaming-app): an endlessly directed
   FastH3 cooking show with native audio, clip-ID continuity, live prompt
   steering, and persistent text-driven props.
+- [`fast-h3-java`](./fast-h3-java): a minimal Java app using the published Maven
+  SDK to generate and play one Fast H3 clip, then save its MP4 and a PNG frame.
