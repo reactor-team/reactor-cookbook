@@ -16,8 +16,8 @@ requires a checkpoint trained with RTC.
 
 You need [Git](https://git-scm.com/downloads), a running Docker engine (for
 example, [Docker Desktop](https://docs.docker.com/desktop/)), and a Reactor
-account with deployment capacity in `us-west`. The GPU runs on Reactor;
-your laptop does not need a local NVIDIA GPU.
+account with deployment capacity in your selected region. The GPU runs on
+Reactor; your laptop does not need a local NVIDIA GPU.
 
 The source is Apache-2.0. The checkpoint uses the separate
 [RLWRLD Model License](https://huggingface.co/RLWRLD/RLDX-1-FT-ROBOCASA/blob/main/LICENSE.md),
@@ -74,7 +74,7 @@ runtime:
 The CLI records a pinned Hugging Face reference, and Reactor fetches the
 checkpoint when starting the model.
 
-The same file requests one instance in `us-west`:
+The example `reactor.yaml` requests one instance in `us-west` by default:
 
 ```yaml
 deployment:
@@ -82,6 +82,10 @@ deployment:
     - region: us-west
       count: 1
 ```
+
+Using the manifest as-is requires capacity in `us-west`. To deploy in another
+region, change the `region` value above to one with available deployment capacity
+before running `reactor model deploy`.
 
 ### 5. Publish, deploy, and check status
 
