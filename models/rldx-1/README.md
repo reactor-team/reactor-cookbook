@@ -53,11 +53,10 @@ Complete the browser sign-in with the account that will own this deployment.
 Start Docker, then download the image:
 
 ```bash
-docker pull --platform linux/amd64 reactortechnologies/rldx-1:1.0.1
+docker pull reactortechnologies/rldx-1:1.0.1
 ```
 
-The image is Linux/amd64; the explicit platform also lets Apple Silicon laptops
-pull it for publication. Use **`1.0.1`** for both pulling and publishing.
+Use **`1.0.1`** for both pulling and publishing.
 
 ### 4. Open the model workspace
 
