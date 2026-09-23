@@ -212,8 +212,7 @@ with a robot; that method is the local controller seam.
 
 The client polls `await reactor.get_stats()` every 10 seconds in a separate
 task, alongside camera publishing and RTC scheduling. This uses the client SDK's
-WebRTC engine and does **not** require a new model image or a model-side stats
-command. Updating the SDK leaves the model's RTC settings unchanged.
+WebRTC engine. Updating the SDK leaves the model's RTC settings unchanged.
 
 Each `[webrtc]` line prints only `rtt_ms`, the current network round-trip time.
 This is separate from RTC request-to-response and observation-to-action latency.

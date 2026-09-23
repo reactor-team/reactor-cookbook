@@ -148,8 +148,7 @@ for synthetic inputs and must not be sent to a robot.
 
 The client also prints the current WebRTC RTT every 10 seconds using
 `reactor-sdk >= 1.6.0`. Average RTT appears once in the final summary.
-These are collected by the client SDK; enabling them does **not** require
-rebuilding the model image. See the [client guide](client/README.md#webrtc-stats)
+See the [client guide](client/README.md#webrtc-stats)
 for metric meanings and `--stats-interval`.
 
 ## Source provenance
