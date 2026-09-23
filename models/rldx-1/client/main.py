@@ -51,7 +51,13 @@ import time
 from contextlib import suppress
 
 import numpy as np
-from reactor_sdk import Reactor, ReactorStatus, time_micros
+from reactor_sdk import (
+    ConnectionStats,
+    Reactor,
+    ReactorError,
+    ReactorStatus,
+    time_micros,
+)
 
 from rtc_scheduler import RTCPlanScheduler, RTCProtocolError
 
@@ -70,6 +76,32 @@ DEFAULT_STATE_DIMS = {
     "base_position": 3,
     "base_rotation": 4,
 }
+
+
+def format_webrtc_stats(stats: ConnectionStats) -> str:
+    """Keep missing measurements distinct from measured zeroes."""
+    rtt = (
+        f"{stats.rtt_ms:.2f}"
+        if stats.rtt_ms is not None and math.isfinite(stats.rtt_ms) else "N/A"
+    )
+    return f"[webrtc] rtt_ms={rtt}"
+
+
+async def report_webrtc_stats(
+    reactor: Reactor, interval: float, rtt_samples_ms: list[float]
+) -> None:
+    """Poll separately from the control loop; cancel before disconnecting."""
+    while True:
+        if reactor.get_status() == ReactorStatus.READY:
+            try:
+                stats = await reactor.get_stats()
+                if stats.rtt_ms is not None and math.isfinite(stats.rtt_ms):
+                    rtt_samples_ms.append(stats.rtt_ms)
+                print(format_webrtc_stats(stats))
+            except ReactorError as exc:
+                # A disconnect can race the READY check. Stats are diagnostic.
+                print(f"[webrtc] stats unavailable: {exc}")
+        await asyncio.sleep(interval)
 
 
 def synth_frame(h: int, w: int, view_index: int, t: float) -> np.ndarray:
@@ -145,6 +177,7 @@ class Client:
         self.executed_actions = 0
         self.rtc_request_started: dict[int, float] = {}
         self.rtc_latency_ms: list[float] = []
+        self.webrtc_rtt_ms: list[float] = []
 
         # What we sent, so an echo can be checked against it rather than trusted.
         self.sent_capture_us: dict[int, int] = {}
@@ -423,6 +456,12 @@ class Client:
         print(f"\nStreaming {len(views)} views at {control_hz:g} Hz for "
               f"{args.duration:.0f}s ...")
         deadline = time.monotonic() + args.duration
+        stats_task = (
+            asyncio.create_task(report_webrtc_stats(
+                self.reactor, args.stats_interval, self.webrtc_rtt_ms
+            ))
+            if args.stats_interval > 0 else None
+        )
         try:
             while time.monotonic() < deadline:
                 tick_start = time.monotonic()
@@ -487,6 +526,10 @@ class Client:
 
                 await asyncio.sleep(max(0.0, period - (time.monotonic() - tick_start)))
         finally:
+            if stats_task is not None:
+                stats_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await stats_task
             if self.rtc_task is not None:
                 self.rtc_task.cancel()
                 with suppress(asyncio.CancelledError):
@@ -501,6 +544,12 @@ class Client:
         print("\n===== RLDX-1 sync summary =====")
         print(f"ticks published: {self.ticks} ; action chunks received: {self.chunks}")
         print(f"state carrier: {'frame metadata' if tag_frames else 'set_state_json command'}")
+        if self.webrtc_rtt_ms:
+            average = sum(self.webrtc_rtt_ms) / len(self.webrtc_rtt_ms)
+            print(f"WebRTC RTT ms: avg={average:.2f} "
+                  f"(from {len(self.webrtc_rtt_ms)} samples)")
+        else:
+            print("WebRTC RTT: unavailable — no RTT samples collected")
         if self.rtc_scheduler is not None:
             print(
                 f"RTC: requests={self.rtc_requests} "
@@ -576,7 +625,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--duration", type=float, default=60.0, help="Seconds to stream")
     p.add_argument("--connect-timeout", type=float, default=300.0,
                    help="Max seconds to wait for READY (cold start pulls weights)")
+    p.add_argument("--stats-interval", type=float, default=10.0,
+                   help="Seconds between WebRTC stats reports (default: 10; 0 disables)")
     args = p.parse_args()
+    if not math.isfinite(args.stats_interval) or (
+        args.stats_interval != 0 and args.stats_interval < 0.2
+    ):
+        p.error("--stats-interval must be 0 (disabled) or at least 0.2 seconds")
     if not args.api_key:
         p.error("set REACTOR_API_KEY or pass --api-key")
     return args

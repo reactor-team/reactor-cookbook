@@ -154,34 +154,51 @@ treat null as unavailable, not zero. The client coerces these JSON numbers with
 ## Prerequisites
 
 - [uv](https://docs.astral.sh/uv/)
-- `reactor-sdk >= 1.1.1` (1.1.0 accepted `capture_time_us` but dropped it on the wire)
+- `reactor-sdk >= 1.6.0, < 2` (installed by `uv sync` below)
 
 Per-frame `user_data`, `capture_time_us`, and `time_micros()` are not available
 in the 0.x SDK used by older cookbook examples. The SDK provides wheels for
 Linux x86_64 / aarch64 with glibc 2.34+, macOS 11+ arm64 or 13+ x86_64, and
 Windows 10+.
 
-Install uv if needed:
+Install uv with [Homebrew](https://brew.sh/) if needed:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+brew install uv
+uv --version
 ```
 
 ## Run
 
+From the cookbook repository root, enter the client directory, install its
+dependencies, and activate its virtual environment:
+
 ```bash
 cd models/rldx-1/client
-uv sync
-export REACTOR_API_KEY=rk_your_key_here
-uv run python main.py --model <account-slug>/rldx-1 --duration 60
+uv sync --python 3.12 --upgrade-package reactor-sdk
+source .venv/bin/activate
 ```
+
+`uv sync` creates `.venv`, downloads Python 3.12 if needed, and installs the
+client dependencies from `pyproject.toml`, including the Reactor SDK and NumPy.
+
+Then run the client in the same terminal:
+
+```bash
+export REACTOR_API_KEY=rk_your_key_here
+python main.py --model <account-slug>/rldx-1 --duration 60
+```
+
+Replace `<account-slug>` with the account slug printed by Reactor when the
+model is published. In a new terminal, return to `models/rldx-1/client` and run
+`source .venv/bin/activate` again before using `python main.py`.
 
 To use the hosted RLDX-1 model from Reactor, pass `--model rldx-1`.
 
 Optionally provide a task:
 
 ```bash
-uv run python main.py \
+python main.py \
   --model rldx-1 \
   --task "put the cup on the tray"
 ```
@@ -190,6 +207,27 @@ The example publishes synthetic frames and synthetic state. Its actions are
 well-formed but do not represent meaningful robot behavior. Replace the frame
 and state generators and the `Client.execute_action` method before using it
 with a robot; that method is the local controller seam.
+
+## WebRTC stats
+
+The client polls `await reactor.get_stats()` every 10 seconds in a separate
+task, alongside camera publishing and RTC scheduling. This uses the client SDK's
+WebRTC engine and does **not** require a new model image or a model-side stats
+command. Updating the SDK leaves the model's RTC settings unchanged.
+
+Each `[webrtc]` line prints only `rtt_ms`, the current network round-trip time.
+This is separate from RTC request-to-response and observation-to-action latency.
+`N/A` means the SDK has no valid measurement.
+
+The final summary prints `WebRTC RTT ms: avg=...`, the mean of the RTT samples
+collected during the run. Unavailable or non-finite readings are excluded;
+measured zeroes are included. The average is printed only at the end.
+
+Use `--stats-interval 5` to report every five seconds, or `--stats-interval 0`
+to disable reporting. Nonzero intervals must be at least 0.2 seconds. For
+per-stream detail in your own client, inspect `stats.inbound`, `stats.outbound`,
+and `stats.candidate_pairs`; see the
+[SDK connection-statistics reference](https://pypi.org/project/reactor-sdk/1.6.0/#connection-statistics).
 
 ## What you should see
 
@@ -209,6 +247,7 @@ carrier, first correlated chunk, and a final summary:
 ===== RLDX-1 sync summary =====
 ticks published: 787 ; action chunks received: 49
 state carrier: frame metadata
+WebRTC RTT ms: avg=<measured> (from <count> samples)
 RTC: requests=<count> actions_executed=<count> resets=0
 RTC request-to-response ms: p50=<measured> p99=<measured>
 clock basis: E2E and RTC round-trip use only the client clock; no client/server clock comparison

@@ -4,7 +4,7 @@ $schema: reactor/v2
 
 model:
   name: rldx-1
-  version: v0.6.0
+  version: v0.6.1
   description: |
     Serve RLDX-1 as a three-camera vision-language-action policy. The model
     aligns camera frames and robot state by capture time and returns RTC action
@@ -23,7 +23,7 @@ model:
 runtime:
   import: rldx1:RLDXPipeline
   config: config.yml
-  weights_path: ./weights
+  weights_path: "hf://RLWRLD/RLDX-1-FT-ROBOCASA"
 
 build:
   runtime_version: "3.2.6"
