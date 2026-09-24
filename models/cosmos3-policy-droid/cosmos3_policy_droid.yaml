@@ -1,0 +1,28 @@
+# Which DROID policy checkpoint to serve and how to sample it. Read by the
+# model half (cosmos3_policy_droid_model.py) through cosmos3_policy_droid_assets.py.
+#
+# The Edge and Nano checkpoints share one serving path. To serve Nano instead:
+#   checkpoint: nvidia/Cosmos3-Nano-Policy-DROID
+#   format_prompt_as_json: null
+#   guidance_interval: null
+
+# Hugging Face repository id, or a local directory holding the checkpoint.
+checkpoint: nvidia/Cosmos3-Edge-Policy-DROID
+hf_revision: main
+
+# Edge was post-trained on the structured JSON prompt and applies
+# classifier-free guidance only inside this denoising-timestep range.
+format_prompt_as_json: true
+guidance_interval: [960, 1001]
+
+# Sampler settings of the released policies: 4 UniPC steps, guidance 3.0.
+guidance: 3.0
+num_steps: 4
+resolution: "480"
+action_chunk_size: 32
+
+device_id: 0
+
+# Two throwaway predictions at load pay torch.compile's first call before the
+# first session instead of on its first chunk.
+warmup: true
