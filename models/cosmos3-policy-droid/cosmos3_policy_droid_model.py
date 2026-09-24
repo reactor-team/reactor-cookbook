@@ -22,7 +22,14 @@ from typing import Any
 
 import numpy as np
 
-from cosmos3_policy_droid_assets import PolicyConfig, read_config, route_checkpoint_downloads
+from cosmos3_policy_droid_assets import (
+    PolicyConfig,
+    activate_source,
+    ensure_source_checkout,
+    read_config,
+    resolve_source_path,
+    route_checkpoint_downloads,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +78,9 @@ class PolicyResult:
 class Cosmos3PolicyModel:
     """Hold the DROID policy and predict one action chunk per step.
 
-    The weights and the sampler live in the vendored
-    ``cosmos_framework`` policy service. This class owns that service, its
-    load-time wrapping, and the shape check on every prediction.
+    The weights and the sampler live in upstream's ``cosmos_framework`` policy
+    service, cloned at a pinned revision on first load. This class owns that
+    service, its load-time wrapping, and the shape check on every prediction.
     """
 
     def __init__(self) -> None:
@@ -82,13 +89,17 @@ class Cosmos3PolicyModel:
         self.dof = 0
 
     def load(self, config_path: Path | None, weights_root: Path) -> None:
-        """Download the checkpoint if absent and build the policy service once per process.
+        """Fetch the pinned source and checkpoint if absent and build the policy service once per process.
 
         Args:
             config_path: Path to ``cosmos3_policy_droid.yaml`` from ``reactor.yaml``.
-            weights_root: Directory the checkpoint and its tokenizer are cached under.
+            weights_root: Directory the source checkout, the checkpoint, and its
+                tokenizer live under.
         """
         config = read_config(config_path)
+        source_path = resolve_source_path(config.source, weights_root)
+        ensure_source_checkout(config.source, source_path)
+        activate_source(source_path)
         route_checkpoint_downloads(weights_root)
 
         import torch

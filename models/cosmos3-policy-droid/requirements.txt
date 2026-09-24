@@ -1,9 +1,10 @@
 # Model dependencies resolved with Reactor Runtime during `reactor build`.
 # `build.runtime_version` in reactor.yaml selects the Runtime release.
 #
-# Pins follow upstream cosmos-framework's lock at the vendored commit (see
-# VENDOR.md): the cu128 dependency group for the CUDA stack and the resolved
-# versions of every package the vendored code imports directly. The CUDA
+# Pins follow upstream cosmos-framework's lock at the commit pinned in
+# cosmos3_policy_droid.yaml: the cu128 dependency group for the CUDA stack and
+# the resolved versions of every package the policy serving path imports
+# directly (measured from a live sys.modules capture). The CUDA
 # builds are named explicitly so the resolver picks them by version, not by
 # index order.
 torch==2.10.0+cu128

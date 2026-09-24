@@ -29,7 +29,8 @@ build:
   cuda_version: "12.8.1"
   # The prebuilt attention kernels below exist for CPython 3.13 only.
   python_version: "3.13"
-  # megatron-core is resolved from a git revision (see requirements.txt).
+  # git clones the pinned upstream source at first load and resolves the
+  # megatron-core git dependency at build (see requirements.txt).
   system_packages:
     - git
   python_indexes:
@@ -43,7 +44,7 @@ build:
     # dependency; considering every index lets each pin resolve where it exists.
     UV_INDEX_STRATEGY: unsafe-best-match
   runtime_env:
-    # Keeps the vendored framework's training-only imports off the serving path.
+    # Keeps the upstream framework's training-only imports off the serving path.
     COSMOS_TRAINING: "0"
     # A large host otherwise spawns one OpenMP thread per core and throttles
     # under the CPU limit.

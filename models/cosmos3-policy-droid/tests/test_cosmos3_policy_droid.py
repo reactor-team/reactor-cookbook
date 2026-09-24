@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import sys
 import types
 from dataclasses import FrozenInstanceError
@@ -15,9 +16,18 @@ import pytest
 from reactor_runtime import ApplicationError, StepOutcome
 from reactor_runtime.interface.model.contract import ModelContract
 
+import cosmos3_policy_droid_assets as assets
 import cosmos3_policy_droid_model
 from cosmos3_policy_droid import Cosmos3PolicyDroid, parse_executed_step, parse_proprio
-from cosmos3_policy_droid_assets import read_config, route_checkpoint_downloads
+from cosmos3_policy_droid_assets import (
+    DEFAULT_SOURCE,
+    SOURCE_ENV,
+    Repository,
+    ensure_source_checkout,
+    read_config,
+    resolve_source_path,
+    route_checkpoint_downloads,
+)
 from cosmos3_policy_droid_model import VIEWS, Cosmos3PolicyModel, PolicyInput, PolicyResult
 from cosmos3_policy_droid_types import ActionPrediction, PolicyState
 
@@ -308,6 +318,95 @@ def test_config_defaults_to_the_edge_checkpoint(tmp_path: Path) -> None:
     assert config.guidance_interval is None
 
 
+def test_config_pins_the_upstream_source(tmp_path: Path) -> None:
+    config = read_config(MODEL_DIR / "cosmos3_policy_droid.yaml")
+    assert config.source == DEFAULT_SOURCE
+    assert len(config.source.revision) == 40
+
+    short = tmp_path / "short.yaml"
+    short.write_text("source:\n  revision: cf5d68c\n")
+    with pytest.raises(ValueError, match="40-hex"):
+        read_config(short)
+
+
+def test_source_path_resolves_under_the_weights_root_unless_overridden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(SOURCE_ENV, raising=False)
+    assert resolve_source_path(DEFAULT_SOURCE, Path("/weights")) == Path("/weights/source/cosmos-framework")
+    absolute = Repository(path=Path("/src/cf"), url=DEFAULT_SOURCE.url, revision=DEFAULT_SOURCE.revision)
+    assert resolve_source_path(absolute, Path("/weights")) == Path("/src/cf")
+    monkeypatch.setenv(SOURCE_ENV, "/elsewhere/cosmos-framework")
+    assert resolve_source_path(DEFAULT_SOURCE, Path("/weights")) == Path("/elsewhere/cosmos-framework")
+
+
+def _git(*args: str, cwd: Path) -> str:
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        cwd=cwd,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+
+
+def _local_upstream(tmp_path: Path) -> tuple[Repository, Path]:
+    """A local Git repository standing in for github.com/NVIDIA/cosmos-framework."""
+    upstream = tmp_path / "upstream"
+    (upstream / "cosmos_framework").mkdir(parents=True)
+    (upstream / "cosmos_framework" / "__init__.py").write_text("")
+    _git("init", "-q", cwd=upstream)
+    _git("add", ".", cwd=upstream)
+    _git("commit", "-q", "-m", "pinned", cwd=upstream)
+    pinned = _git("rev-parse", "HEAD", cwd=upstream)
+    (upstream / "later.txt").write_text("after the pin")
+    _git("add", ".", cwd=upstream)
+    _git("commit", "-q", "-m", "later", cwd=upstream)
+    return Repository(path=Path("source/cf"), url=str(upstream), revision=pinned), tmp_path / "weights"
+
+
+def test_source_checkout_clones_the_pinned_revision_once(tmp_path: Path) -> None:
+    source, weights = _local_upstream(tmp_path)
+    path = resolve_source_path(source, weights)
+    ensure_source_checkout(source, path)
+    assert _git("rev-parse", "HEAD", cwd=path) == source.revision
+    assert not (path / "later.txt").exists()  # detached at the pin, not at the branch head
+    assert (path / "cosmos_framework" / "__init__.py").is_file()
+    # A second call verifies and leaves the checkout alone.
+    ensure_source_checkout(source, path)
+
+
+def test_source_checkout_refuses_a_drifted_or_modified_checkout(tmp_path: Path) -> None:
+    source, weights = _local_upstream(tmp_path)
+    path = resolve_source_path(source, weights)
+    ensure_source_checkout(source, path)
+
+    (path / "cosmos_framework" / "__init__.py").write_text("# edited\n")
+    with pytest.raises(RuntimeError, match="local changes"):
+        ensure_source_checkout(source, path)
+    _git("checkout", "--", ".", cwd=path)
+
+    _git("checkout", "-q", "--detach", "HEAD~0", cwd=path)
+    wrong = Repository(path=source.path, url=source.url, revision="0" * 40)
+    with pytest.raises(RuntimeError, match="revision is"):
+        ensure_source_checkout(wrong, path)
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(RuntimeError, match="Git checkout"):
+        ensure_source_checkout(source, plain)
+
+
+def test_activate_source_puts_the_checkout_first_on_sys_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    assets.activate_source(tmp_path)
+    assets.activate_source(tmp_path)
+    assert sys.path[0] == str(tmp_path)
+    assert sys.path.count(str(tmp_path)) == 1
+
+
 # -- the model half, with the framework stubbed ----------------------------------------------
 
 
@@ -331,7 +430,9 @@ class _FakeService:
         return {"action": np.zeros(self.shape, np.float32)}
 
 
-def _stub_framework(monkeypatch: pytest.MonkeyPatch, cache_calls: list[dict[str, Any]]) -> None:
+def _stub_framework(
+    monkeypatch: pytest.MonkeyPatch, cache_calls: list[dict[str, Any]]
+) -> list[tuple[Repository, Path]]:
     def server_args(**kwargs: Any) -> Any:
         return types.SimpleNamespace(**kwargs)
 
@@ -395,13 +496,27 @@ def _stub_framework(monkeypatch: pytest.MonkeyPatch, cache_calls: list[dict[str,
         monkeypatch.setitem(sys.modules, name, module)
     _FakeService.instances.clear()
 
+    # The source checkout is the model half's first step; record it instead of cloning.
+    checkouts: list[tuple[Repository, Path]] = []
+    monkeypatch.setattr(
+        cosmos3_policy_droid_model,
+        "ensure_source_checkout",
+        lambda source, path: checkouts.append((source, path)),
+    )
+    monkeypatch.setattr(cosmos3_policy_droid_model, "activate_source", lambda path: None)
+    return checkouts
 
-def test_model_load_builds_the_edge_service_and_warms_it(monkeypatch: pytest.MonkeyPatch) -> None:
+
+def test_model_load_clones_the_source_then_builds_the_edge_service_and_warms_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[dict[str, Any]] = []
-    _stub_framework(monkeypatch, calls)
+    checkouts = _stub_framework(monkeypatch, calls)
+    monkeypatch.delenv(SOURCE_ENV, raising=False)
     model = Cosmos3PolicyModel()
     model.load(MODEL_DIR / "cosmos3_policy_droid.yaml", Path("/weights"))
 
+    assert checkouts == [(DEFAULT_SOURCE, Path("/weights/source/cosmos-framework"))]
     service = _FakeService.instances[-1]
     assert service.args.checkpoint_path == "nvidia/Cosmos3-Edge-Policy-DROID"
     assert service.args.format_prompt_as_json is True

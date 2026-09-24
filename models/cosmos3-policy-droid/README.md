@@ -71,10 +71,14 @@ step>, ...}`, receive the next chunk.
 - One NVIDIA GPU with at least 24 GB of memory for Edge (80 GB for Nano),
   Hopper or Blackwell class for the prebuilt attention kernels.
 - Docker with the NVIDIA container toolkit and the `reactor` CLI.
-- Network access to Hugging Face on first load. The checkpoint and the
-  `Wan-AI/Wan2.2-TI2V-5B` video tokenizer it depends on download into
-  `runtime.weights_path` (`~/.cache/reactor_registry/cosmos3-policy-droid`)
-  and are reused after that. No token is needed; the repositories are public.
+- Network access to GitHub and Hugging Face on first load. The upstream
+  [`cosmos-framework`](https://github.com/NVIDIA/cosmos-framework) serving code
+  (OpenMDW-1.1) is cloned at the commit pinned in `cosmos3_policy_droid.yaml`,
+  and the checkpoint and the `Wan-AI/Wan2.2-TI2V-5B` video tokenizer it depends
+  on download beside it, all under `runtime.weights_path`
+  (`~/.cache/reactor_registry/cosmos3-policy-droid`) and reused after that.
+  No token is needed; the repositories are public. `COSMOS_FRAMEWORK_PATH`
+  points the model at an existing checkout instead.
 
 ## Run it
 
@@ -84,7 +88,7 @@ reactor build
 reactor run --gpus device=0
 ```
 
-The first load downloads the weights and runs two warmup predictions so
+The first load clones the source, downloads the weights, and runs two warmup predictions so
 `torch.compile`'s first call (about 20 s) happens before the first session.
 Drive it with `reactor-sdk`: publish the three tracks, then loop on
 `set_proprio_json` / `set_executed_step_json` and read `action_prediction`
@@ -105,9 +109,8 @@ guidance_interval: null
 | `cosmos3_policy_droid.py` | The application half: tracks, the two gates, the `reset` command, the `action_prediction` message |
 | `cosmos3_policy_droid_model.py` | The model half: the policy service behind `load()` / `generate()` / `reset()`, `PolicyInput`, `PolicyResult` |
 | `cosmos3_policy_droid_types.py` | `PolicyMedia`, `PolicyState`, `ActionPrediction` |
-| `cosmos3_policy_droid_assets.py` | Config parsing and Hugging Face checkpoint routing |
-| `cosmos3_policy_droid.yaml` | Which checkpoint to serve and how to sample it |
-| `cosmos_framework/` | Pruned upstream serving code, OpenMDW-1.1, byte-identical to upstream (`VENDOR.md`) |
+| `cosmos3_policy_droid_assets.py` | Config parsing, the pinned source checkout, and Hugging Face checkpoint routing |
+| `cosmos3_policy_droid.yaml` | The pinned source revision, which checkpoint to serve, and how to sample it |
 | `PORTING.md` | The decisions behind the two-halves shape |
 | `tests/` | The contract, every refusal, the gates, and the model half's bookkeeping, without a GPU |
 
@@ -116,9 +119,12 @@ guidance_interval: null
 - Upstream's content guardrail is switched off at load: its checkpoint is
   approval-gated and its downloader shells out to a tool the image does not
   carry. Moderation is the deployment's concern.
-- `COSMOS_TRAINING=0` in the image keeps the vendored framework's
-  training-only imports off the serving path; the vendored file set was
-  measured with it set.
-- The vendored tree pins Python 3.13 and CUDA 12.8 because the prebuilt
+- Upstream's own downloader shells out to a `uv` project; this model routes
+  every checkpoint lookup through `huggingface_hub` into the weights path
+  instead, so nothing but `git` and Python runs at load.
+- `COSMOS_TRAINING=0` in the image keeps the upstream framework's
+  training-only imports off the serving path; `requirements.txt` was derived
+  from the imports observed with it set.
+- The image pins Python 3.13 and CUDA 12.8 because the prebuilt
   `flash-attn`, `flash-attn-3-nv`, and `natten` wheels exist for exactly
   that pair.

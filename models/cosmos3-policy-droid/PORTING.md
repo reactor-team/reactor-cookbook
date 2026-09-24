@@ -13,8 +13,9 @@ three input tracks and three state strings into a dict, handed it to a
 `CosmosDroidRealtimeAdapter` that owned frame retention, both gates, the
 proprio parsing, and the session bookkeeping, and sent an `ActionPrediction`
 for each chunk the adapter returned. The adapter wrapped a stateless
-`CosmosDroidPolicy` around the vendored `RobolabPolicyService`. `reset`
-detached and re-attached the adapter's session.
+`CosmosDroidPolicy` around upstream's `RobolabPolicyService`, served from a
+232-file pruned copy of `cosmos_framework` checked into that repository.
+`reset` detached and re-attached the adapter's session.
 
 The Edge checkpoint was not served anywhere.
 
@@ -22,7 +23,7 @@ The Edge checkpoint was not served anywhere.
 
 `cosmos3_policy_droid_model.py` (model): `Cosmos3PolicyModel` with
 `load(config_path, weights_root)`, `generate(input)`, `reset()`. It owns the
-vendored policy service, its load-time wrapping, the warmup, and the shape
+upstream policy service, its load-time wrapping, the warmup, and the shape
 check. `PolicyInput` carries three frames, the joint and gripper arrays, and
 the task; `PolicyResult` carries the `(32, 8)` chunk.
 
@@ -76,9 +77,9 @@ and the description.
    (`checkpoint_path`, `format_prompt_as_json`, `guidance_interval`). They
    are config keys read by the model half; the default is Edge.
 
-8. **Weights come from Hugging Face through `huggingface_hub`.** The
-   vendored `checkpoint_db` downloads by shelling out to a `uv` project that
-   is not vendored. `route_checkpoint_downloads` replaces both of its
+8. **Weights come from Hugging Face through `huggingface_hub`.** Upstream's
+   `checkpoint_db` downloads by shelling out to a separate `uv` project and
+   the `hf` CLI. `route_checkpoint_downloads` replaces both of its
    resolvers with `snapshot_download` / `hf_hub_download` into the weights
    directory the application resolves once with `get_weights_path()` and
    hands to `load()`. The fleet model instead read a curator-staged
@@ -86,7 +87,7 @@ and the description.
 
 9. **The guardrail wrapper passes its arguments through.** Upstream's
    `_build_setup_args` gained a `parallelism_overrides` argument at the
-   vendored commit; the wrapper takes `*args, **kwargs` so the next upstream
+   pinned commit; the wrapper takes `*args, **kwargs` so the next upstream
    signature change does not break it either.
 
 10. **Warmup is model code.** Two throwaway predictions at load pay
@@ -94,25 +95,38 @@ and the description.
     session, and the second confirms the compiled path (about 210 ms for
     Edge). `warmup: false` in the config skips it.
 
-11. **`cosmos_framework` is re-vendored at upstream `cf5d68c`**, not copied
-    from the fleet's older commit, with a fresh closure capture on the Edge
-    checkpoint rather than the Nano one. The closure grew from 221 to 244
-    modules between the two commits; `VENDOR.md` records the derivation so
-    the next bump is the same procedure.
+11. **The upstream source is cloned, not vendored.** The fleet model checks a
+    pruned 232-file copy of `cosmos_framework` into its repository. Here,
+    as for the other cookbook models, `cosmos3_policy_droid.yaml` pins the
+    public repository and a full commit hash (`cf5d68c`, upstream's
+    2026-09-23 release), and the model half clones it blobless into the
+    weights root on first load, checks it out detached at that commit,
+    refuses a checkout at another revision or with local changes, and puts
+    it first on `sys.path` before importing. Nothing under the checkout is
+    edited; the two behaviours the port changes (guardrails, downloads) are
+    applied by wrapping at load. Bumping upstream is one hash in the config.
 
-12. **wandb is not a dependency.** The vendored tree imports it only inside
+12. **`requirements.txt` is measured, not copied.** The full upstream
+    package declares training and serving dependencies together. The pins
+    here are the distributions the policy serving path imported during a
+    live `sys.modules` capture on a B200 with `COSMOS_TRAINING=0`, at the
+    versions upstream's lock resolves for its cu128 group.
+
+13. **wandb is not a dependency.** Upstream imports it only inside
     two training-loop functions (a trainer timeout handler and a straggler
     report), and its release pins conflict with the runtime's protobuf.
     Nothing on the serving path reaches either function.
 
 ## Verification
 
-- `PYTHONPATH=. python -m pytest tests/ -q` (25 tests, no GPU): the contract,
+- `PYTHONPATH=. python -m pytest tests/ -q` (30 tests, no GPU): the contract,
   every refusal, the echo gate across steps, frame retention, the message
   and its `step`, the error branch, `reset`, session end, the parsers, the
-  config, and the model half with the framework stubbed.
+  config, the pinned checkout against a local Git repository (clone at the
+  pin, drift and local edits refused), and the model half with the
+  framework stubbed.
 - `python -m reactor_runtime.schema --path .` diffed against the fleet
   model's: title and description only.
-- The vendored tree served the Edge checkpoint on one B200 with every module
-  loading from the vendored copy and the chunk bit-identical to the
-  upstream checkout's.
+- The image built by `reactor build` cloned the source and served the Edge
+  checkpoint on one B200: load 6 s, warmup 20 s, 254 ms per chunk; a
+  `reactor-sdk` client saw both gates hold and a 277 ms round trip.
