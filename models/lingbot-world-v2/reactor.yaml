@@ -2,7 +2,7 @@ $schema: reactor/v1
 
 model:
   name: lingbot-world-v2-14b-causal-fast
-  version: v0.1.0
+  version: v0.1.3
   description: |
     Explore a causal LingBot world from an image, a prompt, and six-axis camera motion.
   resources:
@@ -31,7 +31,7 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.2.5"
+  runtime_version: "3.5.0"
   python_requirements: requirements.txt
   cuda_version: "12.9.1"
   python_version: "3.12"

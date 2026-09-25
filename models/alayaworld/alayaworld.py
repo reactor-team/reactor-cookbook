@@ -8,98 +8,57 @@ paths. Prompt updates and camera controls are sampled at chunk boundaries.
 
 from __future__ import annotations
 
-import importlib
 import secrets
-import time
-from collections.abc import AsyncGenerator
+from copy import deepcopy
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import Literal
 
-import numpy as np
-
+from alayaworld_assets import (
+    AlayaWorldConfig,
+    read_config,
+    scene_image_path,
+    scene_prompt_path,
+)
+from alayaworld_camera import CameraMotionPlanner, MotionConfig
+from alayaworld_images import validate_uploaded_image
+from alayaworld_model import (
+    FPS,
+    FRAMES_PER_CHUNK,
+    AlayaInput,
+    AlayaResult,
+    AlayaWorldModel,
+)
+from alayaworld_types import (
+    AlayaWorldOutput,
+    AlayaWorldState,
+    CameraMotionChanged,
+    ImageSelected,
+    PromptQueued,
+    RolloutResetQueued,
+    StateUpdate,
+)
 from reactor_runtime import (
+    ApplicationError,
     ClientInfo,
     CommandError,
     InputField,
-    ReactorPipeline,
+    ReactorApp,
+    StepOutcome,
     UploadedFile,
     connected,
     disconnected,
     event,
+    get_weights_path,
     session_ended,
     session_started,
 )
 from reactor_runtime.log import get_logger
 
-if TYPE_CHECKING:
-    from alayaworld_assets import (
-        load_scene_metadata,
-        prepare_runtime_assets,
-        read_config,
-        scene_image_path,
-        scene_prompt_path,
-        validate_runtime_paths,
-    )
-    from alayaworld_camera import CameraMotionPlanner, MotionConfig
-    from alayaworld_types import (
-        AlayaWorldConfig,
-        AlayaWorldOutput,
-        AlayaWorldState,
-        CameraMotionChanged,
-        ImageSelected,
-        PromptQueued,
-        RolloutResetQueued,
-        StateUpdate,
-    )
-    from alayaworld_utils import (
-        camera_frames,
-        compact_rollout_cache,
-        ensure_camera_capacity,
-        load_upstream_modules,
-        resolve_attention_backend,
-        set_attention_backend,
-        uploaded_image_video,
-        validate_uploaded_image,
-    )
-else:
-    module_prefix = f"{__package__}." if __package__ else ""
-    assets_module = importlib.import_module(f"{module_prefix}alayaworld_assets")
-    camera_motion = importlib.import_module(f"{module_prefix}alayaworld_camera")
-    types_module = importlib.import_module(f"{module_prefix}alayaworld_types")
-    utils_module = importlib.import_module(f"{module_prefix}alayaworld_utils")
-    load_scene_metadata = assets_module.load_scene_metadata
-    prepare_runtime_assets = assets_module.prepare_runtime_assets
-    read_config = assets_module.read_config
-    scene_image_path = assets_module.scene_image_path
-    scene_prompt_path = assets_module.scene_prompt_path
-    validate_runtime_paths = assets_module.validate_runtime_paths
-    CameraMotionPlanner = camera_motion.CameraMotionPlanner
-    MotionConfig = camera_motion.MotionConfig
-    AlayaWorldConfig = types_module.AlayaWorldConfig
-    AlayaWorldOutput = types_module.AlayaWorldOutput
-    AlayaWorldState = types_module.AlayaWorldState
-    CameraMotionChanged = types_module.CameraMotionChanged
-    ImageSelected = types_module.ImageSelected
-    PromptQueued = types_module.PromptQueued
-    RolloutResetQueued = types_module.RolloutResetQueued
-    StateUpdate = types_module.StateUpdate
-    camera_frames = utils_module.camera_frames
-    compact_rollout_cache = utils_module.compact_rollout_cache
-    ensure_camera_capacity = utils_module.ensure_camera_capacity
-    load_upstream_modules = utils_module.load_upstream_modules
-    resolve_attention_backend = utils_module.resolve_attention_backend
-    set_attention_backend = utils_module.set_attention_backend
-    uploaded_image_video = utils_module.uploaded_image_video
-    validate_uploaded_image = utils_module.validate_uploaded_image
-
 logger = get_logger(__name__)
-
-FPS = 24
-FRAMES_PER_CHUNK = 32
 _UPLOAD_DEFAULT_PROMPT = "Continue the visual scene shown in the reference image."
 
 
-class AlayaWorld(ReactorPipeline):
+class AlayaWorld(ReactorApp):
     """Run AlayaWorld with live prompt and six-axis camera controls."""
 
     state: AlayaWorldState
@@ -109,153 +68,22 @@ class AlayaWorld(ReactorPipeline):
 
     def __init__(self) -> None:
         super().__init__()
+        self.engine = AlayaWorldModel()
         self._config: AlayaWorldConfig | None = None
-        self._torch: Any = None
-        self._engine: Any = None
-        self._alaya_pipeline: Any = None
-        self._upstream_config: Any = None
-        self._load_input_sample: Any = None
-        self._check_input_resolution: Any = None
-        self._plan_rollout: Any = None
-        self._cache: Any = None
         self._selected_input: Path | UploadedFile | None = None
-        self._chunk_latents = 0
-        self._history_latents = 0
-        self._gap_steps = 0
-        self._condition_latents = 0
         self._seed = 0
         self._ar_index = 0
         self._active_prompt = ""
         self._reset_in_flight = False
         self._chunk_in_flight = False
         self._camera: CameraMotionPlanner | None = None
+        self._frames_wanted = 0
+        self._pending_camera: CameraMotionPlanner | None = None
 
     def load(self, config_path: Path | None) -> None:
-        """Load the public AlayaWorld engine and prepare its initial scene.
-
-        Args:
-            config_path: Path to ``alayaworld.yaml`` from ``reactor.yaml``.
-        """
-        config = read_config(config_path)
-        prepare_runtime_assets(config)
-        validate_runtime_paths(config)
-        modules = load_upstream_modules(config.source_path)
-        torch = modules["torch"]
-
-        upstream_config = modules["load_config"](str(config.upstream_config))
-        upstream_config.paths.model = str(config.model.path)
-        upstream_config.paths.gemma = str(config.gemma.path)
-        upstream_config.paths.da3_repo = str(config.da3_source_path)
-        upstream_config.paths.da3_model = config.da3_model.repo_id
-        upstream_config.paths.da3_cache = str(config.da3_cache)
-        upstream_config.paths.taehv = str(config.taehv_path) if config.taehv_path else ""
-
-        mode_config = next(iter(upstream_config.validation.modes.values()))
-        chunk_latents = int(mode_config.layout.output_latent_frames)
-        history_latents = int(
-            upstream_config.layout.history_latent_frames
-            if mode_config.layout.history_latent_frames is None
-            else mode_config.layout.history_latent_frames
-        )
-        gap_steps = int(
-            float(mode_config.layout.max_gap_sec or 0.0)
-            * float(upstream_config.sample.fps)
-            / int(upstream_config.sample.temporal_stride)
-        )
-        condition_latents = int(mode_config.layout.condition_latent_frames)
-        configured_fps = float(upstream_config.sample.fps)
-        configured_chunk_frames = chunk_latents * int(upstream_config.sample.temporal_stride)
-        if configured_fps != float(FPS):
-            raise ValueError(f"AlayaWorld sample FPS must be {FPS}, got {configured_fps}")
-        if configured_chunk_frames != FRAMES_PER_CHUNK:
-            raise ValueError(
-                f"AlayaWorld chunks must contain {FRAMES_PER_CHUNK} frames, "
-                f"got {configured_chunk_frames}"
-            )
-
-        flex_attention = config.flex_attention and config.compile_mode != "none"
-        engine = modules["build_engine"](
-            upstream_config,
-            compile_mode=config.compile_mode,
-            compile_aux=False,
-            bank_taehv=config.bank_taehv,
-            verbose=True,
-        )
-        attention = resolve_attention_backend(
-            config.attention_backend,
-            pytorch_attention=modules["pytorch_attention"],
-            torch_module=torch,
-        )
-        if attention is not None:
-            logger.info(
-                "AlayaWorld attention backend selected",
-                backend=config.attention_backend,
-                modules=set_attention_backend(engine, attention),
-            )
-        if modules["apply_da3_robust_scale"]():
-            logger.info("AlayaWorld DA3 colinear camera fallback enabled")
-        alaya_pipeline = modules["pipeline_type"](
-            engine,
-            control_modes=list(mode_config.control),
-            use_memory=bool(mode_config.use_memory),
-            action_cfg_scale=float(mode_config.action_cfg_scale),
-            flex_attn=flex_attention,
-            seed=config.seed,
-            ttc=config.ttc,
-            ttc_levels=tuple(int(value) for value in upstream_config.validation.ttc.levels),
-            ttc_strength=float(upstream_config.validation.ttc.strength),
-            ttc_ref_action=bool(upstream_config.validation.ttc.ref_action),
-        )
-
-        self._config = config
-        self._torch = torch
-        self._engine = engine
-        self._alaya_pipeline = alaya_pipeline
-        self._upstream_config = upstream_config
-        self._load_input_sample = modules["load_input_sample"]
-        self._check_input_resolution = modules["check_input_resolution"]
-        self._plan_rollout = modules["plan_rollout"]
-        self._chunk_latents = chunk_latents
-        self._history_latents = history_latents
-        self._gap_steps = gap_steps
-        self._condition_latents = condition_latents
-        self._seed = config.seed
-        self._warmup()
-        logger.info(
-            "AlayaWorld model ready",
-            source_revision=config.source_revision,
-            checkpoint_revision=config.model.revision,
-            chunk_frames=configured_chunk_frames,
-            compile_mode=config.compile_mode,
-            random_images=len(config.random_inputs),
-            max_chunks_per_rollout=config.max_chunks_per_rollout,
-        )
-
-    def _warmup(self) -> None:
-        """Pay first-turn kernel compilation during load, then discard the rollout."""
-        config = self._config
-        if config is None:
-            raise RuntimeError("AlayaWorld was not loaded")
-        if config.warmup_chunks == 0:
-            return
-        scene = config.random_inputs[0]
-        prompt = scene_prompt_path(scene).read_text(encoding="utf-8").strip()
-        started = time.perf_counter()
-        logger.info("AlayaWorld warming up", chunks=config.warmup_chunks)
-        try:
-            self._reset_rollout(prompt or _UPLOAD_DEFAULT_PROMPT, config.seed, scene)
-            for _ in range(config.warmup_chunks):
-                self._generate_chunk(prompt, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        finally:
-            self._cache = None
-            self._camera = None
-            self._ar_index = 0
-            self._active_prompt = ""
-        logger.info(
-            "AlayaWorld warmup complete",
-            chunks=config.warmup_chunks,
-            seconds=round(time.perf_counter() - started, 3),
-        )
+        """Load the native model and retain its interaction configuration."""
+        self._config = read_config(config_path, get_weights_path())
+        self.engine.load(self._config)
 
     @session_started
     def on_session_started(self) -> None:
@@ -265,10 +93,13 @@ class AlayaWorld(ReactorPipeline):
             raise RuntimeError("AlayaWorld was not loaded")
         self.state.prompt = ""
         self._clear_camera_controls()
-        self.state._reset_requested = False
+        self.state._world_id = 0
+        self.state._applied_world_id = None
         self._seed = config.seed
         self._selected_input = None
-        self._cache = None
+        self.engine.reset()
+        self._frames_wanted = 0
+        self._pending_camera = None
         self._camera = None
         self._ar_index = 0
         self._active_prompt = ""
@@ -279,9 +110,12 @@ class AlayaWorld(ReactorPipeline):
     def on_session_ended(self) -> None:
         """Release the selected image and rollout at session end."""
         self._clear_camera_controls()
-        self.state._reset_requested = False
+        self.state._world_id = 0
+        self.state._applied_world_id = None
         self._selected_input = None
-        self._cache = None
+        self.engine.reset()
+        self._frames_wanted = 0
+        self._pending_camera = None
         self._camera = None
         self._ar_index = 0
         self._active_prompt = ""
@@ -323,9 +157,13 @@ class AlayaWorld(ReactorPipeline):
         self._require_selected_image()
         normalized = prompt.strip()
         if not normalized:
-            raise CommandError("prompt_required", "AlayaWorld requires a non-empty prompt.")
+            raise CommandError(
+                "prompt_required", "AlayaWorld requires a non-empty prompt."
+            )
         self.state.prompt = normalized
-        message = PromptQueued(prompt=normalized, applies_to_chunk=self._next_control_chunk())
+        message = PromptQueued(
+            prompt=normalized, applies_to_chunk=self._next_control_chunk()
+        )
         await self._send_state_update()
         return message
 
@@ -517,7 +355,8 @@ class AlayaWorld(ReactorPipeline):
             self._seed = seed
         completed_chunks = self._ar_index
         self._clear_camera_controls()
-        self.state._reset_requested = True
+        self.state._world_id += 1
+        self.output.flush()
         message = RolloutResetQueued(
             trigger="manual",
             seed=self._seed,
@@ -563,7 +402,8 @@ class AlayaWorld(ReactorPipeline):
         self.state.prompt = (
             prompt.strip() or self.state.prompt.strip() or _UPLOAD_DEFAULT_PROMPT
         )
-        self.state._reset_requested = True
+        self.state._world_id += 1
+        self.output.flush()
         self._clear_camera_controls()
         message = ImageSelected(
             source="uploaded",
@@ -587,15 +427,22 @@ class AlayaWorld(ReactorPipeline):
         """Select a different configured example image when possible."""
         config = self._config
         if config is None or not config.random_inputs:
-            raise CommandError("image_unavailable", "No built-in images are configured.")
-        candidates = [path for path in config.random_inputs if path != self._selected_input]
+            raise CommandError(
+                "image_unavailable", "No built-in images are configured."
+            )
+        candidates = [
+            path for path in config.random_inputs if path != self._selected_input
+        ]
         selected = secrets.choice(candidates or list(config.random_inputs))
         self._selected_input = selected
         prompt = scene_prompt_path(selected).read_text(encoding="utf-8").strip()
         if not prompt:
-            raise CommandError("prompt_unavailable", "The selected built-in image has no prompt.")
+            raise CommandError(
+                "prompt_unavailable", "The selected built-in image has no prompt."
+            )
         self.state.prompt = prompt
-        self.state._reset_requested = True
+        self.state._world_id += 1
+        self.output.flush()
         self._clear_camera_controls()
         message = ImageSelected(
             source="built_in",
@@ -606,286 +453,99 @@ class AlayaWorld(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[AlayaWorldOutput | None, None]:
-        """Generate chunks and emit each one's RGB frames as a single batch."""
-        while True:
-            selected_input = self._selected_input
-            if selected_input is None:
-                yield None
-                continue
-
-            config = self._config
-            if config is None:
-                raise RuntimeError("AlayaWorld model was not loaded")
-            if self._ar_index >= config.max_chunks_per_rollout and not self.state._reset_requested:
-                completed_chunks = self._ar_index
-                self._clear_camera_controls()
-                self.state._reset_requested = True
-                await self.send(
-                    RolloutResetQueued(
-                        trigger="automatic_chunk_limit",
-                        seed=self._seed,
-                        completed_chunks=completed_chunks,
-                        applies_to_chunk=1,
-                    )
-                )
-                await self._send_state_update()
-                logger.info(
-                    "AlayaWorld rollout reached its chunk limit",
-                    completed_chunks=completed_chunks,
-                    next_chunk=1,
-                )
-
-            if self.state._reset_requested:
-                self.state._reset_requested = False
-                self._reset_in_flight = True
-                # Cut playout so frames from the replaced world never play.
-                self.output.flush()
-                try:
-                    self._reset_rollout(
-                        self.state.prompt,
-                        self._seed,
-                        selected_input,
-                    )
-                finally:
-                    self._reset_in_flight = False
-                await self._send_state_update()
-
-            if self.state._reset_requested:
-                continue
-
-            prompt = self.state.prompt
-            strafe = self.state.strafe
-            vertical = self.state.vertical
-            forward = self.state.forward
-            pitch = self.state.pitch
-            yaw = self.state.yaw
-            roll = self.state.roll
-            self._chunk_in_flight = True
-            try:
-                frames = self._generate_chunk(
-                    prompt,
-                    strafe,
-                    vertical,
-                    forward,
-                    pitch,
-                    yaw,
-                    roll,
-                )
-            finally:
-                self._chunk_in_flight = False
-            await self._send_state_update()
-            if self.state._reset_requested:
-                continue
-            # One batched output per turn pairs all 32 frames with their cost.
-            yield AlayaWorldOutput(main_video=frames)
-
-    def _reset_rollout(
-        self,
-        prompt: str,
-        seed: int,
-        selected_input: Path | UploadedFile,
-    ) -> None:
-        """Build a fresh upstream cache without reloading model weights."""
-        config = self._config
-        pipeline = self._alaya_pipeline
-        if config is None or pipeline is None:
+    async def process_input(self) -> AlayaInput:
+        """Resolve the anchor and plan the next native camera window."""
+        if self._selected_input is None:
+            raise ApplicationError("Select an image before generating.")
+        if self._config is None:
             raise RuntimeError("AlayaWorld model was not loaded")
-        self._cache = None
-        self._camera = None
-        video, metadata, needed_latents = self._prepare_scene(selected_input)
-        pipeline.seed = seed
-        cache = pipeline.initialize_cache(
-            video,
-            prompt,
-            metadata,
-            rounds=1,
-            K=self._chunk_latents,
-            cond_end=self._condition_latents,
-            needed_latents=needed_latents,
-        )
-        stride = int(pipeline.cfg.sample.temporal_stride)
-        anchor_index = max(0, int(cache.target_base_start) * stride - stride)
-        camera = camera_frames(metadata["cam_c2w"])
-        initial_pose = camera[anchor_index].detach().cpu().to(self._torch.float32).numpy()
-        self._camera = CameraMotionPlanner(
-            initial_pose,
-            MotionConfig(
-                fps=float(pipeline.cfg.sample.fps),
-                strafe_units_per_second=config.strafe_units_per_second,
-                vertical_units_per_second=config.vertical_units_per_second,
-                forward_units_per_second=config.forward_units_per_second,
-                pitch_degrees_per_second=config.pitch_degrees_per_second,
-                yaw_degrees_per_second=config.yaw_degrees_per_second,
-                roll_degrees_per_second=config.roll_degrees_per_second,
-            ),
-        )
-        self._cache = cache
-        self._ar_index = 0
-        self._active_prompt = prompt
-
-    def _prepare_scene(
-        self,
-        selected_input: Path | UploadedFile,
-    ) -> tuple[Any, dict[str, Any], int]:
-        """Prepare one built-in or uploaded image for upstream cache initialization."""
-        config = self._config
-        upstream_config = self._upstream_config
-        if config is None or upstream_config is None:
-            raise RuntimeError("AlayaWorld model was not loaded")
-        target_hw = (
-            int(upstream_config.sample.height),
-            int(upstream_config.sample.width),
-        )
-        if isinstance(selected_input, UploadedFile):
-            metadata = load_scene_metadata(config.upload_template, self._torch)
-            video = uploaded_image_video(
-                selected_input,
-                metadata,
-                target_hw=target_hw,
-                torch_module=self._torch,
+        new_world = self.state._world_id != self.state._applied_world_id
+        image = None
+        trajectory = None
+        if new_world:
+            image = (
+                self._selected_input.data
+                if isinstance(self._selected_input, UploadedFile)
+                else self._selected_input
             )
         else:
-            video, _caption, metadata = self._load_input_sample(
-                str(selected_input),
-                image_target_hw=target_hw,
+            if self._camera is None:
+                raise RuntimeError("AlayaWorld camera planner was not initialized")
+            self._pending_camera = deepcopy(self._camera)
+            trajectory = self._pending_camera.plan(
+                strafe=self.state.strafe,
+                vertical=self.state.vertical,
+                forward=self.state.forward,
+                pitch=self.state.pitch,
+                yaw=self.state.yaw,
+                roll=self.state.roll,
+                frame_count=self._frames_wanted,
             )
-        self._check_input_resolution(video, upstream_config)
-        video, metadata, rounds, _max_rounds, needed_latents = self._plan_rollout(
-            upstream_config,
-            video,
-            metadata,
-            rounds_cap=1,
-            K=self._chunk_latents,
-            N=self._history_latents,
-            gap_steps=self._gap_steps,
-            cond_end=self._condition_latents,
+        self._reset_in_flight = new_world
+        self._chunk_in_flight = not new_world
+        return AlayaInput(
+            world_id=self.state._world_id,
+            prompt=self.state.prompt,
+            seed=self._seed,
+            image=image,
+            trajectory=trajectory,
         )
-        if rounds != 1:
-            raise RuntimeError("the selected AlayaWorld image cannot seed one chunk")
-        return video, metadata, int(needed_latents)
 
-    def _generate_chunk(
-        self,
-        prompt: str,
-        strafe: float,
-        vertical: float,
-        forward: float,
-        pitch: float,
-        yaw: float,
-        roll: float,
-    ) -> np.ndarray:
-        """Run one native AlayaWorld generate/finalize/decode turn."""
-        pipeline = self._alaya_pipeline
-        cache = self._cache
-        engine = self._engine
-        config = self._config
-        if pipeline is None or cache is None or engine is None or config is None:
-            raise RuntimeError("AlayaWorld rollout was not initialized")
-        if prompt != self._active_prompt:
-            cache.context = engine.encode_caption(prompt)
-            self._active_prompt = prompt
+    def generate(self, input: AlayaInput) -> AlayaResult:
+        return self.engine.generate(input)
 
-        self._write_camera_trajectory(
-            cache,
-            strafe=strafe,
-            vertical=vertical,
-            forward=forward,
-            pitch=pitch,
-            yaw=yaw,
-            roll=roll,
-        )
-        history = cache.history
-        if history is None:
-            raise RuntimeError("AlayaWorld interactive decode requires history latents")
-        started = time.perf_counter()
-        pred = pipeline.generate(self._ar_index, cache)
-        generated = time.perf_counter()
-        pipeline.finalize(self._ar_index, cache, pred)
-        compact_rollout_cache(
-            cache,
-            max_spatial_frames=config.max_spatial_frames,
-            recent_spatial_frames=config.recent_spatial_frames,
-        )
-        decode_started = time.perf_counter()
-        frames = self._decode_new_frames(history, pred)
-        self._ar_index += 1
+    async def process_output(self, outcome: StepOutcome) -> AlayaWorldOutput | None:
+        """Acknowledge model progress and publish successfully generated frames."""
+        self._reset_in_flight = False
+        self._chunk_in_flight = False
+        if outcome.error is not None:
+            self._pending_camera = None
+            # Native inference may have mutated its cache; automatic retry could
+            # silently skip a chunk. Surface the failure and require an explicit reset.
+            raise outcome.error
+        result: AlayaResult = outcome.result
+        if result.initial_pose is not None:
+            config = self._config
+            self._camera = CameraMotionPlanner(
+                result.initial_pose,
+                MotionConfig(
+                    fps=FPS,
+                    strafe_units_per_second=config.strafe_units_per_second,
+                    vertical_units_per_second=config.vertical_units_per_second,
+                    forward_units_per_second=config.forward_units_per_second,
+                    pitch_degrees_per_second=config.pitch_degrees_per_second,
+                    yaw_degrees_per_second=config.yaw_degrees_per_second,
+                    roll_degrees_per_second=config.roll_degrees_per_second,
+                ),
+            )
+        elif self._pending_camera is not None:
+            self._camera = self._pending_camera
+        self._pending_camera = None
+        self.state._applied_world_id = result.world_id
+        self._frames_wanted = result.frames_wanted
+        self._ar_index = result.completed_chunks
+        self._active_prompt = result.active_prompt
+        if result.frames is None:
+            return None
         logger.info(
             "AlayaWorld chunk ready",
-            chunk=self._ar_index,
-            frames=int(frames.shape[0]),
-            seconds=round(time.perf_counter() - started, 3),
-            generate_seconds=round(generated - started, 3),
-            decode_seconds=round(time.perf_counter() - decode_started, 3),
+            chunk=result.completed_chunks,
+            frames=int(result.frames.shape[0]),
+            seconds=round(outcome.elapsed, 3),
         )
-        return frames
-
-    def _write_camera_trajectory(
-        self,
-        cache: Any,
-        *,
-        strafe: float,
-        vertical: float,
-        forward: float,
-        pitch: float,
-        yaw: float,
-        roll: float,
-    ) -> None:
-        """Replace the next chunk's camera slots with frontend-controlled poses."""
-        planner = self._camera
-        if planner is None:
-            raise RuntimeError("AlayaWorld camera planner was not initialized")
-        stride = int(self._alaya_pipeline.cfg.sample.temporal_stride)
-        target_pixel_start = int(cache.target_start(self._ar_index)) * stride
-        target_pixel_end = target_pixel_start + int(cache.K) * stride
-        write_start = target_pixel_start
-        if self._ar_index == 0:
-            write_start = max(0, target_pixel_start - stride + 1)
-        trajectory = planner.plan(
-            strafe=strafe,
-            vertical=vertical,
-            forward=forward,
-            pitch=pitch,
-            yaw=yaw,
-            roll=roll,
-            frame_count=target_pixel_end - write_start,
-        )
-        metadata = cast(dict[str, Any], cache.metadata)
-        camera = metadata["cam_c2w"]
-        camera = ensure_camera_capacity(camera, target_pixel_end, self._torch)
-        values = self._torch.from_numpy(trajectory).to(device=camera.device, dtype=camera.dtype)
-        if camera.dim() == 3:
-            camera[write_start:target_pixel_end] = values
-        else:
-            camera[:, write_start:target_pixel_end] = values.unsqueeze(0).expand(
-                camera.shape[0], -1, -1, -1
+        if result.completed_chunks >= self._config.max_chunks_per_rollout:
+            self._clear_camera_controls()
+            self.state._world_id += 1
+            await self.send(
+                RolloutResetQueued(
+                    trigger="automatic_chunk_limit",
+                    seed=self._seed,
+                    completed_chunks=result.completed_chunks,
+                    applies_to_chunk=1,
+                )
             )
-        metadata["cam_c2w"] = camera
-        if "cam_c2w_raw" in metadata:
-            metadata["cam_c2w_raw"] = camera.clone()
-        metadata["frame_end"] = int(camera_frames(camera).shape[0])
-
-    def _decode_new_frames(self, history: Any, pred: Any) -> np.ndarray:
-        """Decode one chunk with bounded left context and return its new frames."""
-        config = self._config
-        engine = self._engine
-        if config is None or engine is None:
-            raise RuntimeError("AlayaWorld model was not loaded")
-        overlap = min(config.decode_overlap_latents, int(history.shape[2]))
-        latent = self._torch.cat(
-            [history[:, :, -overlap:].contiguous(), pred.to(history.dtype)],
-            dim=2,
-        ).contiguous()
-        decoded = engine.decode_latent_to_video_frames(latent)
-        stride = int(self._alaya_pipeline.cfg.sample.temporal_stride)
-        prefix_frames = (overlap - 1) * stride + 1
-        frames = decoded[prefix_frames:]
-        expected = int(pred.shape[2]) * stride
-        if int(frames.shape[0]) != expected:
-            raise RuntimeError(
-                f"AlayaWorld decoded {int(frames.shape[0])} new frames; expected {expected}"
-            )
-        return np.ascontiguousarray(frames.numpy(), dtype=np.uint8)
+        await self._send_state_update()
+        return AlayaWorldOutput(main_video=result.frames)
 
     def _state_update(self) -> StateUpdate:
         """Return a complete client-facing snapshot of the shared world state."""
@@ -923,7 +583,7 @@ class AlayaWorld(ReactorPipeline):
         starts_new_rollout = (
             self._selected_input is None
             or self._reset_in_flight
-            or self.state._reset_requested
+            or self.state._world_id != self.state._applied_world_id
         )
         if starts_new_rollout:
             return 1
@@ -953,4 +613,6 @@ class AlayaWorld(ReactorPipeline):
     def _require_selected_image(self) -> None:
         """Require a rollout origin before accepting world controls."""
         if self._selected_input is None:
-            raise CommandError("image_required", "Upload an image or select Random Image first.")
+            raise CommandError(
+                "image_required", "Upload an image or select Random Image first."
+            )

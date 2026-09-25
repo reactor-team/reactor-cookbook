@@ -24,9 +24,15 @@ starts generation.
 
 ## Run with the Reactor CLI
 
+The adapter uses Reactor Runtime 3.5's native step loop. The application resolves
+uploads and plans camera poses; `alayaworld_model.py` owns the native engine and
+rollout cache. A new world first initializes its cache and reports its exact
+camera origin. Subsequent steps generate one native chunk and publish its media
+and state. Runtime measures each generation step for playout pacing.
+
 This directory is a `reactor` workspace. The manifest names the model and its
 B200 resource, and its `build` block defines the complete Python 3.12 and CUDA
-12.8 image with Reactor Runtime 3.2.5. `requirements.txt` contains the model
+12.8 image with Reactor Runtime 3.5.0. `requirements.txt` contains the model
 dependencies. The host needs the
 [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
 the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. See Reactor's
@@ -104,18 +110,12 @@ directory to the model as `REACTOR_WEIGHTS_PATH`. The checked-in default keeps
 AlayaWorld under `~/.cache/reactor_registry/alayaworld`, outside the image and
 the Git checkout, so container rebuilds retain every large download.
 
-On first load the adapter clones the pinned AlayaWorld, Depth-Anything-3, and
-TAEHV revisions, downloads the merged checkpoint and Gemma text encoder, and
+On first load the adapter clones the pinned AlayaWorld and Depth-Anything-3
+revisions, downloads the merged checkpoint and Gemma text encoder, and
 populates the pinned DA3 cache. Interrupted Hugging Face downloads resume on
 the next start. Later runs verify and reuse the completed resources. The
 playground cases used by `random_image` arrive in the AlayaWorld checkout; no
 separate sample dataset is required.
-
-The TAEHV checkout supplies the tiny decoder that `inference.bank_taehv` uses for
-spatial-memory pixels. Its `taeltx2_3_wide` weights are the larger LTX-2.3
-variant published on a dedicated upstream branch. `assets.taehv_source` pins
-that branch revision. Setting `bank_taehv: false` skips the decoder; dropping
-`assets.taehv_source` also skips the download.
 
 `source.path` in `alayaworld.yaml` is relative to the mounted weights root.
 Every other relative model, configuration, and playground path is then resolved
@@ -200,26 +200,14 @@ autoregressive state from the selected image, active prompt, and seed without
 reloading model weights. Chunk numbering then starts again at 1. This bounds the
 dense camera trajectory while allowing the Reactor session to continue.
 
-`inference.attention_backend` chooses which attention implementation serves the
-model. `flash_attention_4` is the default and needs a Hopper or Blackwell GPU;
-`pytorch` serves anything older, and `upstream` leaves AlayaWorld's own selection
-alone. The adapter binds the callable on the loaded attention modules. Masked
-blocks use the PyTorch implementation that builds the banded sliding-window
-mask.
+The recipe uses PyTorch attention and the full VAE for both display frames
+and spatial-memory pixels. It does not install FlashAttention 4 or download
+a tiny spatial-memory decoder.
 
-`inference.bank_taehv` decodes spatial-memory pixels — the depth and warp
-sources the model builds its memory from — with a tiny decoder. Display frames
-continue through the full VAE. The memory decode is lossy. The checkpoint comes
-from the pinned `assets.taehv_source` checkout; its filename selects the
-decoder architecture, so renaming it silently changes the model.
-
-The adapter uses the default `torch.compile` mode and Inductor-compiled kernels,
-which support Runtime's off-loop chunk generation.
-
-During load, the adapter generates `inference.warmup_chunks` throwaway turns
-from a built-in scene to compile those kernels and the attention backend. Health
-stays unavailable until warmup finishes. Set the value to `0` to compile on
-first use; the caches live in the container, so a restart compiles again.
+The default `torch.compile` mode and FlexAttention match the original recipe.
+Load-time warmup is disabled, so the first generation can include compilation
+latency. Chunk sizes, autoregressive history and spatial-memory limits are
+unchanged.
 
 Autoregressive history remains a 16-latent sliding window. The adapter keeps
 only the latest generated latent outside that window and bounds the spatial

@@ -3,7 +3,7 @@ $schema: reactor/v1
 
 model:
   name: fasth3
-  version: v0.4.0
+  version: v0.4.1
   description: |
     Stream an endless, prompt-driven channel of 768p video with synchronized
     audio. MiniMax-H3 (35B), distilled by FastVideo to four transformer
@@ -43,7 +43,7 @@ runtime:
     enabled: false
 
 build:
-  runtime_version: "3.2.5"
+  runtime_version: "3.5.0"
   python_requirements: requirements.txt
   # CUDA 13 is the model's requirement, not a preference: the VSA-H3 sparse
   # kernel and the FA4 CuTe kernels are both cu130 builds. Every other model in

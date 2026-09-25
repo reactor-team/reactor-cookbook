@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 
 from reactor_runtime import (
@@ -14,55 +12,6 @@ from reactor_runtime import (
     Output,
     Video,
 )
-
-
-@dataclass(frozen=True)
-class Asset:
-    """Describe one model asset pinned to a public repository revision."""
-
-    path: Path
-    repo_id: str
-    revision: str
-
-
-@dataclass(frozen=True)
-class AlayaWorldConfig:
-    """Hold validated source, asset, inference, and interaction settings."""
-
-    source_path: Path
-    source_url: str
-    source_revision: str
-    upstream_config: Path
-    upload_template: Path
-    random_inputs: tuple[Path, ...]
-    model: Asset
-    gemma: Asset
-    da3_source_path: Path
-    da3_source_url: str
-    da3_source_revision: str
-    da3_model: Asset
-    da3_cache: Path
-    seed: int
-    compile_mode: str
-    warmup_chunks: int
-    attention_backend: str
-    flex_attention: bool
-    ttc: bool
-    bank_taehv: bool
-    taehv_path: Path | None
-    taehv_source_path: Path | None
-    taehv_source_url: str | None
-    taehv_source_revision: str | None
-    decode_overlap_latents: int
-    max_spatial_frames: int
-    recent_spatial_frames: int
-    max_chunks_per_rollout: int
-    strafe_units_per_second: float
-    vertical_units_per_second: float
-    forward_units_per_second: float
-    pitch_degrees_per_second: float
-    yaw_degrees_per_second: float
-    roll_degrees_per_second: float
 
 
 class AlayaWorldOutput(Output):
@@ -160,7 +109,8 @@ class StateUpdate(ModelMessage):
             prompt=state.prompt.strip() or None,
             active_prompt=active_prompt,
             seed=seed,
-            reset_queued=state._reset_requested,
+            reset_queued=image_source is not None
+            and state._world_id != state._applied_world_id,
             generating=generating,
             completed_chunks=completed_chunks,
             next_chunk=next_chunk,
@@ -325,4 +275,5 @@ class AlayaWorldState(InputState):
             "and held until changed; zero is neutral."
         ),
     )
-    _reset_requested: bool = False
+    _world_id: int = 0
+    _applied_world_id: int | None = None

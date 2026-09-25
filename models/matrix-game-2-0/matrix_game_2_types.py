@@ -222,5 +222,6 @@ class MatrixGame2State(InputState):
         ),
     )
     _pressed_keys: frozenset[str] = frozenset()
-    _restart_requested: bool = False
+    _world_id: int = 0
+    _applied_world_id: int | None = None
     _limit_reached: bool = False

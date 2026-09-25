@@ -1,5 +1,8 @@
 # Run SANA-WM through Reactor Runtime
 
+The adapter uses Reactor Runtime 3.5's native step loop with typed input snapshots
+and one native chunk per generation step.
+
 Run NVIDIA's public [SANA-WM](https://github.com/NVlabs/SANA) streaming world
 model as an image-, prompt-, and camera-controlled Reactor backend. The recipe
 targets the distilled `Efficient-Large-Model/SANA-WM_streaming` release and
@@ -20,7 +23,7 @@ weights cache and calls its streaming inference components directly.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` controls its Reactor
-Runtime 3.2.5, CUDA 12.8, Python 3.12, system packages, and Python dependencies.
+Runtime 3.5.0, CUDA 12.8, Python 3.12, system packages, and Python dependencies.
 `requirements.txt` contains the model's inference dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -75,8 +78,11 @@ configure that storage on the large volume when the system disk is small.
 
 ## Controls
 
-- `set_image(image, prompt, intrinsics)` selects an uploaded JPEG, PNG, WebP,
-  or BMP first frame. The prompt and NumPy intrinsics are optional.
+- `set_image(image, prompt)` selects an uploaded JPEG, PNG, WebP, or BMP first
+  frame. Empty prompt text uses neutral continuation text, not the prior scene.
+- `set_intrinsics(intrinsics)` uploads optional NumPy camera calibration. Send
+  it before the image to apply it to the next upload, or afterward to restart
+  the current image with that calibration. The upload is separate from images.
 - `random_image` selects another pinned public SANA-WM example with its prompt
   and calibration.
 - `set_prompt(prompt)` applies new non-empty scene text by starting a fresh
@@ -149,6 +155,11 @@ allows clips up to five minutes. The manifest-generated image includes FFmpeg.
 SANA-WM does not emit audio.
 
 ## Notes
+
+The application plans native camera poses and handles commands and messages.
+`sana_wm_model.py` owns the streaming backend and returns frames with the applied
+world ID and chunk progress. Image and calibration inputs cross that boundary
+once per acknowledged world; a finite trajectory stops at its final full chunk.
 
 - `sana_wm.yaml` pins the public SANA source, SANA-WM checkpoint, Gemma text
   encoder, Pi3X source and checkpoint, inference memory lengths, camera motion,

@@ -34,8 +34,11 @@ from chunk 1.
 
 ## Run
 
+The adapter uses Reactor Runtime 3.5's native step loop. Each step snapshots
+the current inputs, generates one native chunk, and publishes its media and state.
+
 The `build` block in `reactor.yaml` controls the model image: Reactor Runtime
-3.2.5, Python 3.12, CUDA 12.8.1, system packages, and `requirements.txt`. See
+3.5.0, Python 3.12, CUDA 12.8.1, system packages, and `requirements.txt`. See
 Reactor's [build configuration](https://docs.reactor.inc/deploy/platform/build)
 for the supported fields. The host needs only the prerequisites above.
 
@@ -152,6 +155,11 @@ Commands return typed, command-correlated messages for the client timeline:
   immediately; successful state changes broadcast another.
 
 Message delivery stays outside the blocking GPU inference call.
+
+`dreamx_world.py` owns commands, camera planning, and messages. Its step hooks
+pass frozen inputs to `dreamx_world_model.py`, which owns the native backend and
+returns frames, the applied world ID, and chunk progress. An image crosses this
+boundary only until the first successful chunk acknowledges its world ID.
 
 ## Recording
 

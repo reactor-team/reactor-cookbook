@@ -1,5 +1,10 @@
 # HY-World 1.5 example
 
+The adapter uses Reactor Runtime 3.5's native step loop. `hy_world_1_5.py`
+owns commands and camera planning; `hy_world_1_5_model.py` owns inference and
+causal state. Frozen inputs and results carry one native chunk per step, with
+a world ID acknowledging when a new reference has been applied.
+
 Serve the public
 [HY-WorldPlay](https://github.com/Tencent-Hunyuan/HY-WorldPlay) distilled
 autoregressive image-to-video model through Reactor Runtime. The adapter keeps
@@ -20,7 +25,7 @@ example. Either command starts continuous generation from the first chunk.
 ## Run
 
 This directory is a `reactor` workspace. Its `reactor.yaml` declares the model,
-runtime entry point, Reactor Runtime 3.2.5, CUDA and Python versions, system
+runtime entry point, Reactor Runtime 3.5.0, CUDA and Python versions, system
 packages, and Python requirements. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.

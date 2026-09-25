@@ -11,6 +11,11 @@ Manual prompts and Bilibili viewer requests steer upcoming clips, while
 GPT-5.4 Mini extends the latest seven scenes whenever the primary queue needs
 more material.
 
+The adapter uses Reactor Runtime 3.5's `ReactorApp` custom `run()` interface.
+It preserves the single-clip lookahead, synchronized audio/video, and responsive
+channel controls. Generated clips are independently conditioned by text;
+this recipe does not expose a persistent, camera-controlled world state.
+
 The complete application lives in this directory:
 
 - `fasth3.py` adapts FastVideo generation to a shared Reactor session.

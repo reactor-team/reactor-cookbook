@@ -25,6 +25,16 @@ contains only the model's Python dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported YAML fields.
 
+The adapter uses Reactor Runtime 3.5.0's `ReactorApp` step loop. Each step
+observes one conditioning frame or generates one video frame from a snapshot
+of the keyboard and mouse controls. Mouse and wheel deltas are consumed
+after generation.
+
+`opendreamer_model.py` owns the native JAX RNG, tokenizer and dynamics caches,
+conditioning progress, and single-frame generation. The application snapshots
+controls and supplies conditioning once per world, then publishes model results.
+The upstream sampling schedule and cache windows remain unchanged.
+
 Run the workspace and expose one GPU to the container:
 
 ```sh

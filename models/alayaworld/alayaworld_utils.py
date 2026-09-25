@@ -9,18 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageOps, UnidentifiedImageError
-
-from reactor_runtime import CommandError, UploadedFile
-
-_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
-_UPLOAD_MAX_PIXELS = 100_000_000
-_UPLOAD_MIME_FORMATS = {
-    "image/bmp": "BMP",
-    "image/jpeg": "JPEG",
-    "image/png": "PNG",
-    "image/webp": "WEBP",
-}
+from PIL import Image, ImageOps
 
 
 def compact_rollout_cache(
@@ -72,45 +61,8 @@ def compact_rollout_cache(
         }
 
 
-def validate_uploaded_image(image: UploadedFile) -> None:
-    """Reject oversized, mislabeled, or undecodable uploaded image bytes."""
-    expected_format = _UPLOAD_MIME_FORMATS.get(image.mime_type.lower())
-    if expected_format is None:
-        raise CommandError(
-            "unsupported_media",
-            f"{image.name} must declare image/jpeg, image/png, image/webp, or image/bmp.",
-        )
-    if not image.data:
-        raise CommandError("invalid_image", f"{image.name} is empty.")
-    if image.size > _UPLOAD_MAX_BYTES:
-        raise CommandError(
-            "image_too_large",
-            f"{image.name} exceeds the {_UPLOAD_MAX_BYTES // (1024 * 1024)} MiB limit.",
-        )
-    try:
-        with Image.open(io.BytesIO(image.data)) as decoded:
-            image_format = decoded.format or ""
-            width, height = decoded.size
-            if image_format != expected_format:
-                raise CommandError(
-                    "unsupported_media",
-                    f"{image.name} contains {image_format or 'unknown'} data but declares "
-                    f"{image.mime_type}.",
-                )
-            if width <= 0 or height <= 0 or width * height > _UPLOAD_MAX_PIXELS:
-                raise CommandError(
-                    "image_too_large",
-                    f"{image.name} exceeds the {_UPLOAD_MAX_PIXELS}-pixel limit.",
-                )
-            decoded.verify()
-    except CommandError:
-        raise
-    except (Image.DecompressionBombError, UnidentifiedImageError, OSError) as error:
-        raise CommandError("invalid_image", f"{image.name} cannot be decoded.") from error
-
-
 def uploaded_image_video(
-    image: UploadedFile,
+    image: bytes,
     metadata: dict[str, Any],
     *,
     target_hw: tuple[int, int],
@@ -118,7 +70,7 @@ def uploaded_image_video(
 ) -> Any:
     """Decode, center-crop, and repeat an upload over the camera template."""
     target_height, target_width = target_hw
-    with Image.open(io.BytesIO(image.data)) as decoded:
+    with Image.open(io.BytesIO(image)) as decoded:
         oriented = ImageOps.exif_transpose(decoded).convert("RGB")
         fitted = ImageOps.fit(
             oriented,
@@ -139,8 +91,12 @@ def load_upstream_modules(source_path: Path) -> dict[str, Any]:
     rollout = importlib.import_module("flash_alaya.utils.rollout_utils")
     return {
         "torch": importlib.import_module("torch"),
-        "load_config": importlib.import_module("flash_alaya.alaya.config.loader").load_config,
-        "pipeline_type": importlib.import_module("flash_alaya.utils.pipeline").FlashAlayaPipeline,
+        "load_config": importlib.import_module(
+            "flash_alaya.alaya.config.loader"
+        ).load_config,
+        "pipeline_type": importlib.import_module(
+            "flash_alaya.utils.pipeline"
+        ).FlashAlayaPipeline,
         "load_input_sample": rollout.load_input_sample,
         "check_input_resolution": rollout.check_input_resolution,
         "plan_rollout": rollout.plan_rollout,
@@ -178,7 +134,9 @@ class FlashAttention4:
     PyTorch implementation that builds the equivalent banded mask.
     """
 
-    def __init__(self, flash_attention: Any, masked_fallback: Any, torch_module: Any) -> None:
+    def __init__(
+        self, flash_attention: Any, masked_fallback: Any, torch_module: Any
+    ) -> None:
         self._flash_attention = flash_attention
         self._masked_fallback = masked_fallback
         self._torch = torch_module

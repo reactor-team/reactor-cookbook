@@ -27,8 +27,14 @@ one second of generated world time per chunk. Playout uses Echo-WM's native
 
 ## Run with the Reactor CLI
 
+The adapter uses Reactor Runtime 3.5's native step loop. `echo_wm.py` handles
+client commands, plans camera poses, and publishes each chunk. `echo_wm_model.py`
+owns model loading and generation through typed inputs and results, with no
+Reactor Runtime dependency. A world identifier associates each output with its
+selected image and prompt; the anchor travels only until that world is confirmed.
+
 This directory is a Reactor workspace. Its `reactor.yaml` manifest defines the
-Python 3.12 serving image, Reactor Runtime 3.2.5, CUDA and system dependencies,
+Python 3.12 serving image, Reactor Runtime 3.5.0, CUDA and system dependencies,
 the model entry point, GPU resource, recording tracks, and persistent weights
 directory. See the [Reactor CLI installation
 guide](https://docs.reactor.inc/deploy/platform/installation) and [build

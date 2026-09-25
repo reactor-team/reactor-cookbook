@@ -229,4 +229,5 @@ class LingBotWorldV2State(InputState):
     _pitch: float = 0.0
     _yaw: float = 0.0
     _roll: float = 0.0
-    _reset_requested: bool = False
+    _world_id: int = 0
+    _applied_world_id: int | None = None

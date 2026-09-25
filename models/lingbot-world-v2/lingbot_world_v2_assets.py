@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -13,11 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-from huggingface_hub import snapshot_download
-from reactor_runtime import get_weights_path
-from reactor_runtime.log import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 SOURCE_PATH_ENV = "LINGBOT_WORLD_V2_PATH"
 CHECKPOINT_PATH_ENV = "LINGBOT_WORLD_V2_CHECKPOINT_PATH"
@@ -69,11 +67,15 @@ class LingBotConfig:
     upload_intrinsics: tuple[float, float, float, float]
 
 
-def read_config(config_path: Path | None) -> LingBotConfig:
+def read_config(
+    config_path: Path | None, weights_root: Path | None = None
+) -> LingBotConfig:
     """Read and validate the LingBot adapter YAML.
 
     Args:
         config_path: Path supplied by ``runtime.config`` in ``reactor.yaml``.
+        weights_root: Root for source and checkpoint paths. Defaults to the
+            configuration file's directory for standalone use.
 
     Returns:
         Validated public source, asset, inference, and interaction settings.
@@ -87,7 +89,9 @@ def read_config(config_path: Path | None) -> LingBotConfig:
     if not isinstance(document, dict):
         raise TypeError(f"{config_path}: expected a YAML mapping")
 
-    weights_path = get_weights_path()
+    weights_path = (
+        weights_root if weights_root is not None else config_path.resolve().parent
+    )
     source = _mapping(document.get("source"), "source")
     assets = _mapping(document.get("assets"), "assets")
     checkpoint = _mapping(assets.get("checkpoint"), "assets.checkpoint")
@@ -191,10 +195,10 @@ def read_config(config_path: Path | None) -> LingBotConfig:
     )
 
 
-def prepare_runtime_assets(config: LingBotConfig) -> None:
+def prepare_runtime_assets(config: LingBotConfig, weights_root: Path) -> None:
     """Clone the pinned public source and download the pinned public checkpoint."""
     _ensure_source(config)
-    _ensure_checkpoint(config)
+    _ensure_checkpoint(config, weights_root)
     _validate_scenes(config.scenes)
 
 
@@ -204,9 +208,11 @@ def _ensure_source(config: LingBotConfig) -> None:
     if not path.exists():
         logger.info(
             "downloading LingBot-World-V2 source",
-            url=config.source_url,
-            revision=config.source_revision,
-            destination=str(path),
+            extra={
+                "url": config.source_url,
+                "revision": config.source_revision,
+                "destination": str(path),
+            },
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
@@ -246,7 +252,7 @@ def _ensure_source(config: LingBotConfig) -> None:
         raise RuntimeError(f"LingBot source at {path} has local modifications")
 
 
-def _ensure_checkpoint(config: LingBotConfig) -> None:
+def _ensure_checkpoint(config: LingBotConfig, weights_root: Path) -> None:
     """Download missing checkpoint files and provide the subfolder config upstream expects."""
     missing = [
         relative
@@ -254,14 +260,18 @@ def _ensure_checkpoint(config: LingBotConfig) -> None:
         if not (config.checkpoint_path / relative).is_file()
     ]
     if missing:
+        from huggingface_hub import snapshot_download
+
         logger.info(
             "downloading LingBot-World-V2 checkpoint",
-            repo_id=config.checkpoint_repo_id,
-            revision=config.checkpoint_revision,
-            destination=str(config.checkpoint_path),
+            extra={
+                "repo_id": config.checkpoint_repo_id,
+                "revision": config.checkpoint_revision,
+                "destination": str(config.checkpoint_path),
+            },
         )
         config.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_dir = get_weights_path() / ".huggingface"
+        cache_dir = weights_root / ".huggingface"
         snapshot_download(
             repo_id=config.checkpoint_repo_id,
             revision=config.checkpoint_revision,

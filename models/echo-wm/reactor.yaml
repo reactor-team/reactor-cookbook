@@ -3,7 +3,7 @@ $schema: reactor/v1
 
 model:
   name: echo-wm-flash
-  version: v0.1.0
+  version: v0.1.2
   description: |
     Explore an autoregressive audiovisual world from an image, a prompt, and
     Echo-WM's native pure-camera controls.
@@ -38,7 +38,7 @@ runtime:
       bitrate_kbps: 192
 
 build:
-  runtime_version: "3.2.5"
+  runtime_version: "3.5.0"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"

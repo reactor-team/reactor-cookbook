@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import os
 import re
 import subprocess
@@ -12,10 +13,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
-from reactor_runtime import get_weights_path
-from reactor_runtime.log import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 SOURCE_ENV = "HY_WORLDPLAY_PATH"
 BASE_MODEL_ENV = "HY_WORLDPLAY_BASE_MODEL_PATH"
@@ -73,7 +72,9 @@ class HYWorld15Config:
     max_chunks: int
 
 
-def read_config(config_path: Path | None) -> HYWorld15Config:
+def read_config(
+    config_path: Path | None, weights_root: Path | None = None
+) -> HYWorld15Config:
     """Read and validate the HY-World 1.5 adapter YAML."""
     if config_path is None:
         raise ValueError("HY-World 1.5 requires runtime.config in reactor.yaml")
@@ -81,7 +82,7 @@ def read_config(config_path: Path | None) -> HYWorld15Config:
     if not isinstance(document, dict):
         raise TypeError(f"{config_path}: expected a YAML mapping")
 
-    weights = get_weights_path()
+    weights = weights_root if weights_root is not None else config_path.resolve().parent
     source_raw = _mapping(document.get("source"), "source")
     assets = _mapping(document.get("assets"), "assets")
     inference = _mapping(document.get("inference"), "inference")
@@ -271,9 +272,9 @@ def _ensure_git_checkout(repository: Repository) -> None:
     """Clone a missing source tree and require its configured immutable revision."""
     if not repository.path.exists():
         logger.info(
-            "downloading source checkout",
-            url=repository.url,
-            destination=str(repository.path),
+            "downloading source checkout %s to %s",
+            repository.url,
+            repository.path,
         )
         repository.path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
@@ -406,8 +407,8 @@ def _ensure_vision_encoder(config: HYWorld15Config) -> None:
     except Exception as error:  # noqa: BLE001 - every gated-asset failure selects the fallback
         logger.warning(
             "official gated vision encoder unavailable; preparing the public "
-            "SigLIP SO400M architecture match",
-            error=str(error),
+            "SigLIP SO400M architecture match: %s",
+            error,
         )
 
     _ensure_hf_snapshot(config.public_vision_fallback)

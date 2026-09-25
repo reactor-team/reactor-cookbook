@@ -78,7 +78,8 @@ class CameraMotionPlanner:
         delta[:3, :3] = (
             _rotation_z(float(roll_step))
             @ _rotation_y(float(yaw_step))
-            @ _rotation_x(float(-pitch_step))
+            # OpenCV C2W: positive X rotation points the optical axis toward -Y (up).
+            @ _rotation_x(float(pitch_step))
         )
         delta[:3, 3] = translation
 

@@ -10,28 +10,10 @@ changes and resets initialize a fresh autoregressive world.
 from __future__ import annotations
 
 import secrets
-from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any
-
-import numpy as np
-from reactor_runtime import (
-    ClientInfo,
-    CommandError,
-    InputField,
-    ReactorPipeline,
-    UploadedFile,
-    connected,
-    disconnected,
-    event,
-    session_ended,
-    session_started,
-)
-from reactor_runtime.log import get_logger
 
 from abot_world_assets import (
-    build_upstream_config,
-    load_upstream_modules,
+    ABotWorldConfig,
     prepare_assets,
     read_config,
 )
@@ -41,10 +23,10 @@ from abot_world_controls import (
     sample_key_snapshot,
     update_key_state,
 )
-from abot_world_images import materialized_image, validate_uploaded_image
+from abot_world_images import upload_suffix, validate_uploaded_image
+from abot_world_model import ABotAnchor, ABotInput, ABotResult, ABotWorldModel
 from abot_world_types import (
     DEFAULT_PROMPT,
-    ABotWorldConfig,
     ABotWorldOutput,
     ABotWorldState,
     ActionChanged,
@@ -55,27 +37,26 @@ from abot_world_types import (
     RolloutResetQueued,
     StateUpdate,
 )
+from reactor_runtime import (
+    ApplicationError,
+    ClientInfo,
+    CommandError,
+    InputField,
+    ReactorApp,
+    StepOutcome,
+    UploadedFile,
+    connected,
+    disconnected,
+    event,
+    get_weights_path,
+    session_ended,
+    session_started,
+)
 
-logger = get_logger(__name__)
-
-FPS = 12
 FRAMES_PER_CHUNK = 12
-_EXPECTED_LATENTS_PER_CHUNK = 3
-_EXPECTED_LOCAL_CACHE_LATENTS = 21
 
 
-class _FrameCapture:
-    """Collect frames from the upstream decoder's writer interface."""
-
-    def __init__(self) -> None:
-        self.frames: list[np.ndarray] = []
-
-    def append_data(self, frame: np.ndarray) -> None:
-        """Append one decoded RGB frame."""
-        self.frames.append(np.asarray(frame))
-
-
-class ABotWorld(ReactorPipeline):
+class ABotWorld(ReactorApp):
     """Generate a prompt-, image-, and keyboard-controlled ABot world."""
 
     state: ABotWorldState
@@ -84,10 +65,7 @@ class ABotWorld(ReactorPipeline):
     def __init__(self) -> None:
         super().__init__()
         self._config: ABotWorldConfig | None = None
-        self._modules: dict[str, Any] = {}
-        self._pipeline: Any = None
-        self._device: Any = None
-        self._latent_shape: tuple[int, int, int, int, int] | None = None
+        self._engine = ABotWorldModel()
         self._selected_input: Path | UploadedFile | None = None
         self._image_source: str | None = None
         self._image_name: str | None = None
@@ -98,73 +76,12 @@ class ABotWorld(ReactorPipeline):
         self._chunk_in_flight = False
 
     def load(self, config_path: Path | None) -> None:
-        """Load the pinned public source and distilled checkpoint once.
-
-        Args:
-            config_path: Path to ``abot_world.yaml`` from ``reactor.yaml``.
-        """
-        config = read_config(config_path)
-        prepare_assets(config)
-        modules = load_upstream_modules(config)
-        torch = modules["torch"]
-        if not torch.cuda.is_available():
-            raise RuntimeError("ABot-World requires a CUDA accelerator")
-        device = torch.device("cuda")
-        upstream_config = build_upstream_config(config, modules)
-        num_frame_per_block = int(upstream_config.num_frame_per_block)
-        local_attn_size = int(upstream_config.model_kwargs.local_attn_size)
-        if num_frame_per_block != _EXPECTED_LATENTS_PER_CHUNK:
-            raise ValueError(
-                "ABot-World must retain its native three-latent autoregressive chunk size"
-            )
-        if local_attn_size != _EXPECTED_LOCAL_CACHE_LATENTS:
-            raise ValueError(
-                "ABot-World must retain its native 21-latent KV cache window"
-            )
-
-        modules["set_seed"](config.seed)
-        torch.set_grad_enabled(False)
-        vae = modules["create_vae"](upstream_config)
-        pipeline = modules["pipeline_type"](upstream_config, device=device, vae=vae)
-        try:
-            modules["replace_norms"](pipeline.generator.model)
-            modules["replace_rope"]()
-            logger.info("ABot-World upstream Helios kernels enabled")
-        except Exception as error:  # noqa: BLE001 - optional upstream kernels may be unavailable.
-            logger.warning("ABot-World Helios kernels unavailable", error=str(error))
-        pipeline = pipeline.to(dtype=torch.bfloat16)
-        pipeline.text_encoder.to(device=device)
-        pipeline.generator.to(device=device)
-        pipeline.vae.to(device=device)
-        if pipeline.encoder is not None:
-            pipeline.encoder.to(device=device)
-        pipeline.torch_dtype = torch.bfloat16
-
-        vae_for_shape = (
-            pipeline.encoder if pipeline.encoder is not None else pipeline.vae
-        )
-        upsampling = int(getattr(vae_for_shape, "upsampling_factor", 16))
-        latent_channels = int(vae_for_shape.z_dim)
-        self._latent_shape = (
-            1,
-            num_frame_per_block,
-            latent_channels,
-            config.height // upsampling,
-            config.width // upsampling,
-        )
+        """Prepare public assets and load the native causal model once."""
+        weights_root = get_weights_path()
+        config = read_config(config_path, weights_root)
+        prepare_assets(config, weights_root)
         self._config = config
-        self._modules = modules
-        self._pipeline = pipeline
-        self._device = device
-        logger.info(
-            "ABot-World model ready",
-            source_revision=config.source_revision,
-            checkpoint_revision=config.checkpoint.revision,
-            latent_frames_per_chunk=num_frame_per_block,
-            local_cache_latents=local_attn_size,
-            output_fps=FPS,
-            max_chunks=config.max_chunks,
-        )
+        self._engine.load(config, weights_root)
 
     @session_started
     def on_session_started(self) -> None:
@@ -172,7 +89,8 @@ class ABotWorld(ReactorPipeline):
         config = self._require_config()
         self.state.prompt = DEFAULT_PROMPT
         self.state._seed = config.seed
-        self.state._reset_requested = False
+        self.state._world_id = 0
+        self.state._applied_world_id = None
         self.state._limit_reached = False
         self._clear_controls()
         self._selected_input = None
@@ -205,7 +123,8 @@ class ABotWorld(ReactorPipeline):
         self._active_prompt = ""
         self._sampled_keys = frozenset()
         self._chunk_index = 0
-        self._reset_upstream_stream()
+        self._engine.reset()
+        self.state._applied_world_id = None
 
     @event(
         name="set_key_state",
@@ -424,159 +343,63 @@ class ABotWorld(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[ABotWorldOutput | None, None]:
-        """Generate one native causal chunk per turn and emit its RGB frame batch."""
-        while True:
-            selected_input = self._selected_input
-            if selected_input is None or self.state._limit_reached:
-                yield None
-                continue
-
-            if self.state._reset_requested:
-                self.state._reset_requested = False
-                self._reset_in_flight = True
-                self.output.flush()
-                try:
-                    self._reset_rollout(
-                        selected_input,
-                        self.state.prompt,
-                        self.state._seed,
-                    )
-                finally:
-                    self._reset_in_flight = False
-                await self._send_state_update()
-
-            action, sampled = sample_key_snapshot(
-                self.state._pressed_keys,
-                self.state._activated_keys,
+    async def process_input(self) -> ABotInput:
+        """Snapshot native controls once an anchor and available rollout exist."""
+        if self._selected_input is None:
+            raise ApplicationError("Select an image before generating.")
+        if self.state._limit_reached:
+            raise ApplicationError("Reset the world after reaching the rollout limit.")
+        action, _ = sample_key_snapshot(
+            self.state._pressed_keys, self.state._activated_keys
+        )
+        self.state._activated_keys = frozenset()
+        new_world = self.state._world_id != self.state._applied_world_id
+        anchor = None
+        if new_world:
+            image = self._selected_input
+            anchor = ABotAnchor(
+                image=image.data if isinstance(image, UploadedFile) else image,
+                suffix=upload_suffix(image) if isinstance(image, UploadedFile) else "",
+                seed=self.state._seed,
             )
-            self.state._activated_keys = frozenset()
-            prompt = self.state.prompt
-            self._chunk_in_flight = True
-            try:
-                frames = self._generate_chunk(prompt, action)
-            finally:
-                self._chunk_in_flight = False
-            self._sampled_keys = sampled
-            self._active_prompt = prompt
-            self._chunk_index += 1
+        self._reset_in_flight = new_world
+        self._chunk_in_flight = True
+        return ABotInput(self.state._world_id, anchor, self.state.prompt, action)
 
-            config = self._require_config()
-            if self._chunk_index >= config.max_chunks:
-                self.state._limit_reached = True
-                self._clear_controls()
-                await self.send(
-                    RolloutLimitReached(
-                        completed_chunks=self._chunk_index,
-                        max_chunks=config.max_chunks,
-                    )
-                )
-            await self._send_state_update()
-            yield ABotWorldOutput(main_video=frames)
+    def generate(self, input: ABotInput) -> ABotResult:
+        return self._engine.generate(input)
 
-    def _reset_rollout(
-        self,
-        selected_input: Path | UploadedFile,
-        prompt: str,
-        seed: int,
-    ) -> None:
-        """Initialize upstream conditions and rolling caches for a fresh world."""
-        pipeline = self._require_pipeline()
+    async def process_output(self, outcome: StepOutcome) -> ABotWorldOutput:
+        """Publish the decoded chunk and acknowledged world state."""
+        self._reset_in_flight = False
+        self._chunk_in_flight = False
+        if outcome.error is not None:
+            # An unexpected native failure is not repaired by discarding the world.
+            raise outcome.error
+        result: ABotResult = outcome.result
+        self.state._applied_world_id = result.world_id
+        self._sampled_keys = result.sampled_keys
+        self._active_prompt = result.prompt
+        self._chunk_index = result.chunk_index
         config = self._require_config()
-        torch = self._modules["torch"]
-        self._modules["set_seed"](seed)
-        pipeline.set_prompts([prompt], device=self._device)
-        empty_ref_dir = config.checkpoint.path / "unused-reference-slots"
-        pipeline.set_ref_latent_mask_from_exists_paths(
-            ref_dir=str(empty_ref_dir),
-            device=self._device,
-        )
-        pipeline.reset_stream(
-            batch_size=1,
-            dtype=torch.bfloat16,
-            device=self._device,
-            initial_latent=None,
-        )
-        with materialized_image(selected_input) as image_path:
-            pipeline.set_first_frame_latent(
-                str(image_path),
-                height=config.height,
-                width=config.width,
-                device=self._device,
+        if result.complete:
+            self.state._limit_reached = True
+            self._clear_controls()
+            await self.send(
+                RolloutLimitReached(
+                    completed_chunks=result.chunk_index,
+                    max_chunks=config.max_chunks,
+                )
             )
-        self._active_prompt = prompt
-        self._sampled_keys = frozenset()
-        self._chunk_index = 0
-        self.state._limit_reached = False
-
-    def _generate_chunk(self, prompt: str, action: dict[str, bool]) -> np.ndarray:
-        """Run one upstream autoregressive block and cached VAE decode."""
-        pipeline = self._require_pipeline()
-        config = self._require_config()
-        latent_shape = self._latent_shape
-        if latent_shape is None:
-            raise RuntimeError("ABot-World latent shape was not initialized")
-        torch = self._modules["torch"]
-        if prompt != self._active_prompt:
-            pipeline.set_prompts([prompt], device=self._device)
-        pipeline.set_act(
-            action,
-            height=config.height,
-            width=config.width,
-            num_frames=latent_shape[1],
-            device=self._device,
-        )
-        noise = torch.randn(latent_shape, device=self._device, dtype=torch.bfloat16)
-        latent_block = pipeline.generate_next_block(noise)
-        capture = _FrameCapture()
-        pipeline.decode_block_and_write(latent_block, capture)
-        return self._normalize_frames(capture.frames)
-
-    def _normalize_frames(self, frames: list[np.ndarray]) -> np.ndarray:
-        """Return a contiguous native-resolution uint8 RGB frame batch."""
-        config = self._require_config()
-        if not frames:
-            raise RuntimeError("ABot-World decoded an empty chunk")
-        normalized: list[np.ndarray] = []
-        for index, frame in enumerate(frames):
-            array = np.asarray(frame)
-            if array.shape != (config.height, config.width, 3):
-                raise RuntimeError(
-                    f"ABot-World frame {index} has shape {array.shape}; expected "
-                    f"{(config.height, config.width, 3)}"
-                )
-            if array.dtype != np.uint8:
-                array = np.clip(array, 0, 255).astype(np.uint8)
-            normalized.append(np.ascontiguousarray(array))
-        return np.ascontiguousarray(np.stack(normalized))
+        await self.send(self._state_update())
+        return ABotWorldOutput(main_video=result.frames)
 
     def _queue_fresh_rollout(self) -> None:
         """Queue a cache reset and clear controls without reloading weights."""
-        self.state._reset_requested = True
+        self.state._world_id += 1
         self.state._limit_reached = False
         self._clear_controls()
         self.output.flush()
-
-    def _reset_upstream_stream(self) -> None:
-        """Reset reusable upstream caches and decoder state after a session."""
-        pipeline = self._pipeline
-        if pipeline is None or self._device is None:
-            return
-        if pipeline.kv_cache1 is None:
-            return
-        torch = self._modules["torch"]
-        pipeline.reset_stream(
-            batch_size=1,
-            dtype=torch.bfloat16,
-            device=self._device,
-            initial_latent=None,
-        )
-        vae_model = getattr(pipeline.vae, "model", None)
-        if vae_model is not None and hasattr(vae_model, "clear_cache"):
-            vae_model.clear_cache()
-        taehv = getattr(pipeline.vae, "taehv", None)
-        if taehv is not None and hasattr(taehv, "reset"):
-            taehv.reset()
 
     def _clear_controls(self) -> None:
         """Release held keys and discard every queued short tap."""
@@ -595,7 +418,7 @@ class ABotWorld(ReactorPipeline):
         """Return the one-based chunk expected to sample newly accepted state."""
         if self._selected_input is None or self.state._limit_reached:
             return None
-        if self.state._reset_requested:
+        if self.state._world_id != self.state._applied_world_id:
             return 1
         return self._chunk_index + 1 + int(self._chunk_in_flight)
 
@@ -611,7 +434,10 @@ class ABotWorld(ReactorPipeline):
             prompt=self.state.prompt,
             active_prompt=self._active_prompt or None,
             seed=self.state._seed,
-            reset_queued=self.state._reset_requested,
+            reset_queued=(
+                self._selected_input is not None
+                and self.state._world_id != self.state._applied_world_id
+            ),
             generating=self._reset_in_flight or self._chunk_in_flight,
             limit_reached=self.state._limit_reached,
             completed_chunks=self._chunk_index,
@@ -639,9 +465,3 @@ class ABotWorld(ReactorPipeline):
         if self._config is None:
             raise RuntimeError("ABot-World was not loaded")
         return self._config
-
-    def _require_pipeline(self) -> Any:
-        """Return the loaded upstream pipeline or report an invalid lifecycle call."""
-        if self._pipeline is None:
-            raise RuntimeError("ABot-World was not loaded")
-        return self._pipeline

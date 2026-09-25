@@ -1,5 +1,12 @@
 # Play Matrix-Game-2.0 through Reactor Runtime
 
+The adapter uses Reactor Runtime 3.5's native step loop. `matrix_game_2.py`
+handles client commands and publishes video and state updates;
+`matrix_game_2_model.py` owns model loading, causal state, and one-chunk
+generation without a Runtime dependency. Typed inputs and results carry a
+world identifier, with the starting image sent only until the model confirms
+that world. Chunk timing comes from the runtime's step outcome.
+
 Run SkyworkAI's public
 [Matrix-Game-2.0](https://github.com/SkyworkAI/Matrix-Game) universal distilled
 model as an interactive Reactor backend. Use this recipe when a client needs to
@@ -26,7 +33,7 @@ controls the host directory mounted for source and checkpoints.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model,
-configures its Reactor Runtime 3.2.5 image, mounts the persistent weights cache,
+configures its Reactor Runtime 3.5.0 image, mounts the persistent weights cache,
 and enables recording. `requirements.txt` contains the inference dependencies.
 See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
@@ -41,7 +48,7 @@ reactor build
 reactor run --gpus device=0 --port 8080
 ```
 
-The configured image contains Reactor Runtime 3.2.5, Python 3.12, CUDA 12.8,
+The configured image contains Reactor Runtime 3.5.0, Python 3.12, CUDA 12.8,
 the model dependencies, and the required system packages. `reactor run` reuses
 the local image, building it automatically when its tag is absent.
 

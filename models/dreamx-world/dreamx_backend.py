@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import logging
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -13,19 +14,13 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 from PIL import Image
-from reactor_runtime import UploadedFile
-from reactor_runtime.log import get_logger
 from safetensors.torch import load_file
 
 if TYPE_CHECKING:
-    from dreamx_camera import CameraChunk, DreamXCameraController
-    from dreamx_types import DreamXConfig
-else:
-    module_prefix = f"{__package__}." if __package__ else ""
-    camera_module = importlib.import_module(f"{module_prefix}dreamx_camera")
-    DreamXCameraController = camera_module.DreamXCameraController
+    from dreamx_camera import CameraChunk
+    from dreamx_world_model import DreamXConfig
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 _LATENT_FRAMES_PER_CHUNK = 3
 _LATENT_CHANNELS = 48
@@ -45,7 +40,6 @@ class DreamXBackend:
         self._device = torch.device("cuda")
         self._dtype = torch.bfloat16
         self._pipeline = self._load_pipeline()
-        self._camera = DreamXCameraController(config.motion_speed)
         self._initial_latent: torch.Tensor | None = None
         self._conditional: dict[str, torch.Tensor] | None = None
         self._conditional_prompt = ""
@@ -58,12 +52,11 @@ class DreamXBackend:
         """Return the upstream rolling KV cache length in latent frames."""
         return int(self._pipeline.local_attn_size)
 
-    def reset(self, seed: int, image: Path | UploadedFile) -> None:
+    def reset(self, seed: int, image: Path | bytes) -> None:
         """Start a fresh causal rollout from one image while retaining loaded weights."""
         set_seed = self._upstream_module("utils.misc").set_seed
         set_seed(seed)
         self._release_rollout()
-        self._camera.reset()
         pixel = self._load_image_tensor(image)
         with torch.inference_mode():
             self._initial_latent = self._pipeline.vae.encode_to_latent(pixel).to(
@@ -82,7 +75,7 @@ class DreamXBackend:
             self._device,
         )
 
-    def generate_chunk(self, prompt: str, pressed_keys: frozenset[str]) -> np.ndarray:
+    def generate_chunk(self, prompt: str, camera_chunk: CameraChunk) -> np.ndarray:
         """Generate and decode exactly one native three-latent-frame chunk."""
         if self._initial_latent is None or self._pipeline.kv_cache1 is None:
             raise RuntimeError("Reset DreamX-World with an image before generating")
@@ -90,7 +83,6 @@ class DreamXBackend:
         if not prompt:
             raise ValueError("DreamX-World requires a non-empty prompt")
         first_chunk = self._chunk_index == 0
-        camera_chunk = self._camera.plan_chunk(pressed_keys, first_chunk=first_chunk)
         camera_condition = self._camera_condition(camera_chunk)
         conditional = self._prompt_condition(prompt)
 
@@ -126,7 +118,6 @@ class DreamXBackend:
     def end_session(self) -> None:
         """Release session rollout caches while keeping model weights loaded."""
         self._release_rollout()
-        self._camera.reset()
 
     def _load_pipeline(self) -> Any:
         """Construct the upstream pipeline and load the pinned autoregressive checkpoint."""
@@ -164,10 +155,10 @@ class DreamXBackend:
             state_dict, strict=False
         )
         logger.info(
-            "DreamX checkpoint loaded",
-            loaded_parameters=len(loaded_parameters),
-            missing_keys=len(missing),
-            unexpected_keys=len(unexpected),
+            "DreamX checkpoint loaded: parameters=%s missing=%s unexpected=%s",
+            len(loaded_parameters),
+            len(missing),
+            len(unexpected),
         )
         del checkpoint, state_dict
 
@@ -306,10 +297,10 @@ class DreamXBackend:
         )
         return {"viewmats": viewmats, "K": intrinsic}
 
-    def _load_image_tensor(self, image: Path | UploadedFile) -> torch.Tensor:
+    def _load_image_tensor(self, image: Path | bytes) -> torch.Tensor:
         """Apply the upstream fixed 704x1280 RGB image transform."""
         source: Path | io.BytesIO
-        source = io.BytesIO(image.data) if isinstance(image, UploadedFile) else image
+        source = io.BytesIO(image) if isinstance(image, bytes) else image
         with Image.open(source) as opened:
             resized = opened.convert("RGB").resize(
                 (1280, 704), Image.Resampling.BILINEAR

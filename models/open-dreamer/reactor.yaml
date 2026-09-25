@@ -3,7 +3,7 @@ $schema: reactor/v1
 
 model:
   name: open-dreamer
-  version: v0.1.0
+  version: v0.1.2
   description: |
     Stream an interactive Minecraft rollout initialized from a configured
     dataset demo or an uploaded screenshot and controlled with keyboard and
@@ -33,7 +33,7 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.2.5"
+  runtime_version: "3.5.0"
   python_requirements: requirements.txt
   python_version: "3.12"
   cuda_version: "12.9.1"

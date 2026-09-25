@@ -1,15 +1,12 @@
-"""Validate and materialize ABot-World starting images."""
+"""Validate ABot-World starting images and preserve their loader suffixes."""
 
 from __future__ import annotations
 
 import io
-import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
-from reactor_runtime import CommandError, UploadedFile, get_weights_path
+from reactor_runtime import CommandError, UploadedFile
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_IMAGE_PIXELS = 100_000_000
@@ -44,23 +41,9 @@ def validate_uploaded_image(upload: UploadedFile) -> None:
         ) from error
 
 
-@contextmanager
-def materialized_image(source: Path | UploadedFile) -> Iterator[Path]:
-    """Yield a filesystem path accepted by the upstream first-frame encoder."""
-    if isinstance(source, Path):
-        yield source
-        return
-
-    temporary_root = get_weights_path() / "temporary-images"
-    temporary_root.mkdir(parents=True, exist_ok=True)
+def upload_suffix(source: UploadedFile) -> str:
+    """Return a supported filename suffix for the native first-frame loader."""
     suffix = Path(source.name).suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
         suffix = ".img"
-    with tempfile.NamedTemporaryFile(
-        prefix="abot-world-",
-        suffix=suffix,
-        dir=temporary_root,
-    ) as temporary:
-        temporary.write(source.data)
-        temporary.flush()
-        yield Path(temporary.name)
+    return suffix

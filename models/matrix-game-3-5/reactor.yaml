@@ -3,7 +3,7 @@ $schema: reactor/v1
 
 model:
   name: matrix-game-3-5-distilled-first-person
-  version: v0.1.0
+  version: v0.1.3
   description: |
     Explore an autoregressive world from an image, a prompt, and six-axis camera motion.
   # Matrix needs roughly 40 GB of VRAM at 704x1280; the 5B model, its rolling
@@ -35,7 +35,7 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.2.5"
+  runtime_version: "3.5.0"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"

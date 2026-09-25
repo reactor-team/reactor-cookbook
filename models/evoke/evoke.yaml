@@ -22,8 +22,8 @@ inference:
     consistent lighting, and smooth temporal continuity.
 
 stream:
-  # Reset only the rollout state after 512 chunks; loaded weights stay resident.
-  max_chunks: 512
+  # Reset only the rollout state after 2048 chunks; loaded weights stay resident.
+  max_chunks: 2048
 
 motion:
   # Full-scale rates follow the released pose-track envelope: at most 1.5

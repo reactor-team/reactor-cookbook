@@ -16,11 +16,9 @@ from types import SimpleNamespace
 from typing import Any, Protocol, cast
 
 import numpy as np
+from matrix_game_3_0_assets import MatrixGame30Config
 from numpy.typing import NDArray
 from PIL import Image
-from reactor_runtime import UploadedFile
-
-from matrix_game_3_0_assets import MatrixGame30Config
 
 _CHUNK_PATH = re.compile(r"_current_iteration_(\d+)\.mp4$")
 _STOP = object()
@@ -147,7 +145,7 @@ class MatrixGame30Backend:
         self,
         prompt: str,
         seed: int,
-        anchor_image: Path | UploadedFile,
+        anchor_image: Path | bytes,
     ) -> None:
         """Start a fresh official rollout while retaining loaded model weights."""
         if self._pipeline is None or self._module is None or self._args is None:
@@ -320,9 +318,9 @@ class MatrixGame30Backend:
         self._expected_chunk = 0
 
 
-def _read_image(value: Path | UploadedFile) -> Image.Image:
+def _read_image(value: Path | bytes) -> Image.Image:
     """Return an owned RGB PIL image from a built-in path or uploaded bytes."""
     source: Path | io.BytesIO
-    source = io.BytesIO(value.data) if isinstance(value, UploadedFile) else value
+    source = io.BytesIO(value) if isinstance(value, bytes) else value
     with Image.open(source) as image:
         return image.convert("RGB").copy()

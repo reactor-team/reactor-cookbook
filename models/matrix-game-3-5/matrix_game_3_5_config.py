@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -17,10 +18,7 @@ from typing import Any, cast
 import numpy as np
 import yaml
 
-from reactor_runtime import get_weights_path
-from reactor_runtime.log import get_logger
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 SOURCE_ENV = "MATRIX_GAME_3_5_PATH"
 WORKER_PYTHON = Path(".venv/bin/python")
@@ -86,7 +84,9 @@ class MatrixConfig:
     rotation_degrees_per_second: float
 
 
-def read_config(config_path: Path | None) -> MatrixConfig:
+def read_config(
+    config_path: Path | None, weights_root: Path | None = None
+) -> MatrixConfig:
     """Read and validate the Matrix adapter YAML."""
     if config_path is None:
         raise ValueError("Matrix-Game-3.5 requires runtime.config in reactor.yaml")
@@ -100,7 +100,8 @@ def read_config(config_path: Path | None) -> MatrixConfig:
     inference = _mapping(document.get("inference"), "inference")
     motion = _mapping(document.get("motion"), "motion")
     stream = _mapping(document.get("stream"), "stream")
-    source_path = _source_path(source["path"])
+    root = weights_root if weights_root is not None else config_path.resolve().parent
+    source_path = _source_path(source["path"], root)
     checkpoint = _asset(
         source_path,
         assets.get("checkpoint"),
@@ -159,9 +160,11 @@ def ensure_source_checkout(config: MatrixConfig) -> None:
     if not source_path.exists():
         logger.info(
             "downloading Matrix source checkout",
-            url=config.source_url,
-            revision=config.source_revision,
-            destination=str(source_path),
+            extra={
+                "url": config.source_url,
+                "revision": config.source_revision,
+                "destination": str(source_path),
+            },
         )
         source_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
@@ -209,7 +212,7 @@ def _ensure_stateful_patch(source_path: Path) -> None:
         raise RuntimeError(
             f"Matrix source is incompatible with the stateful patch: {detail}"
         )
-    logger.info("applying Matrix stateful rollout patch", source=str(source_path))
+    logger.info("applying Matrix stateful rollout patch: %s", source_path)
     _run_git(["-C", str(source_path), "apply", str(patch)])
 
 
@@ -245,8 +248,7 @@ def ensure_worker_environment(config: MatrixConfig) -> None:
     )
     logger.info(
         "preparing Matrix worker environment",
-        python=WORKER_PYTHON_VERSION,
-        destination=str(environment_dir),
+        extra={"python": WORKER_PYTHON_VERSION, "destination": str(environment_dir)},
     )
     _run_uv(
         [
@@ -342,11 +344,11 @@ def _repository_url(value: object, name: str) -> str:
     return url
 
 
-def _source_path(value: object) -> Path:
+def _source_path(value: object, weights_root: Path) -> Path:
     """Resolve the Matrix checkout under the CLI-managed weights directory."""
     configured = os.environ.get(SOURCE_ENV)
     path = Path(configured if configured else str(value)).expanduser()
-    candidate = path if path.is_absolute() else get_weights_path() / path
+    candidate = path if path.is_absolute() else weights_root / path
     return Path(os.path.abspath(candidate))
 
 
@@ -419,8 +421,10 @@ def _restore_default_sample(config: MatrixConfig) -> None:
         return
     logger.info(
         "restoring Matrix default sample",
-        files=[str(path) for path in missing],
-        revision=config.source_revision,
+        extra={
+            "files": [str(path) for path in missing],
+            "revision": config.source_revision,
+        },
     )
     try:
         _run_git(
@@ -504,10 +508,12 @@ def _ensure_hf_snapshot(
         )
     logger.info(
         "downloading Matrix model asset",
-        asset=name,
-        repo_id=asset.repo_id,
-        revision=asset.revision,
-        destination=str(local_dir),
+        extra={
+            "asset": name,
+            "repo_id": asset.repo_id,
+            "revision": asset.revision,
+            "destination": str(local_dir),
+        },
     )
     downloader = Path(__file__).with_name("download_snapshot.py")
     command = [

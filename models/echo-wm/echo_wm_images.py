@@ -1,12 +1,8 @@
-"""Validate and materialize Echo-WM first-frame images."""
+"""Validate uploaded Echo-WM first-frame images."""
 
 from __future__ import annotations
 
 import io
-import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
-from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 from reactor_runtime import CommandError, UploadedFile
@@ -48,23 +44,3 @@ def validate_uploaded_image(image: UploadedFile) -> None:
         raise CommandError(
             "invalid_image", f"{image.name} cannot be decoded."
         ) from error
-
-
-@contextmanager
-def materialized_image(
-    value: Path | UploadedFile,
-    runtime_dir: Path,
-) -> Iterator[Path]:
-    """Yield a filesystem image path accepted by the upstream loader."""
-    if isinstance(value, Path):
-        yield value
-        return
-    suffix = Path(value.name).suffix.lower() or ".png"
-    with tempfile.NamedTemporaryFile(
-        prefix="echo-wm-upload-",
-        suffix=suffix,
-        dir=runtime_dir,
-    ) as temporary:
-        temporary.write(value.data)
-        temporary.flush()
-        yield Path(temporary.name)

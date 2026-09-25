@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import os
 import subprocess
 import tempfile
@@ -15,19 +16,10 @@ from typing import Any
 
 import numpy as np
 
-from reactor_runtime import UploadedFile
-from reactor_runtime.log import get_logger
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 _RESPONSE_PREFIX = "REACTOR_MATRIX_RESPONSE "
 _RGB_FRAMES_PER_CHUNK = 12
-_UPLOAD_SUFFIXES = {
-    "image/bmp": ".bmp",
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-}
 
 
 @dataclass(frozen=True)
@@ -106,22 +98,16 @@ class MatrixWorkerBackend:
     def reset(
         self,
         seed: int,
-        anchor_image: Path | UploadedFile,
+        anchor_image: Path | bytes,
         prompt: str,
+        suffix: str,
     ) -> None:
         """Start a fresh stateful rollout from an image and prompt."""
         upload_path: Path | None = None
-        if isinstance(anchor_image, UploadedFile):
-            suffix = _UPLOAD_SUFFIXES.get(anchor_image.mime_type.lower())
-            if suffix is None:
-                candidate = Path(anchor_image.name).suffix.lower()
-                suffix = (
-                    candidate
-                    if candidate in set(_UPLOAD_SUFFIXES.values())
-                    else ".image"
-                )
+        if isinstance(anchor_image, bytes):
+            suffix = suffix if suffix in {".bmp", ".jpg", ".png", ".webp"} else ".image"
             upload_path = self._root / f"anchor_{self._request_id + 1}{suffix}"
-            upload_path.write_bytes(anchor_image.data)
+            upload_path.write_bytes(anchor_image)
             image_path = upload_path
         else:
             image_path = anchor_image
@@ -231,7 +217,7 @@ class MatrixWorkerBackend:
                 if not line.startswith(_RESPONSE_PREFIX):
                     self._recent_output.append(line)
                     if line:
-                        logger.info("Matrix worker", output=line[-1000:])
+                        logger.info("Matrix worker: %s", line[-1000:])
                     continue
                 response = json.loads(line.removeprefix(_RESPONSE_PREFIX))
                 if int(response.get("id", -2)) != request_id:

@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import atexit
 import importlib
+import logging
 import os
 import sys
 from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
-from PIL import Image
-from reactor_runtime.log import get_logger
-
 from hy_world_1_5_assets import HYWorld15Config, assemble_base_model
 from hy_world_1_5_camera import CameraChunk
+from PIL import Image
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 _HEIGHT = 480
 _WIDTH = 832
@@ -94,10 +93,10 @@ class HYWorld15Backend:
         self._select_memory = retrieval_module.select_aligned_memory_frames
         self._generate_points = retrieval_module.generate_points_in_sphere
         logger.info(
-            "HY-World 1.5 backend ready",
-            source_revision=self._config.source.revision,
-            action_revision=self._config.action_model.revision,
-            gpu=torch.cuda.get_device_name(0),
+            "HY-World 1.5 backend ready source=%s action=%s gpu=%s",
+            self._config.source.revision,
+            self._config.action_model.revision,
+            torch.cuda.get_device_name(0),
         )
 
     def reset(self, *, image: Image.Image, prompt: str, seed: int) -> None:

@@ -5,9 +5,9 @@ Blackwell GPUs it builds video faster than the video plays. This model turns
 that into a continuous stream: it always builds the next clip while the current
 one is on the wire, so `main_video` and `main_audio` never run dry.
 
-The unit of work is a whole clip, not a frame, which is why this subclasses
-``ReactorModel`` and owns its own ``run()`` loop rather than using
-``ReactorPipeline``. Command handlers then run on their own coroutines
+The unit of work is a whole clip. This uses Reactor Runtime 3.5's
+``ReactorApp`` custom ``run()`` interface to retain one-clip lookahead.
+Command handlers run on their own coroutines
 concurrent with ``run()``, so `pause` and `stop` answer immediately even while a
 clip is being built.
 
@@ -40,7 +40,7 @@ import yaml
 from reactor_runtime import (
     ClientInfo,
     InputField,
-    ReactorModel,
+    ReactorApp,
     connected,
     event,
     get_weights_path,
@@ -407,7 +407,7 @@ def _require_weights(root: Path, model_path: Path) -> None:
         )
 
 
-class FastH3(ReactorModel):
+class FastH3(ReactorApp):
     """Stream an endless video-and-audio channel from a text prompt."""
 
     # Pinned: `_emit_paced` is a strict 24 fps metronome and every emit omits
@@ -532,8 +532,7 @@ class FastH3(ReactorModel):
 
         self.generator = VideoGenerator.from_config(self._generator_config())
 
-        # Session-scoped state. A ReactorPipeline would get a fresh `self.state`
-        # per session from the runtime; a ReactorModel owns that itself, so the
+        # Session-scoped state for the custom channel loop. The
         # defaults live in one reset function called here (so a command racing
         # ahead of `session_started` reads defaults, never another session's
         # values) and again from the `@session_started` hook.

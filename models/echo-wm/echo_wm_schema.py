@@ -46,7 +46,8 @@ class EchoWMState(InputState):
     _pitch: float = 0.0
     _yaw: float = 0.0
     _fov_degrees: float = 70.0
-    _reset_requested: bool = False
+    _world_id: int = 0
+    _applied_world_id: int | None = None
 
 
 class StateUpdate(ModelMessage):

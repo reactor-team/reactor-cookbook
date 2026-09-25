@@ -2,33 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Protocol
-
-import numpy as np
-from reactor_runtime import (
-    ClientInfo,
-    CommandError,
-    InputField,
-    ReactorPipeline,
-    UploadedFile,
-    connected,
-    disconnected,
-    event,
-    session_ended,
-    session_started,
-)
-from reactor_runtime.log import get_logger
 
 from evoke_camera import CameraMotionPlanner, MotionConfig
 from evoke_config import EvokeConfig, prepare_runtime, read_config
 from evoke_images import (
-    normalize_output_frames,
+    upload_suffix,
     validate_uploaded_image,
     validate_uploaded_pose,
     validate_uploaded_video,
 )
+from evoke_model import EvokeAnchor, EvokeInput, EvokeModel, EvokeResult
 from evoke_types import (
     CommandApplied,
     EvokeOutput,
@@ -36,7 +20,23 @@ from evoke_types import (
     RolloutRestarted,
     StateUpdate,
 )
-from upstream_backend import EvokeWorkerBackend, WorkerSettings
+from reactor_runtime import (
+    ApplicationError,
+    ClientInfo,
+    CommandError,
+    InputField,
+    ReactorApp,
+    StepOutcome,
+    UploadedFile,
+    connected,
+    disconnected,
+    event,
+    get_weights_path,
+    session_ended,
+    session_started,
+)
+from reactor_runtime.log import get_logger
+from upstream_backend import WorkerSettings
 
 logger = get_logger(__name__)
 
@@ -45,32 +45,7 @@ FRAMES_PER_CHUNK = 36
 CAMERA_POSES_PER_CHUNK = FRAMES_PER_CHUNK
 
 
-class _Backend(Protocol):
-    def reset(
-        self,
-        *,
-        mode: str,
-        media: Path | UploadedFile | None,
-        pose: UploadedFile | None,
-        prompt: str,
-        seed: int,
-        source_fps: int = 30,
-        source_height: int = 720,
-        source_width: int = 1280,
-    ) -> None: ...
-
-    def generate_chunk(
-        self,
-        trajectory_c2w: np.ndarray | None,
-        *,
-        seed: int,
-        prompt: str,
-    ) -> np.ndarray: ...
-
-    def end_session(self) -> None: ...
-
-
-class Evoke(ReactorPipeline):
+class Evoke(ReactorApp):
     """Generate an autoregressive EVOKE world from image, video, or text conditioning."""
 
     state: EvokeState
@@ -79,7 +54,7 @@ class Evoke(ReactorPipeline):
     def __init__(self) -> None:
         super().__init__()
         self._config: EvokeConfig | None = None
-        self._backend: _Backend | None = None
+        self._engine = EvokeModel()
         self._planner: CameraMotionPlanner | None = None
         self._mode = "i2v"
         self._media: Path | UploadedFile | None = None
@@ -93,10 +68,11 @@ class Evoke(ReactorPipeline):
         self._stability_prompt = ""
         self._seed = 42
         self._chunk_index = 0
+        self._replaced_chunks = 0
 
     def load(self, config_path: Path | None) -> None:
         """Prepare public assets and load EVOKE weights once in its Python 3.10 worker."""
-        config = read_config(config_path)
+        config = read_config(config_path, get_weights_path())
         prepare_runtime(config)
         self._config = config
         self._stability_prompt = config.stability_prompt
@@ -108,7 +84,7 @@ class Evoke(ReactorPipeline):
                 rotation_degrees_per_second=config.rotation_degrees_per_second,
             )
         )
-        self._backend = EvokeWorkerBackend(
+        self._engine.load(
             WorkerSettings(
                 python_executable=config.worker_python,
                 source_path=config.source_path,
@@ -131,16 +107,18 @@ class Evoke(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize a built-in i2v world before its first viewer connects."""
+        """Wait for explicit image, video, or text conditioning."""
         config = self._require_config()
         self._mode = "i2v"
-        self._media = config.default_image
+        self._media = None
         self._pose = None
-        self._input_source = "built_in"
-        self._input_name = config.default_image.name
+        self._input_source = "none"
+        self._input_name = ""
         self._pose_name = ""
         self.state.prompt = config.stability_prompt
-        self.state._restart_requested = True
+        self.state._world_id = 0
+        self.state._applied_world_id = None
+        self._replaced_chunks = 0
         self._seed = config.seed
         self._chunk_index = 0
         self._clear_controls()
@@ -159,13 +137,12 @@ class Evoke(ReactorPipeline):
     @session_ended
     def on_session_ended(self) -> None:
         """Release rollout caches and session-owned uploads while retaining model weights."""
-        backend = self._backend
         try:
-            if backend is not None:
-                backend.end_session()
+            self._engine.reset()
         finally:
             self._clear_controls()
-            self.state._restart_requested = True
+            self.state._applied_world_id = None
+            self._replaced_chunks = 0
             self._media = None
             self._pose = None
             self._chunk_index = 0
@@ -541,71 +518,80 @@ class Evoke(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[EvokeOutput | None, None]:
-        """Generate and stream one native chunk at a time from the active rollout."""
-        while True:
-            backend = self._backend
-            planner = self._planner
-            if backend is None or planner is None:
-                raise RuntimeError("EVOKE was not loaded")
-            if self.state._restart_requested:
-                backend.reset(
-                    mode=self._mode,
-                    media=self._media,
-                    pose=self._pose,
-                    prompt=self.state.prompt,
-                    seed=self._seed,
-                    source_fps=self._source_fps,
-                    source_height=self._source_height,
-                    source_width=self._source_width,
-                )
-                planner.reset()
-                self._chunk_index = 0
-                self.state._restart_requested = False
-                await self.send(self._state_update())
-
-            trajectory = None
-            if self._mode != "t2v":
-                trajectory = planner.plan_chunk(
-                    strafe=self.state.strafe,
-                    vertical=self.state.vertical,
-                    forward=self.state.forward,
-                    pitch=self.state.pitch,
-                    yaw=self.state.yaw,
-                    roll=self.state.roll,
-                    frame_count=CAMERA_POSES_PER_CHUNK,
-                )
-            frames = backend.generate_chunk(
-                trajectory,
-                seed=self._seed,
-                prompt=self.state.prompt,
+    async def process_input(self) -> EvokeInput:
+        """Snapshot controls and apply the native rollout-length boundary."""
+        if self._mode != "t2v" and self._media is None:
+            raise ApplicationError(
+                "Upload an image or select text/video conditioning first.",
             )
-            frames = normalize_output_frames(frames)
-            expected = 33 if self._mode == "t2v" and self._chunk_index == 0 else 36
-            if int(frames.shape[0]) != expected:
-                raise RuntimeError(
-                    f"EVOKE chunk {self._chunk_index + 1} produced {frames.shape[0]} frames; "
-                    f"expected {expected}"
-                )
-            self._chunk_index += 1
-            await self.send(self._state_update())
-            yield EvokeOutput(main_video=frames)
+        planner = self._planner
+        if planner is None:
+            raise RuntimeError("EVOKE was not loaded")
+        anchor = None
+        if self.state._world_id != self.state._applied_world_id:
+            anchor = EvokeAnchor(
+                mode=self._mode,
+                media=self._media.data
+                if isinstance(self._media, UploadedFile)
+                else self._media,
+                media_suffix=upload_suffix(self._media)
+                if isinstance(self._media, UploadedFile)
+                else "",
+                pose=self._pose.data if self._pose is not None else None,
+                pose_suffix=upload_suffix(self._pose) if self._pose is not None else "",
+                seed=self._seed,
+                source_fps=self._source_fps,
+                source_height=self._source_height,
+                source_width=self._source_width,
+            )
+        trajectory = None
+        if self._mode != "t2v":
+            trajectory = planner.plan_chunk(
+                strafe=0.0 if self._replaced_chunks else self.state.strafe,
+                vertical=0.0 if self._replaced_chunks else self.state.vertical,
+                forward=0.0 if self._replaced_chunks else self.state.forward,
+                pitch=0.0 if self._replaced_chunks else self.state.pitch,
+                yaw=0.0 if self._replaced_chunks else self.state.yaw,
+                roll=0.0 if self._replaced_chunks else self.state.roll,
+                frame_count=CAMERA_POSES_PER_CHUNK,
+            )
+        return EvokeInput(self.state._world_id, anchor, self.state.prompt, trajectory)
 
-            config = self._require_config()
-            if self._chunk_index >= config.max_chunks:
-                replaced = self._chunk_index
-                self._request_restart()
-                await self.send(
-                    RolloutRestarted(
-                        replaced_chunks=replaced,
-                        max_chunks=config.max_chunks,
-                        seed=self._seed,
-                    )
+    def generate(self, input: EvokeInput) -> EvokeResult:
+        return self._engine.generate(input)
+
+    async def process_output(self, outcome: StepOutcome) -> EvokeOutput:
+        """Publish the completed chunk and its shared state."""
+        if outcome.error is not None:
+            # A worker failure cannot be repaired by silently losing the current world.
+            raise outcome.error
+        result: EvokeResult = outcome.result
+        if self._replaced_chunks:
+            self.output.flush()
+            self._clear_controls()
+            await self.send(
+                RolloutRestarted(
+                    replaced_chunks=self._replaced_chunks,
+                    max_chunks=self._require_config().max_chunks,
+                    seed=result.seed,
                 )
+            )
+            self._replaced_chunks = 0
+        self.state._applied_world_id = result.world_id
+        self._chunk_index = result.chunk_index
+        if result.complete:
+            self._replaced_chunks = result.chunk_index
+            self.state._world_id += 1
+            self._planner.reset()
+        await self.send(self._state_update())
+        return EvokeOutput(main_video=result.frames)
 
     def _request_restart(self) -> None:
         self.output.flush()
-        self.state._restart_requested = True
+        self.state._world_id += 1
+        self._replaced_chunks = 0
+        if self._planner is not None:
+            self._planner.reset()
         self._chunk_index = 0
         self._clear_controls()
 

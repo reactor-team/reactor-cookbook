@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 
 from reactor_runtime import (
@@ -16,35 +14,6 @@ from reactor_runtime import (
 )
 
 ImageSource = Literal["uploaded", "built_in"]
-
-
-@dataclass(frozen=True)
-class RepositoryAsset:
-    """Describe one public Hugging Face repository pinned to a revision."""
-
-    path: Path
-    repo_id: str
-    revision: str
-
-
-@dataclass(frozen=True)
-class DreamXConfig:
-    """Hold validated source, checkpoint, inference, and interaction settings."""
-
-    source_path: Path
-    source_url: str
-    source_revision: str
-    upstream_config: Path
-    transformer_config: Path
-    evaluation_inputs: Path
-    random_images: tuple[Path, ...]
-    dreamx: RepositoryAsset
-    wan: RepositoryAsset
-    seed: int
-    motion_speed: float
-    color_correction_strength: float
-    max_chunks_per_rollout: int
-    default_upload_prompt: str
 
 
 class DreamXWorldOutput(Output):
@@ -203,4 +172,5 @@ class DreamXWorldState(InputState):
         ),
     )
     _pressed_keys: frozenset[str] = frozenset()
-    _reset_requested: bool = False
+    _world_id: int = 0
+    _applied_world_id: int | None = None

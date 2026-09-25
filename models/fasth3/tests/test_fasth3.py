@@ -40,6 +40,13 @@ from fasth3_types import DEFAULT_STYLE_PROMPT
 MODEL_DIR = Path(__file__).resolve().parents[1]
 
 
+def test_runtime35_uses_the_public_custom_loop_interface():
+    from reactor_runtime import ReactorApp
+
+    assert FastH3.__bases__ == (ReactorApp,)
+    assert FastH3.run is not ReactorApp.run
+
+
 # --------------------------------------------------------------- clip geometry
 #
 # The rules a clip length has to satisfy to be generatable.
@@ -1682,7 +1689,7 @@ def test_the_config_and_schema_share_the_default_style(manifest, schema):
 
 def test_the_runtime_pin_matches_the_rest_of_the_repo(manifest):
     """Every model here pins the same Reactor Runtime release."""
-    assert manifest["build"]["runtime_version"] == "3.2.5"
+    assert manifest["build"]["runtime_version"] == "3.5.0"
 
 
 def test_the_runtime_release_is_pinned_once(manifest):

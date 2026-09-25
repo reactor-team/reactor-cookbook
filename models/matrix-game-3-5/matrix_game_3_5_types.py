@@ -186,5 +186,6 @@ class MatrixGame35State(InputState):
             "until the camera axes are changed or released."
         ),
     )
-    _restart_requested: bool = True
+    _world_id: int = 0
+    _applied_world_id: int | None = None
     _limit_reached: bool = False

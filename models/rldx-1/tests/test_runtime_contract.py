@@ -17,7 +17,9 @@ import asyncio
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 pytest.importorskip("reactor_runtime", reason="reactor-runtime is not installed")
@@ -34,6 +36,133 @@ from rldx1_types import (  # noqa: E402
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_ten_native_steps_preserve_rtc_observations_and_reset(monkeypatch):
+    from reactor_runtime import ApplicationError, StepOutcome
+
+    p = pipeline.RLDXPipeline()
+    p.connected = asyncio.Event()
+    p.state = RLDXState()
+    p._views = pipeline.VIEWS
+    p._video_deltas = [-2, 0]
+    p._control_hz, p._exec_horizon, p._pace = 20, 8, True
+    p._H, p._W = 4, 6
+    p._rtc_timing = RTCTiming(action_horizon=16, delay=2, exec_horizon=8, enabled=True)
+    p._rtc_requests = RTCRequestMailbox()
+    p._action_dim = 12
+    p._state_dims = {"gripper_qpos": 2}
+    p._state_fallback = "error"
+    p._frame_tags = FrameStateTags()
+    p._schema_pending = False
+    queues = {v: [] for v in p._views}
+    p.input = SimpleNamespace(
+        **{
+            v: SimpleNamespace(
+                try_read=lambda *args, view=v, **kwargs: (
+                    [queues[view].pop(0)] if queues[view] else []
+                )
+            )
+            for v in p._views
+        }
+    )
+    calls, resets, sent = [], [], []
+
+    def predict(obs, options):
+        assert p.state is None, "generation must use the immutable input snapshot"
+        calls.append((obs, options))
+        return {
+            f"action.{key}": np.ones((1, 16, 1))
+            for key in [
+                "end_effector_position",
+                "end_effector_rotation",
+                "gripper_close",
+                "base_motion",
+                "control_mode",
+            ]
+        }, {}
+
+    p._engine._policy = SimpleNamespace(
+        reset=lambda: resets.append(True), get_action=predict
+    )
+
+    async def send(message):
+        sent.append(message)
+
+    p.send = send
+    p.on_session_started()
+    tick = [0]
+    monkeypatch.setattr(pipeline.time, "monotonic", lambda: tick[0] * 0.5)
+
+    async def drive(snapshot):
+        state = p.state
+        p.state = None
+        result = p.generate(snapshot)
+        p.state = state
+        await p.process_output(StepOutcome(result=result))
+
+    async def run():
+        # Session reset is consumed before RTC requests, matching native reset semantics.
+        await drive(await p.process_input())
+        for i in range(10):
+            tick[0] = i + 1
+            p.state.task_description = f"task {i}"
+            for view in p._views:
+                queues[view].append(
+                    SimpleNamespace(
+                        data=np.full((4, 6, 3), i, dtype=np.uint8),
+                        capture_time_us=1000000 + i * 500000,
+                        metadata=json.dumps(
+                            {
+                                "gripper_qpos": [i, i],
+                                "seq": i,
+                                "capture_us": 1000000 + i * 500000,
+                            }
+                        ).encode(),
+                    )
+                )
+            await p.request_action(
+                i,
+                i - 1,
+                i * 8,
+                0 if i == 0 else 2,
+                [] if i == 0 else [[float(i)] * 12] * 2,
+            )
+            snapshot = await p.process_input()
+            p.state.task_description = "changed after snapshot"
+            await drive(snapshot)
+            assert calls[-1][0]["annotation.human.action.task_description"] == (
+                f"task {i}",
+            )
+            assert calls[-1][0]["video.left_view"].shape == (1, 2, 4, 6, 3)
+            assert calls[-1][0]["state.gripper_qpos"][0, 0, 0] == i
+            if i:
+                assert calls[-1][1]["rtc_prefix_len"] == 2
+                assert np.all(calls[-1][1]["action_prefix"] == i)
+        with pytest.raises(ApplicationError):
+            await p.process_input()
+        p.connected.set()
+        p.on_disconnect()
+        assert p._bufs[p._views[0]], "a remaining client keeps its observation window"
+        p.connected.clear()
+        p.on_disconnect()
+        assert not any(p._bufs.values()) and not any(p._recent.values())
+        assert p._last_plan_id == 9, "disconnect must not reset the policy plan chain"
+        await p.reset()
+        assert p._last_replan is None and p._last_commit is None
+        await drive(await p.process_input())
+        assert p._last_completed_predictions == 0 and p._last_plan_id is None
+        with pytest.raises(RuntimeError, match="policy failure"):
+            await p.process_output(StepOutcome(error=RuntimeError("policy failure")))
+        p.on_session_ended()
+        assert p._engine._episode_id is None and p._publication is None
+        assert not any(p._bufs.values())
+
+    asyncio.run(run())
+    predictions = [message for message in sent if isinstance(message, ActionPrediction)]
+    assert [message.request_id for message in predictions] == list(range(10))
+    assert [message.step for message in predictions] == list(range(10))
+    assert len(calls) == 10 and len(resets) == 3
 
 
 def test_declared_input_tracks():
@@ -61,7 +190,7 @@ def test_read_config_parses_the_repo_config():
 def test_pipeline_instantiates_without_weights():
     # Constructing the model resolves its state class, auto-setters, and command
     # surface — everything but load(), which needs a GPU and a checkpoint.
-    assert isinstance(pipeline.RLDXPipeline(), pipeline.ReactorPipeline)
+    assert isinstance(pipeline.RLDXPipeline(), pipeline.ReactorApp)
 
 
 def test_messages_carry_their_chunk_fields():

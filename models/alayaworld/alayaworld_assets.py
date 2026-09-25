@@ -3,27 +3,68 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import re
 import subprocess
 import tempfile
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Never, cast
+from typing import Any, Never, cast
 
 import yaml
 
-from reactor_runtime import get_weights_path
-from reactor_runtime.log import get_logger
 
-if TYPE_CHECKING:
-    from alayaworld_types import AlayaWorldConfig, Asset
-else:
-    module_prefix = f"{__package__}." if __package__ else ""
-    types_module = importlib.import_module(f"{module_prefix}alayaworld_types")
-    AlayaWorldConfig = types_module.AlayaWorldConfig
-    Asset = types_module.Asset
+@dataclass(frozen=True)
+class Asset:
+    """Describe one model asset pinned to a public repository revision."""
 
-logger = get_logger(__name__)
+    path: Path
+    repo_id: str
+    revision: str
+
+
+@dataclass(frozen=True)
+class AlayaWorldConfig:
+    """Hold validated source, asset, inference, and interaction settings."""
+
+    source_path: Path
+    source_url: str
+    source_revision: str
+    upstream_config: Path
+    upload_template: Path
+    random_inputs: tuple[Path, ...]
+    model: Asset
+    gemma: Asset
+    da3_source_path: Path
+    da3_source_url: str
+    da3_source_revision: str
+    da3_model: Asset
+    da3_cache: Path
+    seed: int
+    compile_mode: str
+    warmup_chunks: int
+    attention_backend: str
+    flex_attention: bool
+    ttc: bool
+    bank_taehv: bool
+    taehv_path: Path | None
+    taehv_source_path: Path | None
+    taehv_source_url: str | None
+    taehv_source_revision: str | None
+    decode_overlap_latents: int
+    max_spatial_frames: int
+    recent_spatial_frames: int
+    max_chunks_per_rollout: int
+    strafe_units_per_second: float
+    vertical_units_per_second: float
+    forward_units_per_second: float
+    pitch_degrees_per_second: float
+    yaw_degrees_per_second: float
+    roll_degrees_per_second: float
+
+
+logger = logging.getLogger(__name__)
 
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 _COMPILE_MODES = ["none", "default", "reduce-overhead", "max-autotune"]
@@ -38,7 +79,7 @@ _SCENE_MEMBER_SUFFIXES = (
 _SNAPSHOT_REVISION_MARKER = ".reactor-revision"
 
 
-def read_config(config_path: Path | None) -> AlayaWorldConfig:
+def read_config(config_path: Path | None, weights_root: Path) -> AlayaWorldConfig:
     """Read and validate the AlayaWorld adapter YAML."""
     if config_path is None:
         raise ValueError("AlayaWorld requires runtime.config in reactor.yaml")
@@ -57,13 +98,15 @@ def read_config(config_path: Path | None) -> AlayaWorldConfig:
 
     compile_mode = str(inference.get("compile", "reduce-overhead"))
     if compile_mode not in _COMPILE_MODES:
-        raise ValueError(f"inference.compile must be one of {', '.join(_COMPILE_MODES)}")
-    attention_backend = str(inference.get("attention_backend", "flash_attention_4"))
+        raise ValueError(
+            f"inference.compile must be one of {', '.join(_COMPILE_MODES)}"
+        )
+    attention_backend = str(inference.get("attention_backend", "pytorch"))
     if attention_backend not in _ATTENTION_BACKENDS:
         raise ValueError(
             f"inference.attention_backend must be one of {', '.join(_ATTENTION_BACKENDS)}"
         )
-    warmup_chunks = int(inference.get("warmup_chunks", 1))
+    warmup_chunks = int(inference.get("warmup_chunks", 0))
     if warmup_chunks < 0:
         raise ValueError("inference.warmup_chunks must be zero or more")
 
@@ -75,16 +118,24 @@ def read_config(config_path: Path | None) -> AlayaWorldConfig:
     if max_spatial_frames < 10:
         raise ValueError("memory.max_spatial_frames must be at least 10")
     if not 1 <= recent_spatial_frames <= max_spatial_frames:
-        raise ValueError("memory.recent_spatial_frames must be between 1 and max_spatial_frames")
+        raise ValueError(
+            "memory.recent_spatial_frames must be between 1 and max_spatial_frames"
+        )
     max_chunks_per_rollout = int(stream.get("max_chunks_per_rollout", 512))
     if max_chunks_per_rollout < 1:
         raise ValueError("stream.max_chunks_per_rollout must be positive")
 
     motion_rates = {
         "strafe_units_per_second": float(motion.get("strafe_units_per_second", 0.126)),
-        "vertical_units_per_second": float(motion.get("vertical_units_per_second", 0.261)),
-        "forward_units_per_second": float(motion.get("forward_units_per_second", 1.905)),
-        "pitch_degrees_per_second": float(motion.get("pitch_degrees_per_second", 4.039)),
+        "vertical_units_per_second": float(
+            motion.get("vertical_units_per_second", 0.261)
+        ),
+        "forward_units_per_second": float(
+            motion.get("forward_units_per_second", 1.905)
+        ),
+        "pitch_degrees_per_second": float(
+            motion.get("pitch_degrees_per_second", 4.039)
+        ),
         "yaw_degrees_per_second": float(motion.get("yaw_degrees_per_second", 9.375)),
         "roll_degrees_per_second": float(motion.get("roll_degrees_per_second", 4.094)),
     }
@@ -92,7 +143,7 @@ def read_config(config_path: Path | None) -> AlayaWorldConfig:
         if value <= 0:
             raise ValueError(f"motion.{name} must be positive")
 
-    source_path = _path(get_weights_path(), source["path"])
+    source_path = _path(weights_root, source["path"])
     taehv_raw = assets.get("taehv")
     taehv_path = _path(source_path, taehv_raw) if taehv_raw else None
     taehv_source_raw = assets.get("taehv_source")
@@ -113,7 +164,9 @@ def read_config(config_path: Path | None) -> AlayaWorldConfig:
         gemma=_asset(source_path, assets.get("gemma"), "assets.gemma"),
         da3_source_path=_path(source_path, da3_source["path"]),
         da3_source_url=_repository_url(da3_source.get("url"), "assets.da3_source.url"),
-        da3_source_revision=_revision(da3_source.get("revision"), "assets.da3_source.revision"),
+        da3_source_revision=_revision(
+            da3_source.get("revision"), "assets.da3_source.revision"
+        ),
         da3_model=_asset(source_path, assets.get("da3_model"), "assets.da3_model"),
         da3_cache=_path(source_path, assets["da3_cache"]),
         seed=int(inference.get("seed", 1234)),
@@ -201,7 +254,9 @@ def validate_runtime_paths(config: AlayaWorldConfig) -> None:
     _validate_scene_triplet(config.upload_template, "upload template")
     for index, path in enumerate(config.random_inputs):
         _validate_scene_triplet(path, f"random image {index}")
-    if config.bank_taehv and (config.taehv_path is None or not config.taehv_path.is_file()):
+    if config.bank_taehv and (
+        config.taehv_path is None or not config.taehv_path.is_file()
+    ):
         raise FileNotFoundError("inference.bank_taehv requires assets.taehv")
 
 
@@ -291,11 +346,17 @@ def _ensure_git_checkout(path: Path, *, url: str, revision: str, name: str) -> N
     if path.exists():
         _verify_repository_revision(path, revision, name)
         return
-    logger.info("downloading source checkout", asset=name, url=url, revision=revision)
+    logger.info(
+        "downloading source checkout asset=%s url=%s revision=%s", name, url, revision
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".reactor-download-", dir=path.parent) as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix=".reactor-download-", dir=path.parent
+    ) as temporary:
         checkout = Path(temporary) / "checkout"
-        _run_git(["clone", "--filter=blob:none", "--no-checkout", url, str(checkout)], name)
+        _run_git(
+            ["clone", "--filter=blob:none", "--no-checkout", url, str(checkout)], name
+        )
         _run_git(["-C", str(checkout), "checkout", "--detach", revision], name)
         with suppress(FileExistsError):
             checkout.rename(path)
@@ -324,10 +385,10 @@ def _ensure_hf_file(asset: Asset, *, name: str) -> None:
     if _is_nonempty_file(asset.path) and _marker_matches(marker, asset.revision):
         return
     logger.info(
-        "downloading model file",
-        asset=name,
-        repo_id=asset.repo_id,
-        revision=asset.revision,
+        "downloading model file asset=%s repo_id=%s revision=%s",
+        name,
+        asset.repo_id,
+        asset.revision,
     )
     asset.path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -339,7 +400,9 @@ def _ensure_hf_file(asset: Asset, *, name: str) -> None:
         )
     except Exception as error:
         _raise_hf_download_error(name, asset.repo_id, error)
-    if downloaded.resolve() != asset.path.resolve() or not _is_nonempty_file(asset.path):
+    if downloaded.resolve() != asset.path.resolve() or not _is_nonempty_file(
+        asset.path
+    ):
         raise RuntimeError(f"{name} download did not create {asset.path}")
     _write_marker(marker, asset.revision)
 
@@ -355,10 +418,10 @@ def _ensure_hf_snapshot(
     if _snapshot_has_content(asset.path) and _marker_matches(marker, asset.revision):
         return
     logger.info(
-        "downloading model snapshot",
-        asset=name,
-        repo_id=asset.repo_id,
-        revision=asset.revision,
+        "downloading model snapshot asset=%s repo_id=%s revision=%s",
+        name,
+        asset.repo_id,
+        asset.revision,
     )
     try:
         if cache_dir is None:

@@ -218,4 +218,5 @@ class EvokeState(InputState):
             "and held until changed or released. Valid only in camera-controlled modes."
         ),
     )
-    _restart_requested: bool = True
+    _world_id: int = 0
+    _applied_world_id: int | None = None

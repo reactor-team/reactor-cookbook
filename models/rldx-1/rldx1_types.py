@@ -62,8 +62,6 @@ class RLDXState(InputState):
         moderate=True,
         description="Language task / instruction conditioning the policy",
     )
-    # private: episode-reset flag
-    _reset: bool = False
 
 
 # --- Session-start handshake: what the loaded checkpoint expects ---

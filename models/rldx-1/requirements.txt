@@ -12,7 +12,7 @@
 #   torchcodec==0.4.0                  -> omitted (video decode; unused at serving)
 # The Dockerfile installs this complete, pinned serving environment directly.
 
-reactor-runtime==3.2.6
+reactor-runtime==3.5.0
 
 albumentations==1.4.18
 av==18.1.0

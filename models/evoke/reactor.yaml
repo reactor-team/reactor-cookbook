@@ -3,7 +3,7 @@ $schema: reactor/v1
 
 model:
   name: evoke-post-distillation
-  version: v0.1.0
+  version: v0.1.3
   description: |
     Explore an autoregressive world through text, media, and six-axis camera motion.
   resources:
@@ -33,7 +33,7 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.2.5"
+  runtime_version: "3.5.0"
   python_requirements: requirements.txt
   # EVOKE's v2v reader links to the X11/audio libraries bundled by these Debian
   # runtime packages.

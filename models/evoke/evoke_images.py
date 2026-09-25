@@ -1,8 +1,9 @@
-"""Validate uploaded media and normalize generated EVOKE frames."""
+"""Validate uploaded EVOKE media and select native loader suffixes."""
 
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -97,18 +98,19 @@ def validate_uploaded_pose(pose: UploadedFile) -> None:
         )
 
 
-def normalize_output_frames(frames: np.ndarray) -> np.ndarray:
-    """Return contiguous uint8 RGB frames with shape ``(T, H, W, 3)``."""
-    value = np.asarray(frames)
-    if value.ndim != 4 or value.shape[-1] != 3:
-        raise RuntimeError(
-            f"EVOKE output must have shape (T, H, W, 3), got {value.shape}"
-        )
-    if value.dtype != np.uint8:
-        value = np.asarray(value, dtype=np.float32)
-        if float(np.nanmin(value)) < -0.05:
-            value = (value + 1.0) * 127.5
-        elif float(np.nanmax(value)) <= 1.5:
-            value = value * 255.0
-        value = np.clip(value, 0.0, 255.0).round().astype(np.uint8)
-    return np.ascontiguousarray(value)
+def upload_suffix(upload: UploadedFile) -> str:
+    """Preserve the native loader's media suffix without passing an upload object."""
+    suffixes = {
+        "image/bmp": ".bmp",
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "video/mp4": ".mp4",
+        "video/quicktime": ".mov",
+        "video/webm": ".webm",
+        "application/x-npz": ".npz",
+        "application/octet-stream": ".npz",
+    }
+    return suffixes.get(
+        upload.mime_type.lower(), Path(upload.name).suffix.lower() or ".bin"
+    )

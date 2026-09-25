@@ -3,18 +3,17 @@ $schema: reactor/v1
 
 model:
   name: alaya-world
-  version: v0.1.0
+  version: v0.1.3
   description: |
     Play the distilled AlayaWorld model with live prompt and six-axis camera controls.
   resources:
-    # FlashAttention-4 needs a Hopper or Blackwell accelerator.
     gpu:
       type: NVIDIA_B200
       count: 1
     cpu:
       request: "4"
       limit: "8"
-    # The checkpoint, Gemma-3-12B, Depth-Anything-3, and TAEHV stage through host RAM.
+    # The checkpoint, Gemma-3-12B, and Depth-Anything-3 stage through host RAM.
     memory:
       request: 8Gi
       limit: 96Gi
@@ -35,7 +34,7 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.2.5"
+  runtime_version: "3.5.0"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"
@@ -44,7 +43,3 @@ build:
     - build-essential
   runtime_env:
     PYTORCH_ALLOC_CONF: expandable_segments:True
-  # Install FlashAttention 4 with CuTe, then restore Runtime's protobuf wire version.
-  run:
-    - pip install --no-cache-dir "flash-attn-4==4.0.0b26"
-    - pip install --no-cache-dir --no-deps "protobuf==7.35.1"

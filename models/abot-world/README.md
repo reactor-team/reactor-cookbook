@@ -6,6 +6,10 @@ change the scene prompt between chunks, and use the model's native W/A/S/D
 movement and I/J/K/L view controls. Each inference turn preserves the upstream
 rolling KV cache and emits one decoded autoregressive chunk.
 
+`abot_world.py` owns commands and step input/output; `abot_world_model.py`
+owns native inference and causal state. Frozen inputs and results carry one
+chunk per step and acknowledge new anchor images through a world ID.
+
 ABot-World is an image-to-video world model. It generates three latent frames
 per chunk, decoded to 9 RGB frames for the first chunk and 12 RGB frames for
 each later chunk at 1280×704. Playback adapts to measured inference throughput,
@@ -13,6 +17,9 @@ and the output queue holds one complete 12-frame chunk. The adapter retains the
 upstream 21-latent local-attention window.
 
 ## Run locally
+
+The adapter uses Reactor Runtime 3.5's native step loop. Each step snapshots
+the current inputs, generates one native chunk, and publishes its media and state.
 
 Install the [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation)
 and Docker with the NVIDIA Container Toolkit, then run the model from this

@@ -1,5 +1,10 @@
 # Run EVOKE through Reactor Runtime
 
+The adapter uses Reactor Runtime 3.5's native step loop. `evoke.py` owns commands
+and camera planning; `evoke_model.py` owns the persistent inference worker and
+rollout state. Frozen inputs and results carry one native chunk per step and
+acknowledge new conditioning through a world ID.
+
 Run the public [Alaya-EVOKE world model](https://github.com/AlayaLab/Evoke) as
 an interactive Reactor backend. Use this recipe to start an autoregressive
 world from an image, reference video, or text prompt, apply six-axis camera
@@ -28,7 +33,7 @@ license before commercial use.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
-controls its Reactor Runtime 3.2.5 image, while `requirements.txt` lists the
+controls its Reactor Runtime 3.5.0 image, while `requirements.txt` lists the
 adapter's serving dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -108,6 +113,10 @@ worker.
 
 ## Inputs and controls
 
+Sessions wait for explicit conditioning; connecting never selects the bundled
+image or starts generation. Upload an image/video or invoke `start_text`.
+An omitted image prompt uses the scene-neutral stability text in `evoke.yaml`.
+
 The commands cover all three upstream conditioning modes:
 
 | Mode | Reactor command | Upstream condition | Camera |
@@ -162,7 +171,7 @@ mode and filenames, prompt, seed, completed and next chunk, and all six
 camera axes. A newly connected viewer and every completed chunk receive the
 same snapshot.
 
-After 512 chunks, the adapter starts a fresh rollout from the active condition
+After 2,048 chunks, the adapter starts a fresh rollout from the active condition
 and emits `rollout_restarted`. This bounds the preallocated pose timeline while
 keeping checkpoints and the worker resident.
 

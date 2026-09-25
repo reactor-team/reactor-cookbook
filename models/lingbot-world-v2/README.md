@@ -1,5 +1,11 @@
 # Play LingBot-World-V2 through Reactor Runtime
 
+The adapter uses Reactor Runtime 3.5's native step loop. The application plans
+camera poses in `process_input()`, forwards one chunk to `LingbotV2Model` in
+`generate()`, and publishes video and state updates in `process_output()`.
+The model owns the native causal rollout. Frozen input and result dataclasses
+carry a world ID, with the anchor sent until a completed chunk acknowledges it.
+
 Run the public [LingBot-World-V2 world model](https://github.com/Robbyant/lingbot-world-v2)
 as an interactive Reactor backend. Start from an uploaded or built-in image,
 change the text prompt without resetting the world, and explore with continuous
@@ -25,7 +31,7 @@ before running or redistributing the model.
 ## Run
 
 This directory is a `reactor` workspace. Its `reactor.yaml` names the model,
-controls its Reactor Runtime 3.2.3, CUDA and Python image, and points Runtime at
+controls its Reactor Runtime 3.5.0, CUDA and Python image, and points Runtime at
 the model adapter and configuration. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.

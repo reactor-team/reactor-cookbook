@@ -5,18 +5,15 @@ from __future__ import annotations
 import os
 import subprocess
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 
-def _configure_runtime_caches() -> None:
+def configure_runtime_caches(root: Path) -> None:
     """Keep downloaded assets inside the Runtime's persistent weights mount."""
-    value = os.environ.get("REACTOR_WEIGHTS_PATH", "").strip()
-    if not value:
-        return
-    root = Path(value).expanduser().resolve()
     cache_paths = {
         "HF_HOME": root / "huggingface",
         "TORCH_HOME": root / "torch",
@@ -28,14 +25,49 @@ def _configure_runtime_caches() -> None:
         os.environ.setdefault(name, str(path))
 
 
-_configure_runtime_caches()
-
-from huggingface_hub import snapshot_download
-from reactor_runtime.paths import get_weights_path
-
-from sana_wm_types import BuiltInScene, HubAsset, SanaWMConfig
-
 _SOURCE_ENV = "SANA_WM_SOURCE_PATH"
+
+
+@dataclass(frozen=True)
+class HubAsset:
+    """One immutable Hugging Face asset."""
+
+    repo_id: str
+    revision: str
+
+
+@dataclass(frozen=True)
+class BuiltInScene:
+    """One image, prompt, and calibration example."""
+
+    name: str
+    image: Path
+    prompt: Path
+    intrinsics: Path
+
+
+@dataclass(frozen=True)
+class SanaWMConfig:
+    """Resolved source, assets, and native streaming settings."""
+
+    source_path: Path
+    source_url: str
+    source_revision: str
+    upstream_config: Path
+    streaming: HubAsset
+    stage1_text_encoder: HubAsset
+    pi3x_model: HubAsset
+    pi3x_source_url: str
+    pi3x_source_revision: str
+    scenes: tuple[BuiltInScene, ...]
+    seed: int
+    max_chunks: int
+    num_cached_blocks: int
+    refiner_kv_max_frames: int
+    translation_speed: float
+    rotation_speed_degrees: float
+    pitch_limit_degrees: float
+    weights_root: Path
 
 
 def _mapping(value: object, name: str) -> Mapping[str, Any]:
@@ -61,7 +93,7 @@ def _hub_asset(mapping: Mapping[str, Any], name: str) -> HubAsset:
     )
 
 
-def read_config(config_path: Path | None) -> SanaWMConfig:
+def read_config(config_path: Path | None, weights_root: Path) -> SanaWMConfig:
     """Read and validate the adapter YAML handed to `load()`."""
     if config_path is None:
         raise ValueError("SANA-WM requires a configuration path")
@@ -78,7 +110,7 @@ def read_config(config_path: Path | None) -> SanaWMConfig:
         source_path = Path(source_override).expanduser().resolve()
     else:
         source_path = (
-            get_weights_path() / "sana-wm" / _required_str(source, "path", "source")
+            weights_root / "sana-wm" / _required_str(source, "path", "source")
         ).resolve()
 
     upstream_config = source_path / _required_str(source, "config", "source")
@@ -112,6 +144,7 @@ def read_config(config_path: Path | None) -> SanaWMConfig:
 
     pi3x = _mapping(assets.get("pi3x"), "assets.pi3x")
     return SanaWMConfig(
+        weights_root=weights_root,
         source_path=source_path,
         source_url=_required_str(source, "url", "source"),
         source_revision=_required_str(source, "revision", "source"),
@@ -178,6 +211,8 @@ def prepare_source(config: SanaWMConfig) -> None:
 
 def resolve_model_assets(config: SanaWMConfig) -> tuple[Path, Path]:
     """Download pinned streaming and Stage-1 text-encoder snapshots."""
+    from huggingface_hub import snapshot_download
+
     streaming = Path(
         snapshot_download(
             repo_id=config.streaming.repo_id,
@@ -195,7 +230,9 @@ def resolve_model_assets(config: SanaWMConfig) -> tuple[Path, Path]:
 
 def resolve_pi3x_assets(config: SanaWMConfig) -> tuple[Path, Path]:
     """Prepare pinned Pi3X source and weights for calibration on demand."""
-    source = get_weights_path() / "sana-wm" / "Pi3"
+    from huggingface_hub import snapshot_download
+
+    source = config.weights_root / "sana-wm" / "Pi3"
     if not source.exists():
         source.parent.mkdir(parents=True, exist_ok=True)
         _git("clone", "--filter=blob:none", config.pi3x_source_url, str(source))

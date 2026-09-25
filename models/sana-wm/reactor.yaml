@@ -2,7 +2,7 @@ $schema: reactor/v1
 
 model:
   name: sana-wm-streaming
-  version: v0.1.0
+  version: v0.2.1
   description: |
     Explore SANA-WM's distilled autoregressive video world from an image,
     a prompt, and native camera controls.
@@ -32,7 +32,7 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.2.5"
+  runtime_version: "3.5.0"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import io
+import logging
 import math
 import sys
 from contextlib import nullcontext
@@ -12,13 +13,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageOps
-from reactor_runtime import UploadedFile
-from reactor_runtime.log import get_logger
-
 from lingbot_world_v2_assets import LingBotConfig
+from PIL import Image, ImageOps
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 RGB_FPS = 16
 TEMPORAL_STRIDE = 4
@@ -86,16 +84,18 @@ class LingBotBackend:
         self._timesteps: Any | None = None
         logger.info(
             "LingBot-World-V2 weights loaded",
-            source_revision=config.source_revision,
-            checkpoint_revision=config.checkpoint_revision,
-            local_attention_frames=config.local_attention_frames,
-            attention_sink_frames=config.attention_sink_frames,
+            extra={
+                "source_revision": config.source_revision,
+                "checkpoint_revision": config.checkpoint_revision,
+                "local_attention_frames": config.local_attention_frames,
+                "attention_sink_frames": config.attention_sink_frames,
+            },
         )
 
     def reset(
         self,
         *,
-        image: Path | UploadedFile,
+        image: Path | bytes,
         prompt: str,
         seed: int,
         intrinsics: np.ndarray,
@@ -103,7 +103,7 @@ class LingBotBackend:
         """Start a fresh native causal rollout from an image and prompt.
 
         Args:
-            image: Public example path or validated Reactor upload.
+            image: Public example path or validated encoded image bytes.
             prompt: Non-empty text condition for the first chunk.
             seed: Deterministic scheduler seed for the complete rollout.
             intrinsics: Packed ``[fx, fy, cx, cy]`` camera calibration.
@@ -309,7 +309,7 @@ class LingBotBackend:
         self._pipe._cross_attn_initialized = False
         self._prompt = prompt
         self._context = context
-        logger.info("LingBot prompt ready", prompt_sha256=cache_key)
+        logger.info("LingBot prompt ready", extra={"prompt_sha256": cache_key})
 
     def _next_condition(self) -> Any:
         """Encode the anchor or causal zero continuation into four VAE latents."""
@@ -474,11 +474,9 @@ def _load_upstream(source_path: Path) -> dict[str, Any]:
     }
 
 
-def _open_image(value: Path | UploadedFile) -> Image.Image:
+def _open_image(value: Path | bytes) -> Image.Image:
     """Decode a selected image and return an EXIF-oriented RGB copy."""
-    source: Path | io.BytesIO = (
-        value if isinstance(value, Path) else io.BytesIO(value.data)
-    )
+    source: Path | io.BytesIO = value if isinstance(value, Path) else io.BytesIO(value)
     with Image.open(source) as image:
         return ImageOps.exif_transpose(image).convert("RGB").copy()
 
