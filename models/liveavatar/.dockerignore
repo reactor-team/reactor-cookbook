@@ -1,0 +1,19 @@
+# Image contains source/dependencies only; weights and test media stay on NVMe.
+.git
+.env
+.env.*
+*.pem
+*.key
+weights
+checkpoints
+.runtime
+*.mp4
+*.wav
+*.safetensors
+*.pth
+*.pt
+__pycache__
+.pytest_cache
+.ruff_cache
+artifacts
+.venv

@@ -1,0 +1,32 @@
+$schema: reactor/v2
+model:
+  name: liveavatar
+  version: v0.3.7
+  description: Audio-driven avatar clips from an uploaded identity image and audio.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 3
+runtime:
+  import: liveavatar_pipeline:LiveAvatar
+  weights_path: /opt/dlami/nvme/.cache_hf/reactor_registry/liveavatar-deploy
+build:
+  runtime_version: "3.2.5"
+  python_version: "3.12"
+  cuda_version: "12.8.1"
+  python_requirements: requirements.txt
+  python_indexes:
+    - https://download.pytorch.org/whl/cu128
+  system_packages: [ffmpeg, git, build-essential, libsndfile1, libgl1, libglib2.0-0]
+  run:
+    - pip install --no-cache-dir --no-deps --force-reinstall flash-attn-4==4.0.0b30
+    - python -c 'from flash_attn import flash_attn_func; from flash_attn.cute import flash_attn_func as fa4; print("FA2/FA4 imports verified")'
+    - git clone https://github.com/Alibaba-Quark/LiveAvatar.git /opt/liveavatar-source && git -C /opt/liveavatar-source checkout --detach c3c47d031d8bf3247428333c1fe610579c71a551
+  runtime_env:
+    LIVEAVATAR_TURBO: "1"
+    LIVEAVATAR_STEPS: "4"
+    LIVEAVATAR_SOURCE: /opt/liveavatar-source
+    LIVEAVATAR_LOCAL_WEIGHTS_ONLY: "1"
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+    OMP_NUM_THREADS: "4"

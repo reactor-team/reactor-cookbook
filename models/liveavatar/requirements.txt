@@ -1,0 +1,29 @@
+# Reactor Runtime is supplied by build.runtime_version in reactor.yaml.
+# Do not add reactor-runtime here; keep the release owned by the manifest.
+numpy==2.2.6
+Pillow
+soundfile
+huggingface-hub<1
+PyYAML
+torch==2.8.0
+torchvision==0.23.0
+torchaudio==2.8.0
+transformers==4.51.3
+diffusers==0.35.1
+peft==0.17.1
+accelerate
+decord
+easydict
+ftfy
+librosa
+safetensors
+omegaconf
+einops
+sentencepiece
+scipy
+opencv-python-headless
+imageio
+imageio-ffmpeg
+matplotlib
+flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+flash-attn-4==4.0.0b30
