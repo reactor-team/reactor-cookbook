@@ -28,8 +28,10 @@ from reactor_runtime import (
     session_ended,
     session_started,
 )
+from reactor_runtime.distributed import DistributedRunner
 from reactor_runtime.log import get_logger
 
+from lingbot_world_v1_backend import WorkerSettings
 from lingbot_world_v1_camera import CameraMotionPlanner, MotionConfig
 from lingbot_world_v1_config import (
     LingBotConfig,
@@ -58,7 +60,6 @@ from lingbot_world_v1_types import (
     RolloutResetQueued,
     StateUpdate,
 )
-from upstream_backend import WorkerSettings
 
 logger = get_logger(__name__)
 
@@ -74,7 +75,7 @@ class LingBotWorldV1(ReactorApp):
     def __init__(self) -> None:
         super().__init__()
         self._config: LingBotConfig | None = None
-        self._engine: LingbotV1Model | None = None
+        self._engine: DistributedRunner | None = None
         self._planner: CameraMotionPlanner | None = None
         self._selected_input: Path | UploadedFile | None = None
         self._selected_intrinsics: Path | None = None
@@ -100,19 +101,23 @@ class LingBotWorldV1(ReactorApp):
                 rotation_degrees_per_latent=config.rotation_degrees_per_latent,
             )
         )
-        self._engine = LingbotV1Model()
-        self._engine.load(
-            WorkerSettings(
-                python_executable=config.worker_python,
-                source_path=config.source_path,
-                checkpoint_dir=config.checkpoint.path,
-                runtime_root=config.runtime_root,
-                max_chunks=config.max_chunks,
-                context_latents=config.context_latents,
-                max_area=config.max_area,
-                shift=config.shift,
-            )
+        self._engine = DistributedRunner(
+            LingbotV1Model,
+            world_size=config.world_size,
+            call_timeout=180.0,
+            load_kwargs={
+                "settings": WorkerSettings(
+                    source_path=config.source_path,
+                    checkpoint_dir=config.checkpoint.path,
+                    runtime_root=config.runtime_root,
+                    max_chunks=config.max_chunks,
+                    context_latents=config.context_latents,
+                    max_area=config.max_area,
+                    shift=config.shift,
+                )
+            },
         )
+        self._engine.start()
         logger.info(
             "LingBot-World v1 Fast ready",
             source_revision=config.source_revision,

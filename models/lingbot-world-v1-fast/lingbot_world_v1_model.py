@@ -2,10 +2,10 @@
 
 Plain Python. This module imports nothing from ``reactor_runtime`` and knows
 nothing about clients, tracks, or commands. The application half
-(``lingbot_world_v1.py``) constructs :class:`LingbotV1Model`, calls ``load``
-once, ``generate`` once per step, and ``reset`` when a session ends. The two
-halves meet on :class:`LingbotV1Input` and :class:`LingbotV1Result`, and on
-nothing else.
+(``lingbot_world_v1.py``) hands :class:`LingbotV1Model` to a Runner, which
+constructs and loads it in a worker process. The application calls ``generate``
+once per step and ``reset`` when a session ends. The two halves meet on
+:class:`LingbotV1Input` and :class:`LingbotV1Result`.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from upstream_backend import LingBotWorkerBackend, WorkerSettings
+from lingbot_world_v1_backend import LingBotBackend, WorkerSettings
 
 
 @dataclass(frozen=True)
@@ -74,26 +74,30 @@ class LingbotV1Result:
     chunk_index: int
 
 
-class NoAnchor(Exception):  # noqa: N818 - the model's own error, named for the state
+class NoAnchor(Exception):
     """A chunk asked for a world the model has not started, and carried no anchor."""
 
 
 class LingbotV1Model:
     """Hold the upstream model and step it one causal chunk at a time.
 
-    The weights live in a worker subprocess (``upstream_backend.py`` and
-    ``worker.py``); this class owns that process, the world it is rolling
-    out, and the chunk count within it.
+    The Runner constructs this class in its worker process. This class owns
+    the native backend, the active world, and its chunk count.
     """
 
     def __init__(self) -> None:
-        self._backend: LingBotWorkerBackend | None = None
+        # DistributedRunner injects these before load(); direct use stays single-GPU.
+        self.rank = 0
+        self.world_size = 1
+        self._backend: LingBotBackend | None = None
         self._world_id: int | None = None
         self._chunk_index = 0
 
     def load(self, settings: WorkerSettings) -> None:
-        """Start the worker and load the weights once per process."""
-        self._backend = LingBotWorkerBackend(settings)
+        """Load native weights once in the current worker process."""
+        self._backend = LingBotBackend(
+            settings, rank=self.rank, world_size=self.world_size
+        )
         self.reset()
 
     def generate(self, input: LingbotV1Input) -> LingbotV1Result:
@@ -130,13 +134,7 @@ class LingbotV1Model:
         self._world_id = None
         self._chunk_index = 0
 
-    def close(self) -> None:
-        """Stop the worker process."""
-        if self._backend is not None:
-            self._backend.close()
-            self._backend = None
-
-    def _require_backend(self) -> LingBotWorkerBackend:
+    def _require_backend(self) -> LingBotBackend:
         if self._backend is None:
             raise RuntimeError("LingBot-World v1 was not loaded")
         return self._backend

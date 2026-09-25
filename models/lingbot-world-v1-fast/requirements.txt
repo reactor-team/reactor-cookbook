@@ -1,3 +1,23 @@
 # Model dependencies resolved with Reactor Runtime during `reactor build`.
 # `build.runtime_version` in reactor.yaml selects the Runtime release.
 Pillow>=10.1
+
+numpy==2.5.2
+torch==2.8.0
+torchvision==0.23.0
+torchaudio==2.8.0
+opencv-python==4.11.0.86
+diffusers==0.39.0
+transformers==4.51.3
+tokenizers==0.21.4
+accelerate==1.15.0
+tqdm
+imageio[ffmpeg]
+easydict
+ftfy
+scipy
+huggingface-hub>=0.34,<1
+einops
+ninja
+packaging
+wheel

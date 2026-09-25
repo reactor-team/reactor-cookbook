@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import FrozenInstanceError
+import json
+import os
+import subprocess
+import sys
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -299,7 +303,7 @@ def test_session_end_releases_rollout_and_clears_selection() -> None:
 
 
 class FakeBackend:
-    """Stand in for the worker subprocess behind the model half."""
+    """Stand in for native GPU inference inside the model half."""
 
     def __init__(self) -> None:
         self.resets: list[dict[str, Any]] = []
@@ -373,3 +377,118 @@ def test_model_reset_forgets_the_world_so_the_anchor_crosses_again() -> None:
     result = model.generate(_input(1, _ANCHOR))
     assert result.chunk_index == 1
     assert len(backend.resets) == 2
+
+
+class ProcessModel(LingbotV1Model):
+    """Exercise the real process boundary with the native GPU backend faked."""
+
+    def load(self, record: Path) -> None:
+        self._backend = FakeBackend()
+        record.write_text(json.dumps({"pid": os.getpid(), "rank": self.rank}))
+
+
+def test_distributed_worker_keeps_ten_chunks_and_propagates_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from reactor_runtime.distributed import DistributedRunner
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    record = tmp_path / "worker.json"
+    runner = DistributedRunner(ProcessModel, load_kwargs={"record": record})
+    runner.start()
+    try:
+        worker = json.loads(record.read_text())
+        assert worker["pid"] != os.getpid()
+        assert worker["rank"] == 0
+        for index in range(10):
+            result = runner.generate(_input(1, _ANCHOR if index == 0 else None))
+            assert result.world_id == 1
+            assert result.chunk_index == index + 1
+            assert result.frames.dtype == np.uint8
+            assert result.frames.flags.c_contiguous
+        runner.reset()
+        with pytest.raises(NoAnchor):
+            runner.generate(_input(1, None))
+        assert runner.healthy
+        assert runner.generate(_input(2, _ANCHOR)).chunk_index == 1
+    finally:
+        runner.shutdown()
+    assert not runner.healthy
+
+
+def test_model_dependency_graph_imports_without_runtime() -> None:
+    source = """
+import builtins
+original = builtins.__import__
+def checked(name, *args, **kwargs):
+    if name == 'reactor_runtime' or name.startswith('reactor_runtime.'):
+        raise AssertionError(name)
+    return original(name, *args, **kwargs)
+builtins.__import__ = checked
+import lingbot_world_v1_model
+"""
+    subprocess.run(
+        [sys.executable, "-c", source], check=True, cwd=Path(__file__).parents[1]
+    )
+
+
+@pytest.mark.parametrize("world_size", [1, 2, 4])
+def test_app_starts_one_runner_with_plain_load_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    world_size: int,
+) -> None:
+    calls = []
+
+    class FakeRunner:
+        def __init__(self, worker_cls, **kwargs):
+            calls.append((worker_cls, kwargs))
+
+        def start(self):
+            calls.append("started")
+
+    monkeypatch.setattr(lingbot_world_v1, "DistributedRunner", FakeRunner)
+    monkeypatch.setattr(lingbot_world_v1, "prepare_runtime", lambda config: None)
+    config_path = Path(__file__).parents[1] / "lingbot_world_v1.yaml"
+    config = replace(lingbot_world_v1.read_config(config_path), world_size=world_size)
+    monkeypatch.setattr(lingbot_world_v1, "read_config", lambda path: config)
+    world = LingBotWorldV1()
+    world.load(config_path)
+    worker_cls, options = calls[0]
+    assert worker_cls is LingbotV1Model
+    assert options["world_size"] == world_size
+    settings = options["load_kwargs"]["settings"]
+    assert settings.context_latents == 21
+    assert settings.max_chunks == 320
+    assert calls[1] == "started"
+
+
+@pytest.mark.parametrize("world_size", ["0", "3", "8", "true", "'2'"])
+def test_config_rejects_unsupported_world_sizes(
+    tmp_path: Path, world_size: str
+) -> None:
+    config_path = tmp_path / "model.yaml"
+    source = (Path(__file__).parents[1] / "lingbot_world_v1.yaml").read_text()
+    config_path.write_text(source.replace("world_size: 1", f"world_size: {world_size}"))
+    with pytest.raises(ValueError, match="world_size"):
+        lingbot_world_v1.read_config(config_path)
+
+
+def test_model_passes_runner_rank_to_native_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import lingbot_world_v1_model
+
+    calls = []
+    backend = FakeBackend()
+
+    def factory(settings, *, rank, world_size):
+        calls.append((settings, rank, world_size))
+        return backend
+
+    monkeypatch.setattr(lingbot_world_v1_model, "LingBotBackend", factory)
+    model = LingbotV1Model()
+    model.rank, model.world_size = 3, 4
+    settings = object()
+    model.load(settings)
+    assert calls == [(settings, 3, 4)]
