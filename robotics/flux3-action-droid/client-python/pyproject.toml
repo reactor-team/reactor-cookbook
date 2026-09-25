@@ -1,0 +1,9 @@
+[project]
+name = "flux3-action-droid-client"
+version = "0.3.0"
+description = "FLUX 0.3.0 checkpoint selection and observation replay on Reactor"
+requires-python = ">=3.10"
+dependencies = ["reactor-sdk==1.6.0", "numpy>=1.26"]
+
+# SDK 1.x owns keepalive and accepts NumPy frames through Track.push_frame.
+# The lockfile preserves the dependencies used to verify this quickstart.

@@ -4,6 +4,10 @@ Six replay quickstarts and one live robot bridge for hosted Reactor robotics
 policies. They need no simulator, GPU, or model weights: `uv sync`, an API key,
 and a few minutes.
 
+The [FLUX 0.3.0 quickstart](../../flux3-action-droid) is also available, with
+synthetic or NPZ inputs and six checkpoints pinned per session. Follow its
+setup commands in its own directory to use the tested SDK 1.6.0 environment.
+
 Open the guide for the model you care about and run its script; there is no
 reading order. `xwam` is the reference implementation of
 the generic [robot policy client contract](./robot-policy-client-contract.md),
@@ -11,8 +15,8 @@ so it is the one to read if you want the contract itself rather than a model.
 
 ## Choose a model
 
-Every replay guide starts with the same lightweight recorded-observation
-workflow. Its last two sections cover the optional closed-loop simulator and
+The six replay guides in this directory start with the same lightweight
+recorded-observation workflow. Their last two sections cover the optional closed-loop simulator and
 the remaining work for physical deployment. Published figures link to
 upstream sources;
 figures labeled Reactor-measured come from the committed harness or fixture
@@ -20,6 +24,7 @@ provenance.
 
 | Guide | Protocol | Chunk | Closed-loop harness |
 |---|---|---|---|
+| [FLUX 0.3.0](../../flux3-action-droid) | request/reply with `chunk_id` echo; checkpoint pinned per session | `(32, 8)` absolute joints + gripper | not included; synthetic or user-supplied NPZ replay |
 | [`lingbot-va`](./lingbot_va_quickstart.md) | executed-action echo | `(16, 7)` eef deltas | [`LIBERO`](../libero), CPU |
 | [`cosmos-nano-policy-droid`](./cosmos_droid_quickstart.md) | stateless executed-step report | `(32, 8)` absolute joints | [`RoboLab`](../cosmos-droid), RTX GPU |
 | [`xwam`](./xwam_quickstart.md) | request/reply with `chunk_id` echo | `(32, 14)` delta joints | [`RoboTwin 2.0`](../robotwin), CUDA GPU |

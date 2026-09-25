@@ -9,6 +9,11 @@ physics simulator against the same served policies, using the Python
 
 ## Quickstarts
 
+The [FLUX 0.3.0 quickstart](../flux3-action-droid) demonstrates six checkpoint
+choices pinned per session, three camera views, measured DROID state, and
+`(32, 8)` action replies. It accepts synthetic inputs or an NPZ replay in its
+own pinned SDK environment. It does not include a closed-loop simulator.
+
 **[`notebooks/`](./notebooks)** holds seven runnable Python examples: six
 recorded-observation replays and one live robot bridge. **No simulator, no GPU,
 no model weights**: `uv sync`, an API key, and a few minutes. Open the one for
