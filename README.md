@@ -37,7 +37,7 @@ Each example has a README explaining what it does and how to run it.
 For a first robotics API call, the [FLUX 0.3.0 quickstart](./robotics/flux3-action-droid)
 shows how to select a checkpoint for a session, stream camera observations and
 state, and receive action predictions. It runs without local model weights or
-a simulator; your Reactor account must have access to the hosted model.
+a simulator; use a Reactor API key to connect to the public FLUX model.
 
 ## Contributing
 

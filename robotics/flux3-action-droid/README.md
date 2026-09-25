@@ -16,10 +16,10 @@ or the [Python API example](#call-the-api-from-your-own-python-code).
 ## Run the quickstart
 
 You need [Git](https://git-scm.com/downloads), [uv](https://docs.astral.sh/uv/),
-and a Reactor account with access to `reactor/flux3-action-droid`. Create a key
-on the [API keys page](https://reactor.inc/account/api-keys). This model is
-access-controlled: having an API key alone does not grant model access. Ask
-your Reactor contact to enable access if it is unavailable to your account.
+and a Reactor account. Create a key on the
+[API keys page](https://reactor.inc/account/api-keys).
+`reactor/flux3-action-droid` is public on the production API; the quickstart
+requires a valid API key and available serving capacity.
 No local GPU, simulator, Docker, or weights are needed. The commands below let
 uv install Python 3.12; the client supports Python 3.10+.
 
@@ -246,7 +246,7 @@ There is no FLUX closed-loop simulator integration included in this entry.
 | Symptom | Next step |
 | --- | --- |
 | `REACTOR_API_KEY` is missing | Export a key in the same terminal that runs `uv run`. |
-| Authentication/access failure, or model unavailable to your account | Confirm the key and `REACTOR_API_URL`; ask your Reactor contact for model access. Do not share the key in logs. |
+| Authentication/access failure, or model unavailable | Confirm the key and `REACTOR_API_URL`. FLUX is public at `https://api.reactor.inc`; another environment may not offer it. Contact Reactor if a valid key still cannot connect. Do not share the key in logs. |
 | HTTP 429 `no available capacity` | Wait for capacity, including the previous session's worker release, before retrying. An open session reserves a worker. |
 | No SDK wheel or import errors | Run `uv sync --locked --python 3.12` in this example's directory. SDK 1.6.0 requires a supported platform; Linux wheels require glibc 2.34+. |
 | Checkpoint unavailable or discovery failed | The endpoint may serve an older release or a smaller checkpoint set. Inspect the reported choices; the client does not silently substitute one. |
@@ -269,10 +269,15 @@ The session closed successfully. The five pre-reset requests had a 104 ms
 median model time and 201 ms median request RTT. An earlier direct synthetic
 run also passed four predictions, including reset.
 
+After the model became public, the documented synthetic CLI run also passed
+with a separately supplied API key: six valid predictions including reset,
+all six checkpoints discovered, and successful session cleanup. Its five
+pre-reset requests had a 104 ms median model time and 185 ms median request RTT.
+
 The offline tests cover the client, malformed inputs, cleanup, NPZ loading,
 links, and execution of the complete Python example against a fake SDK. The
-live tests used an account with model access; they do not verify new-account
-onboarding or grant access to other accounts. These checks establish API wiring,
+live tests exercise API-key authentication and inference, not account creation
+or billing setup. These checks establish API wiring,
 not robot task quality or latency comparisons across checkpoints.
 
 ## Offline checks
