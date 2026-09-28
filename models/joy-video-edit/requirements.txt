@@ -1,0 +1,28 @@
+# Model dependencies installed with Reactor Runtime during the image build.
+# `build.runtime_version` in reactor.yaml selects the Runtime release; the Dockerfile installs it.
+#
+# torch and torchvision come from the cu132 wheel index in the Dockerfile, and joyomni_ops is
+# built there from ./joyomni_ops; neither is listed here.
+
+# Text encoder, VAE, and pipeline.
+transformers==4.57.6
+diffusers==0.36.0
+# Lets transformers load the text encoder without first materialising a full copy on the CPU.
+accelerate==1.10.1
+
+# Checkpoint downloads (joy_video_edit_assets.py).
+huggingface-hub==0.36.2
+
+Pillow>=12,<13
+opencv-python-headless>=4.10,<5
+einops>=0.8,<0.9
+loguru>=0.7,<1
+
+# Optional backends of torch's inductor, which the VAE's autotuned compile can use; pinned at
+# the versions this image was benchmarked with.
+nvidia-cutlass-dsl==4.5.1
+nvidia-cutlass-dsl-libs-base==4.5.1
+cuda-python==13.3.1
+cuda-bindings==13.3.1
+cuda-core==1.0.1
+cuda-pathfinder==1.5.6

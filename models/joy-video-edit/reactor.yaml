@@ -1,0 +1,37 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
+$schema: reactor/v2
+
+model:
+  name: joy-video-edit
+  version: v0.1.0
+  description: |
+    Edit a live camera stream from a natural-language instruction, with an
+    optional reference image, in real time at 1248x720. JoyAI-Video-Edit
+    (16B autoregressive diffusion) edits each chunk of frames as it arrives,
+    without seeing future frames or needing a video length.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    cpu:
+      request: "8"
+      limit: "16"
+    # Loading the 16B DiT checkpoint peaks at about 63 GiB of host memory
+    # before it moves to the GPU; the limit leaves room for the text encoder.
+    memory:
+      request: 32Gi
+      limit: 128Gi
+
+runtime:
+  import: joy_video_edit:JoyVideoEdit
+  config: joy_video_edit.yaml
+  weights_path: ~/.cache/reactor_registry/joy-video-edit
+  recording:
+    # Session recording encodes video on the same GPU the model edits on,
+    # which costs the model most of its throughput.
+    enabled: false
+
+build:
+  # The Dockerfile builds the image (joyomni_ops compiles from the vendored
+  # source), and installs this Reactor Runtime release: keep the two in step.
+  runtime_version: "3.6.0"
