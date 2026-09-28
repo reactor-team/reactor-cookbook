@@ -61,6 +61,9 @@ downloaded.
 
 ## Commands
 
+[`model_behaviour.md`](./model_behaviour.md) has the full client contract: the
+states, which commands each accepts, message ordering, and SDK sequences.
+
 | Command | When | Effect |
 | --- | --- | --- |
 | `set_prompt` | any time | Stores the edit instruction. `start` reads it; a change during a run applies from the next `start`. Replies `prompt_accepted`, broadcasts `session_state`. |
