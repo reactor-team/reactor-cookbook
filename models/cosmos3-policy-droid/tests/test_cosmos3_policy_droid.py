@@ -9,7 +9,7 @@ import sys
 import types
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 import pytest
@@ -18,7 +18,7 @@ from reactor_runtime.interface.model.contract import ModelContract
 
 import cosmos3_policy_droid_assets as assets
 import cosmos3_policy_droid_model
-from cosmos3_policy_droid import Cosmos3PolicyDroid, parse_executed_step, parse_proprio
+from cosmos3_policy_droid import Cosmos3PolicyDroid, parse_executed_step, parse_observation_time, parse_proprio
 from cosmos3_policy_droid_assets import (
     DEFAULT_SOURCE,
     SOURCE_ENV,
@@ -57,22 +57,25 @@ class FakeModel:
 
 
 class _Frame:
-    def __init__(self, data: np.ndarray) -> None:
+    def __init__(self, data: np.ndarray, capture_time_us: int | None) -> None:
         self.data = data
+        self.capture_time_us = capture_time_us
 
 
 class _Track:
-    def __init__(self) -> None:
-        self.pending: list[np.ndarray] = []
+    """An inbound track by shape: a read returns the newest frame and empties the buffer."""
 
-    def push(self, frame: np.ndarray) -> None:
-        self.pending.append(frame)
+    def __init__(self) -> None:
+        self.pending: list[_Frame] = []
+
+    def push(self, frame: np.ndarray, capture_time_us: int | None = None) -> None:
+        self.pending.append(_Frame(frame, capture_time_us))
 
     def try_read(self, n: int = 1) -> list[_Frame] | None:
         if len(self.pending) < n:
             return None
         frames, self.pending = self.pending[-n:], []
-        return [_Frame(f) for f in frames]
+        return frames
 
 
 class _Media:
@@ -81,10 +84,10 @@ class _Media:
         self.exterior_view_1 = _Track()
         self.exterior_view_2 = _Track()
 
-    def push_all(self) -> None:
-        self.wrist_view.push(WRIST)
-        self.exterior_view_1.push(EXTERIOR)
-        self.exterior_view_2.push(EXTERIOR)
+    def push_all(self, capture_time_us: int | None = None) -> None:
+        self.wrist_view.push(WRIST, capture_time_us)
+        self.exterior_view_1.push(EXTERIOR, capture_time_us)
+        self.exterior_view_2.push(EXTERIOR, capture_time_us)
 
 
 def _app() -> tuple[Any, FakeModel, _Media, list[Any]]:
@@ -116,6 +119,14 @@ async def _step(app: Any) -> Any:
     return await app.process_output(StepOutcome(result=result, elapsed=0.2))
 
 
+def _echo_then_fresh_frames(app: Any, media: _Media, step: int) -> None:
+    """Echo `step`, let the gate see it, then deliver the post-echo observation."""
+    app.state.executed_step_json = _echo(step)
+    with pytest.raises(ApplicationError, match="fresh frame"):
+        asyncio.run(app.process_input())
+    media.push_all()
+
+
 # -- the client contract ---------------------------------------------------------
 
 
@@ -134,6 +145,7 @@ def test_contract_is_the_fleet_models() -> None:
 def test_state_starts_with_both_gates_closed() -> None:
     state = PolicyState()
     assert state._last_executed == -1
+    assert state._pending_echo is None
     assert state._predicted == -1
     assert state.task_description == ""
 
@@ -198,26 +210,145 @@ def test_second_prediction_waits_for_the_echo_to_advance() -> None:
     with pytest.raises(ApplicationError, match="executed_step_json"):
         asyncio.run(app.process_input())
 
-    app.state.executed_step_json = _echo(0)
+    _echo_then_fresh_frames(app, media, 0)
     asyncio.run(_step(app))
     assert app.state._predicted == 1
     assert app.state._last_executed == 0
-    # The same echo again does not open the gate a second time.
-    with pytest.raises(ApplicationError):
+    # The same echo again does not open the gate a second time, whatever frames arrive.
+    media.push_all()
+    with pytest.raises(ApplicationError, match="executed_step_json"):
         asyncio.run(app.process_input())
     assert len(model.inputs) == 2
 
 
-def test_frames_are_retained_between_steps() -> None:
+def test_fresh_frames_are_retained_between_steps() -> None:
     app, model, media, _ = _app()
     _ready(app, media)
     asyncio.run(_step(app))
     app.state.executed_step_json = _echo(0)
+    with pytest.raises(ApplicationError, match="fresh frame"):
+        asyncio.run(app.process_input())
+    # The views deliver in different steps; each post-echo frame is kept until the set is complete.
     fresh = np.full((360, 640, 3), 9, dtype=np.uint8)
     media.wrist_view.push(fresh)
+    with pytest.raises(ApplicationError, match="fresh frame"):
+        asyncio.run(app.process_input())
+    media.exterior_view_1.push(EXTERIOR)
+    media.exterior_view_2.push(EXTERIOR)
     asyncio.run(_step(app))
     assert model.inputs[1].wrist_view is fresh
     assert model.inputs[1].exterior_view_1 is EXTERIOR
+
+
+def test_frames_buffered_before_the_echo_are_not_paired_with_it() -> None:
+    app, model, media, _ = _app()
+    _ready(app, media)
+    asyncio.run(_step(app))
+    # Frames captured while chunk 0 was executing are still buffered when its echo lands.
+    executing = np.full((360, 640, 3), 1, dtype=np.uint8)
+    media.wrist_view.push(executing)
+    media.exterior_view_1.push(EXTERIOR)
+    media.exterior_view_2.push(EXTERIOR)
+    app.state.executed_step_json = _echo(0)
+    with pytest.raises(ApplicationError, match="fresh frame"):
+        asyncio.run(app.process_input())
+    assert len(model.inputs) == 1
+    after = np.full((360, 640, 3), 2, dtype=np.uint8)
+    media.wrist_view.push(after)
+    media.exterior_view_1.push(EXTERIOR)
+    media.exterior_view_2.push(EXTERIOR)
+    asyncio.run(_step(app))
+    assert model.inputs[1].wrist_view is after
+
+
+def _timed_echo(step: int, observation_time_us: Any) -> str:
+    return json.dumps({"step": step, "action": [[0.0] * 8], "observation_time_us": observation_time_us})
+
+
+def test_observation_time_pairs_only_frames_captured_at_or_after_it() -> None:
+    app, model, media, _ = _app()
+    _ready(app, media)
+    asyncio.run(_step(app))
+    # Still on the video path when the echo lands: captured before the new observation.
+    executing = np.full((360, 640, 3), 1, dtype=np.uint8)
+    app.state.executed_step_json = _timed_echo(0, 2_000)
+    media.wrist_view.push(executing, 1_900)
+    media.exterior_view_1.push(EXTERIOR, 1_900)
+    media.exterior_view_2.push(EXTERIOR, 1_900)
+    with pytest.raises(ApplicationError, match="fresh frame"):
+        asyncio.run(app.process_input())
+    # Arrival after the echo is not enough: the capture time decides.
+    media.wrist_view.push(executing, 1_950)
+    media.exterior_view_1.push(EXTERIOR, 1_950)
+    media.exterior_view_2.push(EXTERIOR, 1_950)
+    with pytest.raises(ApplicationError, match="fresh frame"):
+        asyncio.run(app.process_input())
+    observed = np.full((360, 640, 3), 2, dtype=np.uint8)
+    media.wrist_view.push(observed, 2_000)
+    media.exterior_view_1.push(EXTERIOR, 2_010)
+    media.exterior_view_2.push(EXTERIOR, 2_020)
+    asyncio.run(_step(app))
+    assert model.inputs[1].wrist_view is observed
+
+
+def test_observation_time_accepts_a_matching_frame_already_buffered() -> None:
+    app, model, media, _ = _app()
+    _ready(app, media)
+    asyncio.run(_step(app))
+    # The robot captured, pushed, then echoed: its frames can be buffered before the gate sees the echo.
+    media.push_all(5_000)
+    app.state.executed_step_json = _timed_echo(0, 5_000)
+    asyncio.run(_step(app))
+    assert len(model.inputs) == 2
+
+
+def test_frames_without_a_capture_time_count_by_arrival() -> None:
+    app, model, media, _ = _app()
+    _ready(app, media)
+    asyncio.run(_step(app))
+    app.state.executed_step_json = _timed_echo(0, 5_000)
+    media.push_all(None)
+    asyncio.run(_step(app))
+    assert len(model.inputs) == 2
+
+
+@pytest.mark.parametrize("value", [-1, 1.5, "5000", True, None, 1e309])
+def test_an_unusable_observation_time_falls_back_to_arrival(value: Any) -> None:
+    app, model, media, _ = _app()
+    _ready(app, media)
+    asyncio.run(_step(app))
+    media.push_all(1)  # buffered before the echo: dropped under the arrival rule
+    app.state.executed_step_json = _timed_echo(0, value)
+    with pytest.raises(ApplicationError, match="fresh frame"):
+        asyncio.run(app.process_input())
+    media.push_all(1)
+    asyncio.run(_step(app))
+    assert len(model.inputs) == 2
+
+
+def test_parse_observation_time() -> None:
+    assert parse_observation_time("") is None
+    assert parse_observation_time("[1, 2]") is None
+    assert parse_observation_time(_echo(3)) is None
+    assert parse_observation_time(_timed_echo(3, 42)) == 42
+    assert parse_observation_time(_timed_echo(3, 10**30)) == 10**30
+    assert parse_observation_time('{"step": 0, "observation_time_us": ' + "[" * 50000 + "]" * 50000 + "}") is None
+
+
+def test_an_advanced_echo_waits_through_a_proprio_refusal() -> None:
+    app, model, media, _ = _app()
+    _ready(app, media)
+    asyncio.run(_step(app))
+    _echo_then_fresh_frames(app, media, 0)
+    app.state.proprio_json = "not json"
+    with pytest.raises(ApplicationError, match="proprio_json"):
+        asyncio.run(app.process_input())
+    assert app.state._pending_echo == 0
+    app.state.proprio_json = PROPRIO
+    asyncio.run(_step(app))
+    assert len(model.inputs) == 2
+    assert app.state._last_executed == 0
+    assert app.state._pending_echo is None
 
 
 # -- generate and process_output -------------------------------------------------------
@@ -237,7 +368,7 @@ def test_process_output_sends_one_chunk_per_step_and_no_media() -> None:
     app, _, media, messages = _app()
     _ready(app, media)
     assert asyncio.run(_step(app)) is None
-    app.state.executed_step_json = _echo(0)
+    _echo_then_fresh_frames(app, media, 0)
     asyncio.run(_step(app))
     assert [m.step for m in messages] == [0, 1]
     assert all(isinstance(m, ActionPrediction) for m in messages)
@@ -272,6 +403,45 @@ def test_reset_reopens_the_gate_and_restarts_the_count() -> None:
     assert model.resets == 0  # the policy holds nothing to reset
 
 
+def test_reset_clears_the_echo_from_before_it() -> None:
+    app, _, media, messages = _app()
+    _ready(app, media)
+    asyncio.run(_step(app))
+    for step in range(3):
+        _echo_then_fresh_frames(app, media, step)
+        asyncio.run(_step(app))
+    assert app.state._last_executed == 2
+
+    asyncio.run(app.reset())
+    assert app.state.executed_step_json == ""
+    assert app.state._pending_echo is None
+    with pytest.raises(ApplicationError, match="fresh frame"):
+        asyncio.run(app.process_input())
+    media.push_all()
+    asyncio.run(_step(app))
+    assert messages[-1].step == 0
+    # Chunk 1 of the new numbering waits for the client to echo chunk 0.
+    media.push_all()
+    with pytest.raises(ApplicationError, match="executed_step_json"):
+        asyncio.run(app.process_input())
+    _echo_then_fresh_frames(app, media, 0)
+    asyncio.run(_step(app))
+    assert messages[-1].step == 1
+
+
+def test_reset_drops_frames_buffered_before_it() -> None:
+    app, model, media, _ = _app()
+    _ready(app, media)
+    asyncio.run(_step(app))
+    media.push_all()  # the pre-reset scene, still buffered
+    asyncio.run(app.reset())
+    with pytest.raises(ApplicationError, match="fresh frame"):
+        asyncio.run(app.process_input())
+    media.push_all()
+    asyncio.run(_step(app))
+    assert len(model.inputs) == 2
+
+
 def test_session_end_resets_the_model_half_and_drops_the_frames() -> None:
     app, model, media, _ = _app()
     _ready(app, media)
@@ -296,6 +466,68 @@ def test_parse_executed_step() -> None:
     assert parse_executed_step("{}") is None
     assert parse_executed_step('{"step": "x"}') is None
     assert parse_executed_step(_echo(7)) == 7
+
+
+# Nesting that fits the fields' 8000-character limit, and nesting deep enough
+# for json.loads itself to raise RecursionError.
+_NESTED = "[" * 3990 + "]" * 3990
+_DEEP = "[" * 50000 + "]" * 50000
+_OVERSIZED_STEPS = [
+    '{"step": 1e309}',
+    '{"step": -1e309}',
+    '{"step": NaN}',
+    '{"step": ' + _NESTED + "}",
+    '{"step": ' + _DEEP + "}",
+]
+_OVERSIZED_PROPRIO = [
+    '{"joint_position": [[1' + "0" * 400 + ', 0, 0, 0, 0, 0, 0]], "gripper_position": [[0]]}',
+    '{"joint_position": [[0, 0, 0, 0, 0, 0, 0]], "gripper_position": [[-1' + "0" * 400 + "]]}",
+    '{"joint_position": [[1e400, 0, 0, 0, 0, 0, 0]], "gripper_position": [[0]]}',
+    '{"joint_position": ' + _NESTED + ', "gripper_position": [[0]]}',
+    '{"joint_position": ' + _DEEP + ', "gripper_position": [[0]]}',
+]
+
+
+def test_deep_nesting_reaches_the_recursion_limit() -> None:
+    with pytest.raises(RecursionError):
+        json.loads(_DEEP)
+
+
+@pytest.mark.parametrize("raw", _OVERSIZED_STEPS)
+def test_parse_executed_step_refuses_overflow_and_deep_nesting(raw: str) -> None:
+    assert parse_executed_step(raw) is None
+
+
+@pytest.mark.parametrize("raw", _OVERSIZED_PROPRIO)
+def test_parse_proprio_refuses_overflow_and_deep_nesting(raw: str) -> None:
+    assert parse_proprio(raw) is None
+
+
+@pytest.mark.parametrize("raw", _OVERSIZED_STEPS)
+def test_oversized_echo_refuses_the_step(raw: str) -> None:
+    app, model, media, _ = _app()
+    _ready(app, media)
+    asyncio.run(_step(app))
+    media.push_all()
+    app.state.executed_step_json = raw
+    with pytest.raises(ApplicationError, match="executed_step_json"):
+        asyncio.run(app.process_input())
+    # The session keeps going: a valid echo still releases the next chunk.
+    _echo_then_fresh_frames(app, media, 0)
+    asyncio.run(_step(app))
+    assert len(model.inputs) == 2
+
+
+@pytest.mark.parametrize("raw", _OVERSIZED_PROPRIO)
+def test_oversized_proprio_refuses_the_step(raw: str) -> None:
+    app, model, media, _ = _app()
+    media.push_all()
+    app.state.proprio_json = raw
+    with pytest.raises(ApplicationError, match="proprio_json"):
+        asyncio.run(app.process_input())
+    app.state.proprio_json = PROPRIO
+    asyncio.run(_step(app))
+    assert len(model.inputs) == 1
 
 
 # -- config ---------------------------------------------------------------------------------
@@ -413,7 +645,7 @@ def test_activate_source_puts_the_checkout_first_on_sys_path(
 class _FakeService:
     """RobolabPolicyService by shape: records observations and returns a chunk."""
 
-    instances: list[_FakeService] = []
+    instances: ClassVar[list[_FakeService]] = []
 
     def __init__(self, args: Any) -> None:
         self.args = args

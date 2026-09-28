@@ -32,6 +32,34 @@ than the last one it acted on, so a controller still executing a chunk is
 never run ahead of, and a stalled controller repeating an echo cannot trigger
 a second prediction.
 
+A prediction also waits for a fresh frame on every camera view, so the new
+proprio is never paired with the scene while the previous chunk was still
+executing. Put the capture time of the new observation in the echo as
+`observation_time_us`, on the same clock the client stamps its frames with,
+and a fresh frame is one captured at or after it:
+
+```python
+import json
+
+from reactor_sdk import time_micros
+
+now = time_micros()
+for view, frame in observation.items():
+    reactor.track(view).push_frame(frame, capture_time_us=now)
+await reactor.send_command("set_proprio_json", {"proprio_json": proprio})
+await reactor.send_command(
+    "set_executed_step_json",
+    {"executed_step_json": json.dumps({"step": step, "observation_time_us": now})},
+)
+```
+
+Without `observation_time_us`, a fresh frame is one that arrived after the echo
+(or after the session start or a `reset`, for the first chunk); at 15 fps that
+adds at most one frame interval, about 67 ms, per chunk. It is weaker than the
+capture time: a frame captured just before the echo can still be on the video
+path when the echo lands. Either way, a client that stops publishing after it
+sends the echo waits until it publishes again.
+
 ## Client contract
 
 Inbound video tracks, named after the DROID training-time cameras:
@@ -43,17 +71,17 @@ Inbound video tracks, named after the DROID training-time cameras:
 | `exterior_view_2` | Second exterior camera |
 
 Any resolution works; the model resizes. Keep publishing the current
-observation at a steady rate so every view has a recent frame when a
-prediction is due.
+observation at a steady rate: each prediction uses the first frame per view
+that arrives after its echo.
 
 Commands:
 
 | Command | Purpose |
 | --- | --- |
 | `set_task_description` | The episode's language instruction (300 chars max). Takes effect on the next chunk. |
-| `set_proprio_json` | `{"joint_position": [[<7 floats>], ...], "gripper_position": [[<float>], ...]}`; the last row is the current state. Refreshed each control step. A malformed or non-finite value is ignored, never zero-filled. |
-| `set_executed_step_json` | `{"step": <int>, "action": [[...]]}` echoing the chunk just executed. The next chunk is predicted only once `step` strictly increases. |
-| `reset` | Reopen the gate: the next chunk is `step` 0 again and needs no echo. |
+| `set_proprio_json` | `{"joint_position": [[<7 floats>], ...], "gripper_position": [[<float>], ...]}`; the last row is the current state. Refreshed each control step. A malformed, non-finite, or out-of-range value is ignored, never zero-filled. |
+| `set_executed_step_json` | `{"step": <int>, "action": [[...]], "observation_time_us": <int>}` echoing the chunk just executed; `observation_time_us` is optional. The next chunk is predicted only once `step` strictly increases and every view has delivered a fresh frame. A malformed or non-finite `step` is ignored. |
+| `reset` | Reopen the gate: the next chunk is `step` 0 again and needs no echo. The echo from before the reset is cleared, so the chunk after that waits for an echo of `step` 0. |
 
 Message, on the data channel:
 
@@ -64,7 +92,7 @@ Message, on the data channel:
 A typical control loop: publish the three tracks, set the task, send the
 current proprio, receive `action_prediction`, execute the chunk (or the
 leading part of it), send fresh proprio and the echo `{"step": <received
-step>, ...}`, receive the next chunk.
+step>, ...}`, keep publishing the tracks, receive the next chunk.
 
 ## Prerequisites
 
@@ -112,7 +140,7 @@ guidance_interval: null
 | `cosmos3_policy_droid_assets.py` | Config parsing, the pinned source checkout, and Hugging Face checkpoint routing |
 | `cosmos3_policy_droid.yaml` | The pinned source revision, which checkpoint to serve, and how to sample it |
 | `PORTING.md` | The decisions behind the two-halves shape |
-| `tests/` | The contract, every refusal, the gates, and the model half's bookkeeping, without a GPU |
+| `tests/` | The contract, every refusal, the gates, frame freshness, and the model half's bookkeeping, without a GPU |
 
 ## Notes
 

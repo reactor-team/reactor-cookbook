@@ -62,14 +62,20 @@ class PolicyState(InputState):
             'JSON `{"step": <int>, "action": [[...]]}` echoing the action '
             "chunk the client just executed. `step` must strictly increase "
             "each time; the next `ActionPrediction` is emitted only once it "
-            "does."
+            "does and every camera view has delivered a fresh frame. An "
+            "optional integer `observation_time_us` gives the capture time "
+            "of the new observation, on the clock the client stamps its "
+            "frames with: a fresh frame is then one captured at or after it. "
+            "Without it, a fresh frame is one that arrives after the echo."
         ),
     )
 
-    # Session scratch the client never sees: the highest executed step the
-    # client has echoed, and the step number of the last chunk this session
-    # sent (-1 before the first). Both gate the next prediction.
+    # Session scratch the client never sees: the highest executed step that
+    # released a prediction, an advanced echo still waiting for fresh frames,
+    # and the step number of the last chunk this session sent (-1 before the
+    # first). Together they gate the next prediction.
     _last_executed: int = -1
+    _pending_echo: int | None = None
     _predicted: int = -1
 
 

@@ -33,17 +33,19 @@ the task; `PolicyResult` carries the `(32, 8)` chunk.
 and the session hooks. `cosmos3_policy_droid_types.py` keeps the client
 contract.
 
-The rendered schema is identical to the fleet model's except for the title
-and the description.
+The rendered schema has the fleet model's commands, fields, tracks, and
+message. It differs in the title and the description, and in the `reset` and
+`executed_step_json` descriptions, which state the tightened gate below
+(decisions 14 and 15).
 
 ## Decisions
 
 1. **The gates are refusals.** The adapter's "first-prediction gate" (every
    view has a frame, proprio parses) and "advance gate" (the echoed step
    strictly increased) were `continue` statements in a tick loop. Each is an
-   `ApplicationError` in `process_input()`. The advance gate's bookkeeping
-   (`_last_executed`) moves at the moment the gate opens, as the adapter
-   did; a failure in `generate()` after that ends the session, so no
+   `ApplicationError` in `process_input()`. An advanced echo is held as
+   `_pending_echo` until the step is released, and `_last_executed` moves
+   only then; a failure in `generate()` after that ends the session, so no
    half-open state survives it.
 
 2. **Frame retention stays on the application.** Cameras deliver
@@ -62,10 +64,13 @@ and the description.
    requires it and `@session_ended` calls it. The policy has nothing to
    forget; the docstring says so rather than inventing work.
 
-5. **The gate is kept as deployed.** A request/reply contract keyed on a
-   client `chunk_id` (the shape `docs/robot-policy-client-contract.md` in
-   reactor-models describes) is planned as its own contract change. This
-   port moves the runtime without moving the schema.
+5. **The wire shape of the gate is kept as deployed.** A request/reply
+   contract keyed on a client `chunk_id` (the shape
+   `docs/robot-policy-client-contract.md` in reactor-models describes) is
+   planned as its own contract change. The commands, fields, and message are
+   unchanged, so an existing client drives this model as it is; decisions 14
+   to 16 tighten what the gate accepts, and the one addition, the echo's
+   optional `observation_time_us`, is a key inside an existing JSON string.
 
 6. **Proprio must be finite.** The adapter accepted any float. `parse_proprio`
    now also rejects NaN or infinite values, since a fabricated state would
@@ -117,16 +122,63 @@ and the description.
     report), and its release pins conflict with the runtime's protobuf.
     Nothing on the serving path reaches either function.
 
+14. **A prediction waits for fresh frames.** Echo and proprio travel on the
+    data channel; frames travel on video tracks and land later. Pairing the
+    newest retained frame with a just-arrived echo therefore predicts from
+    the scene while the previous chunk was still executing. On real DROID
+    episodes, sending the echo at the same moment as the new frames put
+    open-loop joint error level with holding the current pose (0.132 rad vs
+    0.105 rad with fresh frames). The echo may now carry an optional
+    `observation_time_us` on the clock the client stamps frames with, and
+    the step is released only once every view has delivered a frame
+    captured at or after it; the frames' `capture_time_us` is already on the
+    wire, so this adds a JSON key and no field. Without the key, the app
+    drops whatever is buffered when an echo advances (or on `reset`) and
+    waits for a newer frame per view: a read returns the newest frame and
+    empties the buffer, so arrival order is observable without a client
+    clock. That costs at most one frame interval per chunk and is weaker,
+    since a frame captured before the echo can still be on the video path.
+    With the same no-settle client, joint error is 0.109 rad with
+    `observation_time_us` and 0.125 rad with arrival order alone.
+
+15. **`reset` clears the echo.** The chunk after a reset's step 0 is
+    released by an echo larger than -1. Left in place, the echo from before
+    the reset (step 100, say) passed that test at once, and step 1 was
+    predicted before the client had executed step 0. `reset` empties
+    `executed_step_json`, so the next chunk waits for an echo of the new
+    numbering.
+
+16. **The parsers refuse what `json` and NumPy cannot represent.**
+    `{"step": 1e309}` parses as infinity and `int()` raises
+    `OverflowError`; a 400-digit integer in a joint row raises the same on
+    the float32 conversion. An exception out of `process_input()` other than
+    `ApplicationError` stops the runtime, not only the session, so one
+    client command could take the model down. Both parsers treat these like
+    any malformed value: the step is refused and the session continues. They
+    also refuse a document nested deeper than `json.loads` can recurse,
+    which raises `RecursionError`; the fields' 8000-character limit keeps
+    such a document off the wire, but the parsers do not rely on it.
+
 ## Verification
 
-- `PYTHONPATH=. python -m pytest tests/ -q` (30 tests, no GPU): the contract,
-  every refusal, the echo gate across steps, frame retention, the message
-  and its `step`, the error branch, `reset`, session end, the parsers, the
+- `PYTHONPATH=. python -m pytest tests/ -q` (65 tests, no GPU): the contract,
+  every refusal, the echo gate across steps, frame retention and freshness by
+  arrival and by capture time,
+  the message and its `step`, the error branch, `reset` and the echo it
+  clears, session end, the parsers including overflow and deep nesting, the
   config, the pinned checkout against a local Git repository (clone at the
   pin, drift and local edits refused), and the model half with the
   framework stubbed.
 - `python -m reactor_runtime.schema --path .` diffed against the fleet
-  model's: title and description only.
+  model's: title, description, and the `reset` and `executed_step_json`
+  descriptions.
+- Open-loop on 179 samples from 12 `nvidia/Cosmos3-DROID` episodes, served
+  through a `reactor-sdk` client: joint error 0.105 rad against 0.132 rad
+  for holding the current pose, equal to the model half called in-process
+  (0.103 rad); frames from another episode give 0.219 rad, so the three
+  views are wired to the right inputs. Over the same client, both overflow
+  payloads are refused with the session and the runtime still serving, and
+  `reset` holds chunk 1 until the client echoes chunk 0.
 - The image built by `reactor build` cloned the source and served the Edge
   checkpoint on one B200: load 6 s, warmup 20 s, 254 ms per chunk; a
   `reactor-sdk` client saw both gates hold and a 277 ms round trip.
