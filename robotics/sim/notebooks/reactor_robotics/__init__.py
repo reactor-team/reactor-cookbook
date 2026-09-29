@@ -6,7 +6,7 @@ is the map.
 
 | Client | Model | Style | Chunk |
 |---|---|---|---|
-| :class:`~reactor_robotics.xwam.XwamClient` | ``xwam`` | lock-step, ``chunk_id`` echoed as ``step`` | ``(32, 14)`` delta joints |
+| :class:`~reactor_robotics.xwam.XwamClient` | ``xwam`` | lock-step, ``chunk_id`` echoed as ``step`` | ``(32, 14)`` end-effector/gripper deltas |
 | :class:`~reactor_robotics.lingbot_va.LingbotVaClient` | ``lingbot-va`` | lock-step, driven by the executed-action echo | ``(16, 7)`` eef deltas |
 | :class:`~reactor_robotics.cosmos_droid.CosmosDroidClient` | ``cosmos-nano-policy-droid`` | stateless, one chunk per executed-step report | ``(32, 8)`` absolute joints |
 | :class:`~reactor_robotics.groot_n17.GrootN17Client` | ``groot-n17`` | free-running, paired by engine ordering | ``(40, 17)`` across 3 named fields |

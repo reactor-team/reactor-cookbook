@@ -138,21 +138,20 @@ def _run(args: argparse.Namespace) -> None:
         )
         recorder.start()
 
-    bridge.start()
-
-    # Don't start stepping until the model is actually there. The first
-    # chunk is what unblocks the rollout anyway.
-    log.info("connecting to %s", args.model)
-    if not bridge.ready.wait(timeout=args.connect_timeout):
-        bridge.stop()
-        raise SystemExit(f"bridge did not become ready within {args.connect_timeout:.0f}s")
-    if bridge.failed is not None:
-        raise SystemExit(f"bridge failed to connect: {bridge.failed}")
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, lambda *_: driver.stop())
-
     try:
+        bridge.start()
+
+        # Don't start stepping until the model is actually there. The first
+        # chunk is what unblocks the rollout anyway.
+        log.info("connecting to %s", args.model)
+        if not bridge.ready.wait(timeout=args.connect_timeout):
+            raise SystemExit(f"bridge did not become ready within {args.connect_timeout:.0f}s")
+        if bridge.failed is not None:
+            raise SystemExit(f"bridge failed to connect: {bridge.failed}")
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, lambda *_: driver.stop())
+
         log.info("connected; running (Ctrl-C to stop)")
         driver.run()
     finally:

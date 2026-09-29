@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────────────────────────────────
 # Camera video tracks: queue-fed, and that is the whole design decision.
 #
-# `recv` blocks until the gateway pushes a frame, so the track emits EXACTLY
+# The publisher waits until the gateway pushes a frame, so it emits exactly
 # the frames the evaluation produced and nothing else. That matters here in a
 # way it does not in the repo's other examples:
 #
@@ -18,32 +18,29 @@
 # that RTP goes silent between requests, which is why bridge.py connects
 # lazily; see its header.
 #
-# Timestamps come from the wall clock rather than a fixed frame rate, because
-# the gaps between pushes are the model's own inference time and inventing a
-# steady timeline across them would misdate every frame.
+# The SDK timestamps each native push; no synthetic fixed-rate timeline is
+# imposed across the model's inference gaps.
 # ──────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
 import asyncio
-import time
+import logging
 
 import numpy as np
-from aiortc import MediaStreamTrack
-from aiortc.mediastreams import VIDEO_CLOCK_RATE, VIDEO_TIME_BASE
-from av import VideoFrame
+
+log = logging.getLogger("dreamzero_sim.tracks")
 
 
-class QueueVideoTrack(MediaStreamTrack):
+class QueueVideoTrack:
     """Outbound video track fed by a queue of RGB frames."""
 
     kind = "video"
 
     def __init__(self, name: str, queue_size: int = 8) -> None:
-        super().__init__()
         self.name = name
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=queue_size)
-        self._start: float | None = None
-        self._last_pts = -1
+        self._publisher = None
+        self._task: asyncio.Task | None = None
         #: Frames handed to the encoder: one per request per camera.
         self.frames_sent = 0
 
@@ -53,6 +50,8 @@ class QueueVideoTrack(MediaStreamTrack):
         Validated rather than coerced: a float frame silently cast to uint8
         becomes near-black, and the model would accept it without complaint.
         """
+        if self._task is not None and self._task.done():
+            self._task.result()  # surface an encoder failure before accepting more frames
         arr = np.asarray(frame)
         if arr.ndim != 3 or arr.shape[2] != 3:
             raise ValueError(
@@ -64,21 +63,27 @@ class QueueVideoTrack(MediaStreamTrack):
             )
         await self._queue.put(np.ascontiguousarray(arr))
 
-    async def recv(self) -> VideoFrame:
-        rgb = await self._queue.get()
+    async def start(self, reactor) -> None:
+        self._publisher = await reactor.publish_track(self.name)
+        self._task = asyncio.create_task(self._publish())
 
-        now = time.monotonic()
-        if self._start is None:
-            self._start = now
-        pts = int((now - self._start) * VIDEO_CLOCK_RATE)
-        # Strictly increasing, or the encoder drops the frame.
-        if pts <= self._last_pts:
-            pts = self._last_pts + 1
-        self._last_pts = pts
+    async def _publish(self) -> None:
+        try:
+            while True:
+                rgb = await self._queue.get()
+                self._publisher.push_frame(rgb)
+                self.frames_sent += 1
+        except Exception:
+            log.exception("native publisher %s failed", self.name)
+            raise
 
-        frame = VideoFrame.from_ndarray(rgb, format="rgb24")
-        frame = frame.reformat(format="yuv420p")
-        frame.pts = pts
-        frame.time_base = VIDEO_TIME_BASE
-        self.frames_sent += 1
-        return frame
+    async def close(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+            self._task = None
+        if self._publisher is not None:
+            self._publisher.unpublish()
+            self._publisher = None
+        while not self._queue.empty():
+            self._queue.get_nowait()

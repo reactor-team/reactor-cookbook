@@ -18,9 +18,7 @@ import time
 from typing import Callable
 
 import numpy as np
-from aiortc import VideoStreamTrack
-from aiortc.mediastreams import VIDEO_CLOCK_RATE, VIDEO_TIME_BASE
-from av import VideoFrame
+from reactor_sdk import Track
 
 HEARTBEAT_S = 0.5
 POLL_S = 0.005
@@ -30,7 +28,7 @@ POLL_S = 0.005
 PLACEHOLDER_HW = (180, 320)
 
 
-class CameraTrack(VideoStreamTrack):
+class CameraTrack:
     """A sendonly track that emits one frame per gateway request.
 
     ``reader`` returns ``(latest HxWx3 uint8 RGB frame or None, request
@@ -40,20 +38,17 @@ class CameraTrack(VideoStreamTrack):
     kind = "video"
 
     def __init__(self, name: str, reader: Callable[[], tuple[np.ndarray | None, int]]):
-        super().__init__()
         self.name = name
         self._reader = reader
         self._seq = -1
-        self._t0: float | None = None
-        self._last_pts = -1
 
-    async def recv(self) -> VideoFrame:
-        img = await self._next_request_frame()
-        if img is None:
-            img = np.zeros((*PLACEHOLDER_HW, 3), dtype=np.uint8)
-        frame = VideoFrame.from_ndarray(img, format="rgb24")
-        frame.pts, frame.time_base = self._timestamp(), VIDEO_TIME_BASE
-        return frame
+    async def pump(self, track: Track) -> None:
+        """Feed paced RGB arrays to the SDK's native video sender."""
+        while True:
+            img = await self._next_request_frame()
+            if img is None:
+                img = np.zeros((*PLACEHOLDER_HW, 3), dtype=np.uint8)
+            track.push_frame(img)
 
     async def _next_request_frame(self) -> np.ndarray | None:
         deadline = time.monotonic() + HEARTBEAT_S
@@ -65,13 +60,3 @@ class CameraTrack(VideoStreamTrack):
             if time.monotonic() >= deadline:
                 return img  # heartbeat: repeat the last frame, keep RTP flowing
             await asyncio.sleep(POLL_S)
-
-    def _timestamp(self) -> int:
-        """Wall-clock pts: frames leave at the request cadence, not a steady
-        frame rate, so a fixed-step counter would drift behind real time."""
-        now = time.monotonic()
-        if self._t0 is None:
-            self._t0 = now
-        pts = max(int((now - self._t0) * VIDEO_CLOCK_RATE), self._last_pts + 1)
-        self._last_pts = pts
-        return pts

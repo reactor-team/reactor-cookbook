@@ -114,3 +114,17 @@ PYTHONPATH=. python -m pytest tests/ -q
 
 Schema output is the client contract: diff it before and after a change and
 confirm only the intended surface moved.
+
+## Robotics client documentation
+
+Public robotics docs consume `robotics/sim/notebooks/reactor_robotics` and the
+`cosmos-droid`, `robotwin`, `dreamzero`, and `libero` simulator packages.
+These five environments pin Python SDK 1.6.0. Preserve the notebook helper's
+shared camera capture timestamps when updating transport code; a timestamp
+on a frame does not guarantee model-level observation synchronization.
+`ReactorSession.send` returns the correlated SDK envelope or None; `next_message`
+returns its data payload. Queue callback delivery once to avoid duplicate actions.
+Run the notebook tests, gateway unit/transport tests, and `check_wiring.py` for
+changed adapters. Full simulator rollouts are separate validation.
+The public documentation's first-action examples use synthetic inputs and must
+not acquire a dependency on recorded robot captures or private repositories.

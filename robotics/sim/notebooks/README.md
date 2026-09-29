@@ -13,6 +13,21 @@ reading order. `xwam` is the reference implementation of
 the generic [robot policy client contract](./robot-policy-client-contract.md),
 so it is the one to read if you want the contract itself rather than a model.
 
+## Official documentation setup
+
+The [robotics docs](https://docs.reactor.inc/robotics/overview) use this public
+folder for all first-action examples. From this directory, run
+`uv sync --frozen --python 3.12` to install the pinned `reactor-sdk==1.6.0`
+and the local `reactor_robotics` helpers. These helpers are example code, not
+part of the published SDK. SDK 1.6 owns transport keepalive and publishes frames
+through native tracks. On Linux, its glibc wheel requires glibc 2.34 or newer.
+
+The docs' synthetic-input examples need no recorded data, simulator, GPU, or
+model weights. They check connectivity and response shape, not task success.
+Hosted model access and an API key are still required.
+
+Offline checks: `uv run --frozen python -m unittest discover -s tests -v`.
+
 ## Choose a model
 
 The six replay guides in this directory start with the same lightweight
@@ -64,7 +79,7 @@ For an explicit package install instead of the project environment:
 
 ```sh
 uv venv --python 3.12
-uv pip install "reactor-sdk>=1.1.1" "numpy>=1.26"
+uv sync --frozen --python 3.12
 ```
 
 Set the key in your shell, not in a script: a key pasted into a script is

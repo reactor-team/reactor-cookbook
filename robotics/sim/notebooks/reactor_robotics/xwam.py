@@ -8,7 +8,7 @@ X-WAM is the reference implementation of
     client = XwamClient()
     await client.connect()
     pred = await client.predict(frames, proprio, task="pick up the bottle")
-    pred.actions            # (32, 14) delta joint actions, bimanual
+    pred.actions            # (32, 14) end-effector and gripper deltas, bimanual
     await client.close()
 
 This is the client that produced the published evaluation numbers. Two
@@ -47,7 +47,7 @@ from .session import ReactorSession
 #: accepts a wrist frame published on the head track, so key frames by name.
 VIEWS: tuple[str, str, str] = ("head_view", "left_wrist_view", "right_wrist_view")
 
-#: (control steps, action dim). 14 = bimanual delta joint actions.
+#: (control steps, action dim). 14 = bimanual end-effector and gripper deltas.
 ACTION_SHAPE: tuple[int, int] = (32, 14)
 
 #: Proprioception layout width.
@@ -61,7 +61,7 @@ class XwamPrediction:
     """One answered request."""
 
     actions: np.ndarray
-    """``(32, 14)`` delta joint actions: what the robot executes."""
+    """``(32, 14)`` end-effector and gripper deltas: what the robot executes."""
 
     proprios: np.ndarray
     """``(9, 16)`` predicted future robot states. Diagnostic; nothing

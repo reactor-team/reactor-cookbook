@@ -27,6 +27,12 @@ msgpack_numpy.py  the numpy-aware msgpack codec RoboLab's client speaks
 main.py           wires the above together and serves on :5000
 ```
 
+## Python SDK
+
+This example pins `reactor-sdk==1.6.0`. It publishes camera frames through native
+SDK tracks; the SDK owns transport keepalive. On Linux, the glibc wheel requires
+glibc 2.34 or newer. The simulator has its own hardware and dependency requirements.
+
 ## Matching chunks to observations
 
 The obvious implementation is wrong:
@@ -115,7 +121,7 @@ The gateway needs no simulator, no GPU and no model weights. With
 [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv sync --python 3.12
+uv sync --frozen --python 3.12
 export REACTOR_API_KEY='<your key>'   # create one at https://reactor.inc/account/api-keys
 ```
 

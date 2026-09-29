@@ -34,14 +34,8 @@
 #    session, and the priming frames are the first real observation's own
 #    frames; nothing synthetic enters the model.
 #
-# 4. THE STANDARD SDK ORDER. Handlers before connect(), READY before
-#    publish_track (publishing early does nothing at all: no error, no
-#    track), and a client-side keepalive, because the runtime drops a client
-#    that is quiet for 20 s and reactor-sdk 0.8.0 has no ping of its own. An
-#    evaluation is quiet by construction while the simulator executes a chunk.
-#
-# reactor-sdk exchanges the API key for a session JWT through the API's
-# /tokens endpoint over HTTPS. This bridge never prints or logs the key.
+# 4. THE STANDARD SDK ORDER. Register handlers before connect(), then
+#    publish named native tracks after READY. SDK 1.6 owns the keepalive.
 # ──────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -75,8 +69,6 @@ log = logging.getLogger("dreamzero_sim.bridge")
 DEFAULT_MODEL = "dreamzero"
 #: PROD, where dreamzero is served. Overridable for a different deployment.
 DEFAULT_API_URL = "https://api.reactor.inc"
-#: The runtime's watchdog fires at 20 s of client silence; ping at half that.
-PING_INTERVAL_S = 10.0
 #: A cold session for this model has to schedule TWO GPUs, stage ~60 GB of
 #: weights and warm compilation before it reports READY. Waiting is correct;
 #: timing out early just loses the workers you started.
@@ -118,7 +110,6 @@ class Bridge:
         chunk_timeout_s: float = 300.0,
         ready_timeout_s: float = DEFAULT_READY_TIMEOUT_S,
         prime_stagger_s: float = 2.0,
-        ping_interval_s: float = PING_INTERVAL_S,
     ) -> None:
         from reactor_sdk import Reactor
 
@@ -132,17 +123,14 @@ class Bridge:
         self._reactor = Reactor(model_name, api_key=api_key, api_url=api_url)
         self._tracks = {name: QueueVideoTrack(name) for name in TRACKS}
         self._chunks: asyncio.Queue = asyncio.Queue()
-        self._ready = asyncio.Event()
-        self._dropped = asyncio.Event()
         self._episode_started = asyncio.Event()
-        self._keepalive_task: asyncio.Task | None = None
-        self._ping_interval_s = ping_interval_s
         self._connected = False
         self._connecting: asyncio.Lock = asyncio.Lock()
         self._primed = False
         self._prompt: str | None = None
         #: Highest obs_seq seen this episode; -1 before any chunk.
         self._obs_seq_high = -1
+        self._register()
 
     # ── lifecycle ───────────────────────────────────────────────────────────
 
@@ -157,17 +145,12 @@ class Bridge:
                 return
             await self._connect()
 
-    async def _connect(self) -> None:
-        from reactor_sdk import ReactorStatus
-
+    def _register(self) -> None:
         @self._reactor.on_status
         def _on_status(status) -> None:  # pragma: no cover - network callback
             log.info("status: %s", getattr(status, "name", status))
-            if status == ReactorStatus.READY:
-                self._ready.set()
-            elif status == ReactorStatus.DISCONNECTED:
-                self._dropped.set()
 
+        # The SDK also emits correlated command replies here, exactly once.
         @self._reactor.on_message
         def _on_message(msg) -> None:  # pragma: no cover - network callback
             if not isinstance(msg, dict):
@@ -178,50 +161,18 @@ class Bridge:
         def _on_error(err) -> None:  # pragma: no cover - network callback
             log.error("session error: %s", err)
 
+    async def _connect(self) -> None:
         log.info("connecting to %s at %s", self.model_name, self.api_url)
-        await self._reactor.connect()
-        self._connected = True
-        await self._wait_ready()
-        for name in TRACKS:
-            await self._reactor.publish_track(name, self._tracks[name])
-        log.info("tracks published: %s", ", ".join(TRACKS))
-        self._keepalive_task = asyncio.create_task(self._keepalive())
-
-    async def _wait_ready(self) -> None:
-        """Wait for READY, but give up the moment the session is dropped.
-
-        There is no FAILED status in the SDK. A session that cannot be placed
-        goes CONNECTING -> WAITING -> DISCONNECTED, so a plain wait for READY
-        sits out the entire ready timeout on a session that is already dead.
-        That matters more here than anywhere else in this repo, because this
-        model's legitimate cold start is minutes long, so the timeout is
-        generous. Race the two instead.
-        """
-        ready = asyncio.ensure_future(self._ready.wait())
-        dropped = asyncio.ensure_future(self._dropped.wait())
         try:
-            await asyncio.wait(
-                {ready, dropped},
-                timeout=self.ready_timeout_s,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        finally:
-            for task in (ready, dropped):
-                task.cancel()
-        if self._ready.is_set():
-            return
-        if self._dropped.is_set():
-            raise ConnectionError(
-                f"the {self.model_name} session was dropped before it reached "
-                "READY. Either the deployment is not currently serving, or the "
-                "cluster could not place a two-GPU session: session creation "
-                "answers a busy cluster with HTTP 429 rather than queueing. "
-                "Retry after a short wait."
-            )
-        raise TimeoutError(
-            f"the {self.model_name} session did not reach READY within "
-            f"{self.ready_timeout_s:.0f}s"
-        )
+            # Native connect resolves at READY; include provisioning in the timeout.
+            await asyncio.wait_for(self._reactor.connect(), self.ready_timeout_s)
+            for name in TRACKS:
+                await self._tracks[name].start(self._reactor)
+            self._connected = True
+        except BaseException:
+            await self.close()
+            raise
+        log.info("tracks published: %s", ", ".join(TRACKS))
 
     def _handle_message(self, msg_type: str, data: dict) -> None:
         if msg_type == MESSAGE_ACTION_CHUNK:
@@ -243,38 +194,18 @@ class Bridge:
                 "model rejected %s: %s", data.get("command"), data.get("reason")
             )
 
-    async def _keepalive(self) -> None:
-        from reactor_sdk.types import MessageScope
-
-        while True:
-            try:
-                await self._reactor.send_command(
-                    "ping", {}, scope=MessageScope.RUNTIME
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # pragma: no cover - transport hiccup
-                log.warning("keepalive ping failed", exc_info=True)
-            await asyncio.sleep(self._ping_interval_s)
-
     async def close(self) -> None:
-        """Stop the keepalive and disconnect. Safe to call twice.
-
-        Always call this: a live session holds two real GPU workers.
-        """
-        if self._keepalive_task is not None:
-            self._keepalive_task.cancel()
-            try:
-                await self._keepalive_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._keepalive_task = None
-        if self._connected:
-            try:
-                await self._reactor.disconnect()
-            except Exception:  # pragma: no cover - best-effort teardown
-                log.warning("disconnect() failed during close", exc_info=True)
+        """Stop publishers, end the GPU session, and release the native handle."""
+        for track in self._tracks.values():
+            await track.close()
+        try:
+            await self._reactor.disconnect()
+        except Exception:  # pragma: no cover - best-effort teardown
+            log.warning("disconnect() failed during close", exc_info=True)
+        finally:
+            self._reactor.close()
             self._connected = False
+            self._primed = False
         log.info("session closed: %s", self.diag.summary())
 
     # ── episodes ────────────────────────────────────────────────────────────
@@ -323,6 +254,7 @@ class Bridge:
         )
         starting_episode = bool(prompt) and prompt != self._prompt
         if starting_episode:
+            self._episode_started.clear()
             await self._reactor.send_command(CMD_SET_PROMPT, {FIELD_PROMPT: prompt})
             self._prompt = prompt
 
@@ -340,7 +272,6 @@ class Bridge:
             # the old episode's number and stall instead.
             seq_floor = -1
             self._obs_seq_high = -1
-            self._episode_started.clear()
 
         t0 = time.perf_counter()
         await self._push(frames)

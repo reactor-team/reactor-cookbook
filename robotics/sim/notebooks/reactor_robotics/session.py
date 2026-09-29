@@ -8,8 +8,8 @@ matter:
 1. Handlers are registered before ``connect()``, because ``READY`` can arrive
    before the first ``await`` after ``connect()`` returns.
 2. Tracks are published only after ``READY``. The current SDK rejects an early
-   ``publish_track`` instead of dropping it, but the client still has to await
-   the asynchronous ``CONNECTING`` -> ``WAITING`` -> ``READY`` transition.
+   ``publish_track`` instead of dropping it. SDK 1.6 resolves ``connect()``
+   at READY.
 3. One publisher loop pushes every view at the configured frame rate. Frames
    from one observation retain the shared capture stamp assigned by
    :meth:`set_frames` even though their pushes land separately.
@@ -116,6 +116,7 @@ class ReactorSession:
         self._ready = asyncio.Event()
         self._publisher_task: asyncio.Task | None = None
         self._connected = False
+        self._closed = False
         #: Handlers are registered on the SDK object, which outlives a failed
         #: connect(). Registering them twice would deliver every reply twice,
         #: so a retried connect() must not re-register.
@@ -196,12 +197,15 @@ class ReactorSession:
         Split out from :meth:`connect` so a retried attempt re-runs only this
         part and never re-registers handlers.
         """
+        if self._closed:
+            raise RuntimeError("session is closed; create a new ReactorSession")
+        if self._connected:
+            raise RuntimeError("session is already connected")
         self._ready.clear()
-        await self._reactor.connect()
+        await asyncio.wait_for(self._reactor.connect(), timeout=ready_timeout_s)
         self._connected = True
 
-        # (2) READY before publish_track; the SDK rejects an early publish.
-        await asyncio.wait_for(self._ready.wait(), timeout=ready_timeout_s)
+        # SDK 1.6 connect resolves at READY; its callback may be delivered later.
 
         for name in track_names:
             # Reuse an existing track object across a reconnect so a caller
@@ -221,6 +225,7 @@ class ReactorSession:
         # (3) Push all views from one task so their wire cadence stays together.
         if self._publisher_task is None or self._publisher_task.done():
             self._publisher_task = asyncio.create_task(self._publish_frames())
+            self._publisher_task.add_done_callback(self._report_publish_failure)
 
     async def _publish_frames(self) -> None:
         """Repeat the current observation on every track at ``self.fps``."""
@@ -239,11 +244,27 @@ class ReactorSession:
 
     # -------------------------------------------------------------- messages
 
-    async def send(self, command: str, payload: dict | None = None) -> None:
-        await self._reactor.send_command(command, payload or {})
+    @staticmethod
+    def _report_publish_failure(task: asyncio.Task) -> None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            log.error("camera publisher stopped: %s", error)
+
+    def _check_publisher(self) -> None:
+        task = self._publisher_task
+        if task is not None and task.done() and not task.cancelled():
+            task.result()
+
+    async def send(self, command: str, payload: dict | None = None) -> dict | None:
+        """Return a correlated SDK envelope or None for a bodyless acknowledgement.
+
+        Replies also reach on_message; only that callback enqueues the payload.
+        """
+        self._check_publisher()
+        return await self._reactor.send_command(command, payload or {})
 
     async def next_message(self, msg_type: str, *, timeout_s: float) -> dict:
         """Await the next ``data`` payload of one message type."""
+        self._check_publisher()
         return await asyncio.wait_for(
             self.subscribe(msg_type).get(), timeout=timeout_s
         )
@@ -298,6 +319,9 @@ class ReactorSession:
 
         Always call this: a live session holds a real GPU worker.
         """
+        if self._closed:
+            return
+        self._closed = True
         if self._publisher_task is not None:
             self._publisher_task.cancel()
             try:
@@ -309,10 +333,10 @@ class ReactorSession:
             self._publisher_task = None
         for track in self.tracks.values():
             track.unbind()
-        if self._connected:
-            try:
-                await self._reactor.disconnect()
-            except Exception:  # pragma: no cover - best-effort teardown
-                log.warning("disconnect() failed during close", exc_info=True)
+        try:
+            # Release sessions allocated by incomplete connection attempts too.
+            await self._reactor.disconnect()
+        finally:
+            self._reactor.close()
             self._connected = False
         log.info("session closed")
