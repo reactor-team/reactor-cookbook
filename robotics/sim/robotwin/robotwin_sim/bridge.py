@@ -10,18 +10,14 @@
 # Three properties of this path are the difference between working and
 # subtly wrong, and all three are invisible at runtime:
 #
-# 1. ORDER AT CONNECT. Register handlers before connect() (READY can arrive
-#    before the first await after it returns), then wait for READY before
-#    publish_track. Publishing early does nothing at all, no error and no
-#    track, and the model then waits forever for frames.
-# 2. KEEPALIVE. The runtime kills a client that goes quiet for 20 s and
-#    reactor-sdk 0.8.0 has no ping of its own. A lock-step eval is quiet by
-#    construction while the simulator steps physics, so the bridge pings on
-#    its own 10 s loop for the life of the session.
+# 1. ORDER AT CONNECT. SDK 1.6 connect() resolves at READY; publish named
+#    tracks after it returns, then push paced RGB observations into them.
+# 2. KEEPALIVE. The SDK owns client keepalive, including while the simulator
+#    is stepping physics and the gateway has no new requests.
 # 3. RETRY MUST CHANGE A BYTE. See contract.encode_state_json.
 #
-# reactor-sdk exchanges the API key for a session JWT through the API's
-# /tokens endpoint over HTTPS. This bridge never prints or logs the key.
+# reactor-sdk exchanges the API key with the configured Reactor API for
+# a session JWT.
 # ──────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -52,8 +48,6 @@ log = logging.getLogger("robotwin_sim.bridge")
 DEFAULT_MODEL = "xwam"
 #: PROD, where xwam is served. Overridable for a different deployment.
 DEFAULT_API_URL = "https://api.reactor.inc"
-#: The runtime's watchdog fires at 20 s of client silence; ping at half that.
-PING_INTERVAL_S = 10.0
 
 
 @dataclass
@@ -90,7 +84,6 @@ class Bridge:
         timeout_s: float = 30.0,
         retries: int = 2,
         ready_timeout_s: float = 300.0,
-        ping_interval_s: float = PING_INTERVAL_S,
     ) -> None:
         from reactor_sdk import Reactor
 
@@ -113,119 +106,62 @@ class Bridge:
             for view in VIEWS
         }
         self._replies: asyncio.Queue = asyncio.Queue()
-        self._ready = asyncio.Event()
-        self._dropped = asyncio.Event()
-        self._keepalive_task: asyncio.Task | None = None
+        self._pump_tasks: list[asyncio.Task] = []
         self._connected = False
         self._task: str | None = None
         self._chunk_id = 0
-        self._ping_interval_s = ping_interval_s
 
     # ── lifecycle ───────────────────────────────────────────────────────────
 
     async def connect(self) -> None:
-        """Register handlers, connect, await READY, publish tracks, start ping.
-
-        The order of those steps is the whole point of this method; see the
-        module header.
-        """
-        from reactor_sdk import ReactorStatus
-
+        """Register handlers, connect at READY, then publish and pump frames."""
         @self._reactor.on_status
         def _on_status(status) -> None:  # pragma: no cover - network callback
             log.info("status: %s", getattr(status, "name", status))
-            if status == ReactorStatus.READY:
-                self._ready.set()
-            elif status == ReactorStatus.DISCONNECTED:
-                self._dropped.set()
 
         @self._reactor.on_message
         def _on_message(msg) -> None:  # pragma: no cover - network callback
-            if isinstance(msg, dict) and msg.get("type") == MESSAGE_ACTION_PREDICTION:
-                self._replies.put_nowait(msg.get("data") or {})
+            self._accept_reply(msg)
 
         @self._reactor.on_error
         def _on_error(err) -> None:  # pragma: no cover - network callback
             log.error("session error: %s", err)
 
-        await self._reactor.connect()
-        self._connected = True
-        await self._wait_ready()
-        for view in VIEWS:
-            await self._reactor.publish_track(view, self._tracks[view])
+        try:
+            await asyncio.wait_for(self._reactor.connect(), self.ready_timeout_s)
+            self._connected = True
+            for view in VIEWS:
+                track = await self._reactor.publish_track(view)
+                self._pump_tasks.append(
+                    asyncio.create_task(self._tracks[view].pump(track))
+                )
+        except BaseException:
+            await self.close()
+            raise
         log.info(
             "connected to %s at %s; tracks published: %s",
             self.model_name,
             self.api_url,
             ", ".join(VIEWS),
         )
-        self._keepalive_task = asyncio.create_task(self._keepalive())
 
-    async def _wait_ready(self) -> None:
-        """Wait for READY, but give up the moment the session is dropped.
-
-        There is no FAILED status in the SDK, and a session that cannot be
-        placed goes CONNECTING -> WAITING -> DISCONNECTED, so a plain wait for
-        READY sits out the entire ready timeout on a session that is already
-        dead. Race the two instead.
-        """
-        ready = asyncio.ensure_future(self._ready.wait())
-        dropped = asyncio.ensure_future(self._dropped.wait())
-        try:
-            await asyncio.wait(
-                {ready, dropped},
-                timeout=self.ready_timeout_s,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        finally:
-            for task in (ready, dropped):
-                task.cancel()
-        if self._ready.is_set():
-            return
-        if self._dropped.is_set():
-            raise ConnectionError(
-                f"the {self.model_name} session was dropped before it reached "
-                "READY. Either the deployment is not currently serving, or the "
-                "cluster is at capacity: session creation answers a busy "
-                "cluster with HTTP 429 rather than queueing. Retry after a "
-                "short wait."
-            )
-        raise TimeoutError(
-            f"the {self.model_name} session did not reach READY within "
-            f"{self.ready_timeout_s:.0f}s"
-        )
-
-    async def _keepalive(self) -> None:
-        from reactor_sdk.types import MessageScope
-
-        while True:
-            try:
-                await self._reactor.send_command(
-                    "ping", {}, scope=MessageScope.RUNTIME
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # pragma: no cover - transport hiccup
-                log.warning("keepalive ping failed", exc_info=True)
-            await asyncio.sleep(self._ping_interval_s)
+    def _accept_reply(self, msg) -> None:
+        if isinstance(msg, dict) and msg.get("type") == MESSAGE_ACTION_PREDICTION:
+            self._replies.put_nowait(msg.get("data") or {})
 
     async def close(self) -> None:
-        """Stop the keepalive and disconnect. Safe to call twice.
-
-        Always call this: a live session holds a real GPU worker.
-        """
-        if self._keepalive_task is not None:
-            self._keepalive_task.cancel()
-            try:
-                await self._keepalive_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            self._keepalive_task = None
-        if self._connected:
-            try:
-                await self._reactor.disconnect()
-            except Exception:  # pragma: no cover - best-effort teardown
-                log.warning("disconnect() failed during close", exc_info=True)
+        """Stop frame pumps, end the session, and release the native handle."""
+        for task in self._pump_tasks:
+            task.cancel()
+        await asyncio.gather(*self._pump_tasks, return_exceptions=True)
+        self._pump_tasks.clear()
+        try:
+            # Also clean up a partially completed connect().
+            await self._reactor.disconnect()
+        except Exception:  # pragma: no cover - best-effort teardown
+            log.warning("disconnect() failed during close", exc_info=True)
+        finally:
+            self._reactor.close()
             self._connected = False
         log.info("session closed: %s", self.diag.summary())
 
@@ -269,13 +205,19 @@ class Bridge:
                 self.diag.retries += 1
             state_json = encode_state_json(request, self._chunk_id, retry=attempt)
             t0 = time.perf_counter()
-            await self._reactor.send_command(
-                CMD_SET_STATE, {FIELD_STATE: state_json}
-            )
             try:
+                # SDK 1.6 also dispatches correlated replies to on_message;
+                # ignore the returned envelope to avoid enqueueing it twice.
+                # Bound ACK and action waits by the same attempt deadline.
+                deadline = asyncio.get_running_loop().time() + self.timeout_s
+                await asyncio.wait_for(
+                    self._reactor.send_command(CMD_SET_STATE, {FIELD_STATE: state_json}),
+                    timeout=self.timeout_s,
+                )
                 while True:
                     data = await asyncio.wait_for(
-                        self._replies.get(), timeout=self.timeout_s
+                        self._replies.get(),
+                        timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
                     )
                     step, actions, proprios = decode_prediction(data)
                     if step != self._chunk_id:

@@ -5,13 +5,8 @@ description = "Minimal RoboLab gateway example: Isaac Sim's DROID benchmark driv
 requires-python = ">=3.10"
 
 dependencies = [
-    # Pinned exactly at 0.8.0, the version this path was verified against. The
-    # bridge works around a specific gap in it (no client keepalive; see
-    # bridge.py). The three older examples in this repo floor at >=0.2.2;
-    # this one needs 0.8.0's API, in particular the runtime-scoped ping.
-    "reactor-sdk==0.8.0",
-    "aiortc>=1.9",
-    "av>=12.0",
+    # Native publisher API; keep aligned with notebooks/pyproject.toml.
+    "reactor-sdk==1.6.0",
     "numpy>=1.26",
     # The openpi msgpack-WebSocket protocol RoboLab's own client speaks.
     # The server itself is in this package rather than taken as a dependency;

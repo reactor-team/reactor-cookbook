@@ -18,8 +18,8 @@
 #
 #   request arrives -> frames+proprio out -> echo chunk N -> await N+1 -> reply
 #
-# reactor-sdk exchanges the API key for a session JWT through the API's
-# /tokens endpoint over HTTPS. This bridge never prints or logs the key.
+# reactor-sdk exchanges the API key with the configured Reactor API for
+# a session JWT.
 # ──────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
@@ -74,6 +74,7 @@ class Bridge:
         # echo delay carries the same caveat.
         self._settle_s = settle_s
         self._chunks: asyncio.Queue = asyncio.Queue()
+        self._pump_tasks: list[asyncio.Task] = []
         self._relay_task: asyncio.Task | None = None
         self._last_task: str | None = None
         self._last_step: int | None = None
@@ -85,19 +86,11 @@ class Bridge:
     def _register(self) -> None:
         reactor = self.reactor
 
-        @reactor.on_status(ReactorStatus.READY)
-        async def _ready(_status):
-            await self._on_ready()
-
         @reactor.on_message
         def _message(message, *_scope):
-            try:
-                decoded = decode_chunk(message)
-            except ValueError as exc:
-                log.warning("dropping malformed chunk: %s", exc)
-                return
-            if decoded is not None:
-                self._chunks.put_nowait(decoded)
+            # SDK 1.6 also dispatches correlated message replies here. The
+            # send_command return must not enqueue the same action again.
+            self._accept_chunk(message)
 
         @reactor.on_error
         def _error(err):
@@ -108,13 +101,22 @@ class Bridge:
                 getattr(err, "message", err),
             )
 
-    async def _on_ready(self) -> None:
-        # TRACKS order is the model's declared order, so publish in it.
+    def _accept_chunk(self, message) -> None:
+        try:
+            decoded = decode_chunk(message)
+        except ValueError as exc:
+            log.warning("dropping malformed chunk: %s", exc)
+            return
+        if decoded is not None:
+            self._chunks.put_nowait(decoded)
+
+    async def _publish_tracks(self) -> None:
         for name in TRACKS:
-            await self.reactor.publish_track(name, CameraTrack(name, self._gateway.frame_reader(name)))
+            track = await self.reactor.publish_track(name)
+            source = CameraTrack(name, self._gateway.frame_reader(name))
+            self._pump_tasks.append(asyncio.create_task(source.pump(track)))
             log.info("published track %s", name)
-        if self._relay_task is None or self._relay_task.done():
-            self._relay_task = asyncio.create_task(self._relay())
+        self._relay_task = asyncio.create_task(self._relay())
 
     # ── the relay: one gateway request -> one chunk ──────────────────────────
     async def _relay(self) -> None:
@@ -125,6 +127,10 @@ class Bridge:
                 continue
             try:
                 await self._serve_one(req)
+            except asyncio.CancelledError:
+                req.error = "bridge closed before the request completed"
+                req.done.set()
+                raise
             except Exception as exc:  # surface in RoboLab, keep relaying
                 log.exception("request failed")
                 req.error = f"{type(exc).__name__}: {exc}"
@@ -133,20 +139,21 @@ class Bridge:
     async def _serve_one(self, req) -> None:
         if self.reactor.get_status() != ReactorStatus.READY:
             raise RuntimeError("session is not READY")
+        # Drain before any command can trigger a reply. In particular the
+        # first proprio can produce an action before send_command returns.
+        while not self._chunks.empty():
+            stale = self._chunks.get_nowait()
+            log.warning("discarding stale chunk step=%d", stale[0])
+
+        # Give the camera pumps time to send this request's new observation
+        # before task/proprio can trigger the first prediction.
+        if self._settle_s > 0:
+            await asyncio.sleep(self._settle_s)
         if req.task and req.task != self._last_task:
             await self.reactor.send_command(CMD_SET_TASK, {FIELD_TASK: req.task})
             self._last_task = req.task
             log.info("task: %r", req.task)
         await self.reactor.send_command(CMD_SET_PROPRIO, {FIELD_PROPRIO: req.proprio_json})
-        if self._settle_s > 0:
-            await asyncio.sleep(self._settle_s)
-
-        # Drop any chunk that predates this request. The gate means there
-        # is at most one in flight, but a late arrival from a previous
-        # (timed-out) request must not be served as this request's answer.
-        while not self._chunks.empty():
-            stale = self._chunks.get_nowait()
-            log.warning("discarding stale chunk step=%d", stale[0])
 
         # Open the flow gate. The first request of a session has nothing to
         # echo; the engine emits the first chunk once task+proprio are in.
@@ -167,22 +174,40 @@ class Bridge:
         return self.reactor.get_status() == ReactorStatus.READY
 
     async def __aenter__(self) -> "Bridge":
-        await self.reactor.connect()
+        try:
+            # SDK 1.6 connect() resolves at READY. Publish here so callback
+            # scheduling cannot race startup or hide publication failures.
+            await self.reactor.connect()
+            await self._publish_tracks()
+        except BaseException:
+            await self.close()
+            raise
         return self
 
-    async def __aexit__(self, *exc) -> None:
-        if self._relay_task and not self._relay_task.done():
-            self._relay_task.cancel()
+    async def close(self) -> None:
+        tasks = [*self._pump_tasks]
+        if self._relay_task is not None:
+            tasks.append(self._relay_task)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._pump_tasks.clear()
+        self._relay_task = None
         try:
-            await self.reactor.disconnect(recoverable=False)
+            await self.reactor.disconnect()
         except Exception:
-            pass
+            log.warning("disconnect failed during close", exc_info=True)
+        finally:
+            self.reactor.close()
+
+    async def __aexit__(self, *exc) -> None:
+        await self.close()
 
 
 class BridgeThread(threading.Thread):
     """Runs the Bridge on its own event loop in its own thread. The openpi
     WebsocketPolicyServer owns the main thread (its serve_forever blocks),
-    so asyncio/aiortc for the Reactor side live here. Nothing crosses the
+    so asyncio for the Reactor side live here. Nothing crosses the
     boundary except GatewayState, which is lock-guarded."""
 
     def __init__(self, **bridge_kwargs):

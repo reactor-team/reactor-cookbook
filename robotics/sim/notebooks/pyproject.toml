@@ -5,9 +5,7 @@ description = "Quickstart scripts + minimal clients for Reactor-served robotics 
 requires-python = ">=3.10"
 
 dependencies = [
-    # 1.1.1 is the first release that carries a caller-supplied
-    # capture_time_us through push_frame instead of replacing it at send time.
-    "reactor-sdk>=1.1.1",
+    "reactor-sdk==1.6.0",
     "numpy>=1.26",
 ]
 
