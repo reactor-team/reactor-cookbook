@@ -60,6 +60,22 @@ one at a time. Three rules follow, for an agent editing or reviewing here:
   `reset()` without arguments; the step time read from `outcome.elapsed`,
   not measured again.
 
+## Every `reactor.yaml` is on the latest spec format
+
+Readers copy a manifest from here as their starting point, so every model
+manifest declares the current `reactor` CLI spec format, `$schema: reactor/v2`.
+An older header (`$schema: reactor/v1`, the `apiVersion`/`kind` header, or no
+header at all) still loads, but the CLI prints a deprecation warning, and a
+later CLI will refuse it. When the CLI moves to a newer format, all models here
+move with it in one change.
+
+- `recording:` nests under `runtime:`. A top-level `recording:` block is the
+  legacy placement, and under `reactor/v2` the CLI rejects it.
+- A deployment plan nests `instances:` under `deployment:`.
+- `reactor validate` in the model folder prints `✓ reactor.yaml` with no
+  warning. Review asks for the switch on any PR that adds or edits a
+  manifest on an older format.
+
 ## Layout
 
 - `models/` — deployable models; each folder is a `reactor` CLI workspace

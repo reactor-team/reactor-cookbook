@@ -138,8 +138,9 @@ carry the mark — it does nothing for them.
 
 ## Manifest and dependencies
 
-- `reactor.yaml` orders `model:`, `runtime:` (with `recording:` nested under
-  it), then `build:`. `model.version` is semver with a `v` prefix and bumps
+- `reactor.yaml` opens with `$schema: reactor/v2`, the current spec format
+  (see AGENTS.md), and orders `model:`, `runtime:` (with `recording:` nested
+  under it), then `build:`. `model.version` is semver with a `v` prefix and bumps
   with every shipped change, sized to the schema impact — any command,
   message, or field change is at least a minor bump.
 - `build.runtime_version` pins the current Reactor Runtime release, 3.5.0

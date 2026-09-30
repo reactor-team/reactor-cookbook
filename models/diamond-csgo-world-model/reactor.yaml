@@ -1,5 +1,5 @@
 # Reactor model specification for the DIAMOND CSGO recipe.
-$schema: reactor/v1
+$schema: reactor/v2
 
 model:
   name: diamond-csgo-world-model

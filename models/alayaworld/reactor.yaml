@@ -1,5 +1,5 @@
 # Reactor model specification for the AlayaWorld recipe.
-$schema: reactor/v1
+$schema: reactor/v2
 
 model:
   name: alaya-world

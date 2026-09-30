@@ -1,5 +1,5 @@
 # Reactor model specification for the FastH3 continuous channel.
-$schema: reactor/v1
+$schema: reactor/v2
 
 model:
   name: fasth3

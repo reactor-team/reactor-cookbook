@@ -169,7 +169,7 @@ def test_reactor_manifest_declares_generated_gpu_build() -> None:
     """Build the GPU recipe from the versioned Reactor manifest."""
     document = yaml.safe_load((EXAMPLE_DIR / "reactor.yaml").read_text())
 
-    assert document["$schema"] == "reactor/v1"
+    assert document["$schema"] == "reactor/v2"
     assert document["model"]["resources"]["gpu"]["count"] == 1
     assert document["runtime"]["weights_path"] == "~/.cache/reactor_registry/evoke"
     assert document["build"]["runtime_version"] == "3.5.0"

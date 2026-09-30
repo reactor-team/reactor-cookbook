@@ -1,5 +1,5 @@
 # Reactor model specification for the Echo-WM Flash recipe.
-$schema: reactor/v1
+$schema: reactor/v2
 
 model:
   name: echo-wm-flash

@@ -1,4 +1,4 @@
-$schema: reactor/v1
+$schema: reactor/v2
 
 model:
   name: lingbot-world-v1-fast-camera
