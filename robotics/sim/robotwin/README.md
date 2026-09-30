@@ -7,6 +7,12 @@ success predicates. This package substitutes the transport and who serves
 the policy, nothing else, so a success rate measured through it is
 comparable to the authors' published numbers.
 
+## Python SDK
+
+This example pins `reactor-sdk==1.6.0`. It publishes camera frames through native
+SDK tracks; the SDK owns transport keepalive. On Linux, the glibc wheel requires
+glibc 2.34 or newer. The simulator has its own hardware and dependency requirements.
+
 ## Why a gateway
 
 `libero` wraps its simulator as a Python library and owns the rollout
@@ -95,7 +101,7 @@ you do not need model weights: this gateway replaces both.
 With [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv sync --python 3.12
+uv sync --frozen --python 3.12
 export REACTOR_API_KEY='<your key>'   # create one at https://reactor.inc/account/api-keys
 ```
 

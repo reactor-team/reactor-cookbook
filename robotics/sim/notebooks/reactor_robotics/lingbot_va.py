@@ -282,7 +282,7 @@ class LingbotVaClient:
         return self._last_echo
 
     async def start_episode(self, task: str) -> None:
-        """Begin an episode: set the task, clear the echo, then ``reset {}``.
+        """Begin an episode: clear the echo, reset, then set the task.
 
         The order is the contract. ``reset`` re-attaches the session and
         rebuilds the KV cache; ``executed_action_json`` is ordinary
@@ -299,19 +299,13 @@ class LingbotVaClient:
                 len(task), TASK_MAX_LEN,
             )
             task = task[:TASK_MAX_LEN]
-        if task != self._task:
-            await self.session.send(
-                "set_task_description", {"task_description": task}
-            )
-            self._task = task
         await self.session.send("set_executed_action_json", {"executed_action_json": ""})
         self._last_echo = ""
-        # Empty payload: an unknown field turns `reset` into a no-op.
-        await self.session.send("reset", {})
-        # Drop anything from the previous episode. Safe here: the fresh
-        # episode's seed chunk cannot have been emitted yet, because `reset`
-        # was sent on this same ordered data channel a moment ago.
         self.session.drain("action_prediction")
+        await self.session.send("reset", {})
+        # Reset clears the task; set it even when the next episode repeats it.
+        await self.session.send("set_task_description", {"task_description": task})
+        self._task = task
         self._episode_open = True
         self._chunk_in_episode = 0
         self._last_pred = None

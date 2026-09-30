@@ -20,12 +20,10 @@ import asyncio
 import time
 
 import numpy as np
-from aiortc import VideoStreamTrack
-from aiortc.mediastreams import VIDEO_CLOCK_RATE, VIDEO_TIME_BASE
-from av import VideoFrame
+from reactor_sdk import Track
 
 
-class RepeatingFrameTrack(VideoStreamTrack):
+class RepeatingFrameTrack:
     """Sendonly track emitting the current frame at a steady ``fps``.
 
     Starts on a black frame so the track is live (and negotiable) before the
@@ -41,7 +39,6 @@ class RepeatingFrameTrack(VideoStreamTrack):
         fps: int = 15,
         size: tuple[int, int] = (240, 320),
     ) -> None:
-        super().__init__()
         self.name = name
         self.fps = int(fps)
         if self.fps <= 0:
@@ -73,13 +70,12 @@ class RepeatingFrameTrack(VideoStreamTrack):
         self._frame = np.ascontiguousarray(arr)
         self.pushes += 1
 
-    async def recv(self) -> VideoFrame:
-        await self._pace()
-        frame = VideoFrame.from_ndarray(self._frame, format="rgb24")
-        frame.pts = int(self._sent * VIDEO_CLOCK_RATE / self.fps)
-        frame.time_base = VIDEO_TIME_BASE
-        self._sent += 1
-        return frame
+    async def pump(self, track: Track) -> None:
+        """Repeat the latest RGB observation through the native SDK sender."""
+        while True:
+            await self._pace()
+            track.push_frame(self._frame)
+            self._sent += 1
 
     async def _pace(self) -> None:
         """Sleep until this frame's slot in a steady ``fps`` schedule.
