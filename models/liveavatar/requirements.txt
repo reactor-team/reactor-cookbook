@@ -1,0 +1,32 @@
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
+# Application media preparation and explicit checkpoint preparation.
+numpy==2.2.6
+Pillow
+soundfile
+huggingface-hub<1
+PyYAML
+scipy
+# Dependencies imported by the pinned LiveAvatar inference source.
+torch==2.8.0
+torchvision==0.23.0
+torchaudio==2.8.0
+transformers==4.51.3
+diffusers==0.35.1
+peft==0.17.1
+accelerate
+decord
+easydict
+ftfy
+librosa
+safetensors
+omegaconf
+einops
+sentencepiece
+opencv-python-headless
+imageio
+imageio-ffmpeg
+matplotlib
+# CUDA attention kernels matched to the declared Python/CUDA/PyTorch build.
+flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+flash-attn-4==4.0.0b30
