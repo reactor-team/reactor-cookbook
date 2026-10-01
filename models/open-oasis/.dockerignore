@@ -1,0 +1,24 @@
+# Keep local credentials, caches, weights and generated media out of the image.
+.git
+.env
+.env.*
+*.pem
+*.key
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+weights
+checkpoints
+artifacts
+outputs
+test_outputs
+*.log
+*.mp4
+*.wav
+*.safetensors
+*.pth
+*.pt
+tests/
