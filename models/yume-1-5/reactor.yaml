@@ -1,0 +1,56 @@
+$schema: reactor/v2
+
+model:
+  name: yume-1-5
+  version: v0.1.1
+  description: |
+    Explore a continuous YUME-1.5 world from text or an uploaded first frame,
+    using its released prompt-encoded keyboard and camera controls.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    cpu:
+      request: "8"
+      limit: "16"
+    memory:
+      request: 64Gi
+      limit: 160Gi
+
+runtime:
+  import: yume:Yume15
+  config: yume.yaml
+  # Checkpoints, downloads and compiled kernels use the weights mount.
+  weights_path: ~/.cache/reactor_registry/yume-1-5
+  recording:
+    enabled: true
+    chunk_seconds: 1.208333
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
+
+build:
+  runtime_version: "3.6.0"
+  python_requirements: requirements.txt
+  python_version: "3.12"
+  cuda_version: "12.8.1"
+  python_indexes:
+    - https://download.pytorch.org/whl/cu128
+    - https://pypi.org/simple
+  build_env:
+    UV_INDEX_STRATEGY: unsafe-best-match
+    MAX_JOBS: "8"
+  run:
+    - pip install --no-build-isolation flash-attn==2.8.3
+    - git clone https://github.com/stdstu12/YUME.git /opt/yume-source && git -C /opt/yume-source checkout --detach 111c3fab7fb020d1e261a68be6ec78a3fecc8d5b
+  system_packages:
+    - build-essential
+    - ffmpeg
+    - git
+    - libgl1
+    - libglib2.0-0
+  runtime_env:
+    PYTORCH_ALLOC_CONF: expandable_segments:True
