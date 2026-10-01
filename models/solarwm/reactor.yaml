@@ -1,0 +1,58 @@
+$schema: reactor/v2
+
+model:
+  name: solarwm-5b-stage2
+  version: v0.1.1
+  description: |
+    Explore SolarWM's autoregressive Wan2.2 TI2V-5B world from an uploaded
+    image, a prompt, and six-axis camera motion.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    cpu:
+      request: "8"
+      limit: "16"
+    memory:
+      request: 64Gi
+      limit: 160Gi
+
+runtime:
+  import: solarwm_stage2:SolarWM
+  config: solarwm.yaml
+  weights_path: ~/.cache/reactor_registry/solarwm
+  recording:
+    enabled: true
+    chunk_seconds: 4
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
+
+build:
+  runtime_version: "3.6.0"
+  python_requirements: requirements.txt
+  python_indexes:
+    - https://download.pytorch.org/whl/cu128
+    - https://pypi.org/simple
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  build_env:
+    UV_INDEX_STRATEGY: unsafe-best-match
+    MAX_JOBS: "8"
+  system_packages:
+    - build-essential
+    - git
+    - libgl1
+    - libglib2.0-0
+  runtime_env:
+    PYTORCH_ALLOC_CONF: expandable_segments:True
+    TOKENIZERS_PARALLELISM: "false"
+  run:
+    - git clone https://github.com/Junchao-cs/SolarWM.git /opt/solarwm-source && git -C /opt/solarwm-source checkout --detach 7c52987bd9c7c387884c4d963338b3ab6069c394
+    - >-
+      pip install --no-cache-dir --no-deps --no-build-isolation
+      /opt/solarwm-source
+    - pip install --no-cache-dir --no-build-isolation "flash-attn==2.8.3"
