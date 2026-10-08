@@ -30,18 +30,41 @@ HOME_STATE = pack_state(HOME_ARM, HOME_ARM)
 
 
 class SyntheticCameras:
-    """Random RGB frames. Replace read() with a capture from your three cameras."""
+    """Camera-like RGB frames. Replace read() with a capture from your three cameras.
+
+    Each view is a fixed scene (a color gradient and a few colored blocks) that
+    moves a few pixels between reads, like a live camera. Random noise would be
+    a poor stand-in: a video encoder cannot compress it, so it would add
+    hundreds of milliseconds of transport that real camera frames do not have.
+    """
 
     def __init__(self, seed: int = 0, height: int = 480, width: int = 640) -> None:
         self.rng = np.random.default_rng(seed)
-        self.shape = (height, width, 3)
+        y, x = np.mgrid[0:height, 0:width]
+        self.scenes = {}
+        for view in VIEWS:
+            low, high = self.rng.integers(40, 216, size=(2, 3))
+            # A smooth gradient from one color to another, top left to bottom right.
+            t = ((x / width + y / height) / 2)[..., None]
+            scene = low + (high - low) * t
+            for _ in range(6):
+                top, left = (
+                    self.rng.integers(0, height - 80),
+                    self.rng.integers(0, width - 80),
+                )
+                h, w = self.rng.integers(30, 80, size=2)
+                scene[top : top + h, left : left + w] = self.rng.integers(
+                    0, 256, size=3
+                )
+            self.scenes[view] = scene.astype(np.uint8)
 
     def read(self) -> dict[str, np.ndarray]:
         """Return one uint8 RGB frame for each view in VIEWS."""
         # Keep the camera roles fixed: a wrist frame on scene_view gives wrong actions.
+        dy, dx = self.rng.integers(-3, 4, size=2)
         return {
-            view: self.rng.integers(0, 256, self.shape, dtype=np.uint8)
-            for view in VIEWS
+            view: np.roll(scene, (int(dy), int(dx)), axis=(0, 1))
+            for view, scene in self.scenes.items()
         }
 
 
@@ -80,6 +103,7 @@ def report(label: str, prediction, state: np.ndarray) -> str:
         f"execute={prediction.execution_horizon} "
         f"model={prediction.inference_seconds * 1000:.1f} ms "
         f"RTT={prediction.round_trip_ms:.1f} ms "
+        f"view skew={prediction.view_skew_us} us "
         f"first-row jump L={left * 1000:.0f} mm R={right * 1000:.0f} mm"
     )
 
@@ -127,8 +151,8 @@ def main() -> None:
     parser.add_argument(
         "--settle-s",
         type=float,
-        default=0.2,
-        help="Wait after new frames, before a request",
+        default=0.0,
+        help="Extra wait after pushing new frames, before the request (not needed)",
     )
     parser.add_argument(
         "--no-realtime",

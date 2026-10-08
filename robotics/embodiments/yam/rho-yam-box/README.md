@@ -52,12 +52,12 @@ You should see output like this (times vary):
 
 ```text
 Synthetic protocol smoke test (not task quality); no robot moves
-step=0 shape=(50, 20) execute=25 model=80.7 ms RTT=557.8 ms first-row jump L=121 mm R=88 mm
-step=1 shape=(50, 20) execute=25 model=73.1 ms RTT=519.1 ms first-row jump L=45 mm R=80 mm
+step=0 shape=(50, 20) execute=25 model=73.7 ms RTT=257.3 ms view skew=0 us first-row jump L=165 mm R=77 mm
+step=1 shape=(50, 20) execute=25 model=79.0 ms RTT=163.0 ms view skew=0 us first-row jump L=42 mm R=98 mm
 ...
-Reset check: step=5 shape=(50, 20) execute=25 model=72.2 ms RTT=348.5 ms first-row jump L=86 mm R=66 mm
+Reset check: step=5 shape=(50, 20) execute=25 model=73.2 ms RTT=161.3 ms view skew=0 us first-row jump L=109 mm R=61 mm
 PASS: 6 valid predictions; session closed
-Median model=73.1 ms; median request RTT=434.5 ms
+Median model=73.7 ms; median request RTT=165.4 ms
 ```
 
 The script makes five requests, resets the episode, makes one more request,
@@ -65,7 +65,8 @@ and closes the session, also on failure or Ctrl+C. Between requests the mock
 robot steps through the 25 executed rows at 15 Hz (about 1.7 s), so the loop
 runs at the real-time cadence. Add `--no-realtime` to skip those waits.
 
-All inputs are synthetic: seeded random 480 × 640 images and a fixed start
+All inputs are synthetic: seeded camera-like 480 × 640 images (a gradient
+and colored blocks that move a few pixels per frame) and a fixed start
 pose. They test the API, not task success. `first-row jump` is the distance
 from the current position of each arm to the first target. With random
 images it is often several centimeters. A real controller must refuse a chunk
@@ -144,17 +145,27 @@ with the differences below.
    `{"task_description": "pick up the red cube and place it in the box"}`
    (1–300 characters). The model answers no request until it is set. A change
    applies to the next request.
-3. Push the new frames, wait a few frame periods (`--settle-s`, default
-   0.2 s), then send `set_state_json` with a JSON **string** as its
-   `state_json` field:
+3. Push the three views of the new observation with one shared capture
+   time, then send `set_state_json` at once, with the same value as
+   `capture_us` and a JSON **string** as its `state_json` field:
+
+   ```python
+   from reactor_sdk import time_micros
+
+   now = time_micros()  # the SDK clock, not time.time()
+   for view, frame in observation.items():
+       tracks[view].push_frame(frame, capture_time_us=now)
+   ```
 
    ```json
    {"proprio": [0.4, 0.0, 0.2, 1, 0, 0, 0, 1, 0, 0.3,
-                0.4, 0.0, 0.2, 1, 0, 0, 0, 1, 0, 0.3], "chunk_id": 3}
+                0.4, 0.0, 0.2, 1, 0, 0, 0, 1, 0, 0.3], "chunk_id": 3,
+    "capture_us": 1759912345678901}
    ```
 
    `proprio` is the 20-value state, left arm first. `chunk_id` is a
-   nonnegative request ID. The optional `seed` (0 to `2**63 - 1`) fixes the
+   nonnegative request ID. `capture_us` is the capture time of the three
+   frames, in microseconds. The optional `seed` (0 to `2**63 - 1`) fixes the
    sampling noise and defaults to `chunk_id`. There is no `cfg` field and no
    seed triple.
 4. Wait for `action_prediction` whose `data.step` equals `chunk_id`:
@@ -162,25 +173,35 @@ with the differences below.
    ```text
    {"type": "action_prediction",
     "data": {"actions": [[...20 values...], ...50 rows...],
-             "execution_horizon": 25, "step": 3, "inference_seconds": 0.075}}
+             "execution_horizon": 25, "step": 3, "inference_seconds": 0.075,
+             "source_capture_us": 1759912345678901, "view_skew_us": 0}}
    ```
 
    Row k is the absolute target for control step k + 1 after the
    observation, in the layout of `proprio`. Execute `execution_horizon` (25)
    rows, then send the next request. The other 25 rows are a preview. The
-   reply has no predicted states (`proprios`). Integer fields can arrive as
-   floats (`"step": 3.0`, `"execution_horizon": 25.0`), so compare them by
-   value.
+   reply has no predicted states (`proprios`). `source_capture_us` echoes
+   the request's `capture_us`. `view_skew_us` is how far apart the three
+   frames the model used were captured (0 when one capture time stamped all
+   three). Integer fields can arrive as floats (`"step": 3.0`,
+   `"execution_horizon": 25.0`), so compare them by value.
 
 Rules:
 
-- The model answers a request only after each of the three tracks has
-  delivered a frame at least as new as the request.
+- With `capture_us`, the model answers as soon as each of the three tracks
+  has delivered a frame captured at or after `capture_us`, from the frame of
+  each track nearest to it. Frames that arrived before the request count, so
+  there is no need to wait between the push and the request. If a track has
+  no frame within 75 ms of `capture_us` (for example, a lost frame), the
+  model drops the request with `command_error`; send a new observation.
+- Without `capture_us`, the model answers only after each of the three
+  tracks has delivered a frame that arrived after the request. Push the new
+  frames, wait a few frame periods, then send the request.
 - Keep one request outstanding. Do not pipeline.
 - A byte-identical `state_json` gets no second reply. To retry after a lost
   reply, keep `chunk_id` and change another byte, for example a `"retry": 1`
-  field; the model ignores unknown keys. A retry runs a new prediction on the
-  newest frames, so its actions can differ.
+  field; the model ignores unknown keys. A retry that keeps `capture_us` runs
+  on the same frames while the model still holds them (about 1 s).
 - A malformed request (wrong length, a non-finite number, a missing
   `chunk_id`) is dropped with **no reply**. The model never fills in a
   missing state. This client checks the state before it sends it.
@@ -196,8 +217,12 @@ Rules:
 
 Timing: the model takes about 75 ms per request on the serving GPU
 (`inference_seconds`). The round trip from `set_state_json` to the reply
-also includes network time and the wait for a camera frame newer than the
-request: 300 to 560 ms from a laptop in our tests. The first request with an
+also includes network time and the time for the observation's frames to
+arrive. The client pushes the frames and sends the request at the same
+moment, so the round trip is also the time from capture to actions. From a
+laptop on home internet we measured 165 ms median with the camera-like
+frames of `main.py` and 257 ms with real 480 × 640 robot camera images (a
+real image is larger after encoding). The first request with an
 instruction of a new length can take about 0.3 s more, once. The arm holds
 its last target while it waits for the next chunk. These are small-sample
 observations, not a latency guarantee.
@@ -224,17 +249,18 @@ It does not check task success, units, or motion on a real robot.
 | Authentication or access failure | Confirm the key and `REACTOR_API_URL`. If a valid key still cannot connect, contact Reactor to request access to `reactor/rho-yam-box`. Do not share the key in logs. |
 | HTTP 429 `no available capacity` | Wait for capacity, then retry. An open session reserves a worker. |
 | No SDK wheel or import errors | Run `uv sync --locked --python 3.12` in this directory. Linux wheels need glibc 2.34 or newer. |
-| `TimeoutError` with no `command_error` | The model dropped the request or never got fresh frames. Check the three tracks, the task, and the state. |
+| `TimeoutError` with no `command_error` | The model dropped the request or never got the observation's frames. Check the three tracks, the task, and the state. `capture_us` must be a `time_micros()` value, the clock that stamps the frames. |
+| `command_error` naming `capture_us` | A track had no frame within 75 ms of `capture_us` (a lost frame, or an old `capture_us`). Send a new observation. |
 
 ## Verification
 
 On October 8, 2026, the quickstart command above ran against
-`https://api.reactor.inc` from a fresh Python 3.12 environment installed with
-`uv sync --locked` (Python SDK 1.8.0): five requests and one after reset
-returned valid `(50, 20)` chunks with matching request IDs and
-`execution_horizon` 25, and the session closed. Median model time was 73 ms
-and median request round trip 435 ms. This checks the API wiring, not robot
-task quality.
+`https://api.reactor.inc` from a Python 3.12 environment installed with
+`uv sync --locked` (Python SDK 1.9.0): five requests and one after reset
+returned valid `(50, 20)` chunks with matching request IDs, matching
+`source_capture_us`, `view_skew_us` 0 and `execution_horizon` 25, and the
+session closed. Median model time was 74 ms and median request round trip
+165 ms. This checks the API wiring, not robot task quality.
 
 ## Offline checks
 

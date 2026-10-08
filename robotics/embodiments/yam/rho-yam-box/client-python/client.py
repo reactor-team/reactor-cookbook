@@ -3,6 +3,11 @@
 
 The client sends one request at a time. Each request gets 50 absolute
 end-effector targets for both arms. Execute the first 25, then ask again.
+
+Each observation is paired with its request by capture time: the three views
+are pushed with one shared capture_time_us, and the request carries the same
+value as capture_us. The model then answers as soon as those frames are in,
+without waiting for a later camera frame.
 """
 
 from __future__ import annotations
@@ -15,7 +20,7 @@ import time
 from dataclasses import dataclass
 
 import numpy as np
-from reactor_sdk import Reactor, ReactorStatus
+from reactor_sdk import Reactor, ReactorStatus, time_micros
 
 MODEL = "reactor/rho-yam-box"
 # Track names, in the checkpoint's camera order.
@@ -126,6 +131,10 @@ class Prediction:
 
     actions: (50, 20) absolute targets. Row k is for control step k + 1.
     execution_horizon: the number of leading rows to execute (25).
+    capture_us: the capture time the request sent, on the SDK clock.
+    view_skew_us: how far apart the three frames the model used were captured
+        (0 when one capture time stamped all three), or None when the model
+        did not report it.
     """
 
     actions: np.ndarray
@@ -133,6 +142,8 @@ class Prediction:
     execution_horizon: int
     inference_seconds: float
     round_trip_ms: float
+    capture_us: int
+    view_skew_us: int | None = None
 
     @property
     def to_execute(self) -> np.ndarray:
@@ -148,7 +159,7 @@ class RhoClient:
         *,
         model: str = MODEL,
         api_url: str | None = None,
-        settle_s: float = 0.2,
+        settle_s: float = 0.0,
         timeout_s: float = 60,
     ) -> None:
         if not math.isfinite(settle_s) or settle_s < 0:
@@ -220,13 +231,20 @@ class RhoClient:
         finally:
             await self.reactor.disconnect()
 
+    def _push_views(self) -> int:
+        """Push the current frame of each view with one shared capture time; return it."""
+        # One clock reading for all three tracks makes them one moment.
+        now = time_micros()
+        for view, track in self._tracks.items():
+            track.push_frame(self._frames[view], capture_time_us=now)
+        return now
+
     async def _publish(self) -> None:
         """Send the current frame of each view at TRACK_FPS, repeating it between requests."""
         try:
             while True:
                 started = time.monotonic()
-                for view, track in self._tracks.items():
-                    track.push_frame(self._frames[view])
+                self._push_views()
                 await asyncio.sleep(
                     max(0, 1 / TRACK_FPS - (time.monotonic() - started))
                 )
@@ -273,12 +291,19 @@ class RhoClient:
             self._frames = {
                 view: np.array(frames[view], copy=True, order="C") for view in VIEWS
             }
-            # The model answers only after each track delivers a frame newer
-            # than the request. Give the new frames time to arrive first.
-            await asyncio.sleep(self.settle_s)
+            # Push this observation now, with one capture time on all three
+            # views, and name that capture time in the request. The model
+            # answers from these frames as soon as they arrive.
+            capture_us = self._push_views()
+            if self.settle_s:
+                await asyncio.sleep(self.settle_s)
             chunk_id = self._next_id
             self._next_id += 1
-            body = {"proprio": state.tolist(), "chunk_id": chunk_id}
+            body = {
+                "proprio": state.tolist(),
+                "chunk_id": chunk_id,
+                "capture_us": capture_us,
+            }
             if seed is not None:
                 body["seed"] = seed
             started = time.perf_counter()
@@ -298,10 +323,12 @@ class RhoClient:
                     raise RuntimeError(f"{data.get('command')}: {data.get('reason')}")
                 if data.get("step") != chunk_id:
                     continue  # A delayed reply for another request. 3.0 == 3 here.
-                return self._parse_reply(data, chunk_id, started)
+                return self._parse_reply(data, chunk_id, capture_us, started)
 
     @staticmethod
-    def _parse_reply(data: dict, chunk_id: int, started: float) -> Prediction:
+    def _parse_reply(
+        data: dict, chunk_id: int, capture_us: int, started: float
+    ) -> Prediction:
         """Check one action_prediction payload and return it as a Prediction."""
         actions = np.asarray(data.get("actions"), dtype=np.float64)
         if actions.shape != ACTION_SHAPE or not np.isfinite(actions).all():
@@ -323,10 +350,24 @@ class RhoClient:
             or seconds < 0
         ):
             raise ValueError("Invalid model inference time")
+        # The model echoes capture_us. Integers can arrive as floats.
+        source = data.get("source_capture_us")
+        if source is not None and source != capture_us:
+            raise ValueError("The reply is for another observation (source_capture_us)")
+        skew = data.get("view_skew_us")
+        if skew is not None and (
+            isinstance(skew, bool)
+            or not isinstance(skew, (int, float))
+            or not float(skew).is_integer()
+            or skew < 0
+        ):
+            raise ValueError("Invalid view_skew_us")
         return Prediction(
             actions,
             chunk_id,
             int(horizon),
             float(seconds),
             (time.perf_counter() - started) * 1000,
+            capture_us,
+            None if skew is None else int(skew),
         )

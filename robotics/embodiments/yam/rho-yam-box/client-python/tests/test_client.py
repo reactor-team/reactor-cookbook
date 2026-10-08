@@ -39,6 +39,8 @@ class FakeReactor:
         self.silent = False
         self.bad_actions = False
         self.bad_horizon = False
+        self.wrong_source = False
+        self.pushed = []
 
     def on_status(self, handler):
         self.status_handler = handler
@@ -57,8 +59,8 @@ class FakeReactor:
     async def publish_track(self, name):
         return self
 
-    def push_frame(self, frame):
-        pass
+    def push_frame(self, frame, capture_time_us=None):
+        self.pushed.append(capture_time_us)
 
     async def send_command(self, command, payload):
         self.commands.append((command, payload))
@@ -87,6 +89,10 @@ class FakeReactor:
                         "execution_horizon": 0.0 if self.bad_horizon else 25.0,
                         "step": float(step),
                         "inference_seconds": 0.07,
+                        "source_capture_us": float(
+                            request["capture_us"] + (1 if self.wrong_source else 0)
+                        ),
+                        "view_skew_us": 0.0,
                     },
                 }
             )
@@ -127,6 +133,13 @@ class ClientTest(Patched):
         ]
         self.assertEqual(sent[0]["seed"], 7)
         self.assertNotIn("seed", sent[1])
+        # Each request names the capture time its three views were pushed with.
+        for body, prediction in zip(sent, (first, second, third)):
+            self.assertIsInstance(body["capture_us"], int)
+            self.assertEqual(prediction.capture_us, body["capture_us"])
+            self.assertIn(body["capture_us"], client.reactor.pushed)
+            self.assertEqual(client.reactor.pushed.count(body["capture_us"]) % 3, 0)
+            self.assertEqual(prediction.view_skew_us, 0)
         self.assertEqual(sent[0]["proprio"], self.state.tolist())
         self.assertTrue(client.reactor.closed)
         self.assertIsNone(client._publisher)
@@ -143,6 +156,7 @@ class ClientTest(Patched):
         for attribute, message in (
             ("bad_actions", "finite"),
             ("bad_horizon", "execution_horizon"),
+            ("wrong_source", "source_capture_us"),
         ):
             client = RhoClient(settle_s=0)
             setattr(client.reactor, attribute, True)
