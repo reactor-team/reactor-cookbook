@@ -1,0 +1,9 @@
+[project]
+name = "rho-yam-box-client"
+version = "0.1.0"
+description = "Rho (YAM box) robot policy client for Reactor"
+requires-python = ">=3.10"
+dependencies = ["reactor-sdk>=1.9.0,<2", "numpy>=1.26"]
+
+# SDK 1.x owns keepalive and accepts NumPy frames through Track.push_frame.
+# The lockfile preserves the dependencies used to verify this client.
