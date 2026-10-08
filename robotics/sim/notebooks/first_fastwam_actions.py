@@ -9,7 +9,7 @@ VIEWS = ("exterior_view_1", "wrist_view")
 
 
 async def main():
-    session = ReactorSession("reactor/fastwam", fps=20, frame_size=(256, 256))
+    session = ReactorSession("reactor/fastwam-libero", fps=20, frame_size=(256, 256))
     try:
         await session.connect(VIEWS, subscribe=("action_prediction", "command_error"))
         await session.send(

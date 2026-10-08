@@ -70,7 +70,7 @@ CASES = {
         (16, 60),
     ),
     "fastwam": (
-        "fastwam",
+        "fastwam-libero",
         ("exterior_view_1", "wrist_view"),
         "set_state_json",
         "actions",

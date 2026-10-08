@@ -44,10 +44,10 @@ not execute robot motion. From this directory, use `uv run --frozen python <file
 | DreamZero YAM | [first_dreamzero_yam_actions.py](first_dreamzero_yam_actions.py) |
 | XR-1 RoboCasa365 | [first_xr1_robocasa_actions.py](first_xr1_robocasa_actions.py) |
 | XR-1 Bimanual (access required) | [first_xr1_actions.py](first_xr1_actions.py) |
-| FastWAM LIBERO **draft** | [first_fastwam_actions.py](first_fastwam_actions.py) |
+| FastWAM LIBERO | [first_fastwam_actions.py](first_fastwam_actions.py) |
 
-FastWAM's `reactor/fastwam` slug is provisional. Run its draft only after Reactor
-confirms hosted availability and access. All examples need capacity on the chosen
+FastWAM uses `reactor/fastwam-libero` and requires account access. Contact Reactor
+if it is not enabled for your account. All examples need capacity on the chosen
 model; a successful SDK installation does not guarantee an available worker.
 
 ## Choose a model
