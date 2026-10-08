@@ -46,9 +46,9 @@ not execute robot motion. From this directory, use `uv run --frozen python <file
 | XR-1 Bimanual (access required) | [first_xr1_actions.py](first_xr1_actions.py) |
 | FastWAM LIBERO | [first_fastwam_actions.py](first_fastwam_actions.py) |
 
-FastWAM uses `reactor/fastwam-libero` and requires account access. Contact Reactor
-if it is not enabled for your account. All examples need capacity on the chosen
-model; a successful SDK installation does not guarantee an available worker.
+FastWAM uses the public model `reactor/fastwam-libero`; a Reactor API key is required.
+All examples need capacity on the chosen model; a successful SDK installation does
+not guarantee an available worker.
 
 ## Choose a model
 
