@@ -64,7 +64,7 @@ provenance.
 | [FLUX 0.3.0](../../flux3-action-droid) | request/reply with `chunk_id` echo; checkpoint pinned per session | `(32, 8)` absolute joints + gripper | not included; synthetic or user-supplied NPZ replay |
 | [`lingbot-va`](./lingbot_va_quickstart.md) | executed-action echo | `(16, 7)` eef deltas | [`LIBERO`](../libero), CPU |
 | [`cosmos-nano-policy-droid`](./cosmos_droid_quickstart.md) | stateless executed-step report | `(32, 8)` absolute joints | [`RoboLab`](../cosmos-droid), RTX GPU |
-| [`xwam`](./xwam_quickstart.md) | request/reply with `chunk_id` echo | `(32, 14)` delta joints | [`RoboTwin 2.0`](../robotwin), CUDA GPU |
+| [`xwam`](./xwam_quickstart.md) | request/reply with `chunk_id` echo | `(32, 14)` end-effector and gripper deltas | [`RoboTwin 2.0`](../robotwin), CUDA GPU |
 | [`groot-n17`](./groot_n17_quickstart.md) | free-running | `(40, 17)` named fields | not wired in this repo |
 | [`dreamzero`](./dreamzero_quickstart.md) | free-running with `obs_seq` gate | `(24, 8)` absolute joints | [`RoboLab`](../dreamzero), RTX GPU |
 | [`xr1-robocasa365`](./xr1_robocasa365_quickstart.md) | echo-gated from first chunk | `(16, 60)` packed, 12 live | [`RoboCasa365`](../robocasa365), CUDA GPU |

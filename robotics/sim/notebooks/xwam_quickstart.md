@@ -97,10 +97,10 @@ here the same frames travel as H.264 video over WebRTC, so the model decodes
 a lossy re-encoding of them. Fed directly, the delta is at most `4.2e-3`;
 over the video path, nine runs of these examples measured `1.2e-3` to
 `3.7e-2`, so the `5e-2` tolerance has about 1.3× headroom over the worst
-observation (see [`examples/PROVENANCE.md`](./examples/PROVENANCE.md)). For
-scale, `5e-2` on a delta joint action is well inside the noise a real arm's
-controller absorbs, and the 79.3% closed-loop evaluation ran over this same
-transport.
+observation (see [`examples/PROVENANCE.md`](./examples/PROVENANCE.md)). This is
+a numerical replay tolerance, not a physical-controller error limit. Action
+columns contain end-effector translation and rotation deltas plus gripper
+deltas; validate their units and execution limits for your controller.
 
 Predicted robot states (`proprios`) are not checked. Nothing executes them
 (the robot executes `actions`), and their delta is dominated by the same
