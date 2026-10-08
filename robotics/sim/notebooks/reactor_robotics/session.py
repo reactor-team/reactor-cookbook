@@ -8,7 +8,7 @@ matter:
 1. Handlers are registered before ``connect()``, because ``READY`` can arrive
    before the first ``await`` after ``connect()`` returns.
 2. Tracks are published only after ``READY``. The current SDK rejects an early
-   ``publish_track`` instead of dropping it. SDK 1.6 resolves ``connect()``
+   ``publish_track`` instead of dropping it. The SDK resolves ``connect()``
    at READY.
 3. One publisher loop pushes every view at the configured frame rate. Frames
    from one observation retain the shared capture stamp assigned by
@@ -205,7 +205,7 @@ class ReactorSession:
         await asyncio.wait_for(self._reactor.connect(), timeout=ready_timeout_s)
         self._connected = True
 
-        # SDK 1.6 connect resolves at READY; its callback may be delivered later.
+        # SDK connect resolves at READY; its callback may be delivered later.
 
         for name in track_names:
             # Reuse an existing track object across a reconnect so a caller

@@ -9,7 +9,7 @@ comparable to the authors' published numbers.
 
 ## Python SDK
 
-This example pins `reactor-sdk==1.6.0`. It publishes camera frames through native
+This example uses the Python SDK version recorded in its lockfile. It publishes camera frames through native
 SDK tracks; the SDK owns transport keepalive. On Linux, the glibc wheel requires
 glibc 2.34 or newer. The simulator has its own hardware and dependency requirements.
 

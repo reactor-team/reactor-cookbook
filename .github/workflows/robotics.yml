@@ -1,0 +1,54 @@
+name: Robotics examples
+on:
+  pull_request:
+    paths: ['robotics/**', '.github/workflows/robotics.yml']
+  push:
+    branches: [main]
+    paths: ['robotics/**', '.github/workflows/robotics.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - path: robotics/sim/notebooks
+            python: '3.12'
+            check: python -m unittest discover -s tests -v
+          - path: robotics/sim/cosmos-droid
+            python: '3.12'
+            check: python -m unittest discover -p 'test_*.py' -v && python check_wiring.py
+          - path: robotics/sim/robotwin
+            python: '3.12'
+            check: python -m unittest discover -p 'test_*.py' -v && python check_wiring.py
+          - path: robotics/sim/dreamzero
+            python: '3.12'
+            check: python check_transport.py && python check_wiring.py
+          - path: robotics/sim/libero
+            python: '3.10'
+            check: python check_transport.py
+          - path: robotics/sim/robocasa365
+            python: '3.12'
+            check: python -m unittest discover -p 'test_*.py' -v && python check_wiring.py
+          - path: robotics/sim/robocasa365
+            python: '3.10'
+            check: python -m unittest discover -p 'test_*.py' -v && python check_wiring.py
+          - path: robotics/flux3-action-droid/client-python
+            python: '3.12'
+            check: python -m unittest discover -s tests -v
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '${{ matrix.python }}'
+          enable-cache: true
+      - name: Install the tested environment
+        working-directory: '${{ matrix.path }}'
+        run: uv sync --locked --python '${{ matrix.python }}'
+      - name: Check SDK transport and model adapters (no hosted inference)
+        working-directory: '${{ matrix.path }}'
+        run: uv run --frozen bash -e -c '${{ matrix.check }}'

@@ -56,10 +56,11 @@ check(
 class _FakeTrack:
     def __init__(self) -> None:
         self.frames: list[np.ndarray] = []
-        self.q = self  # client calls self._tracks[name].q.put_nowait(frame)
+        self.stamps = []
 
-    def put_nowait(self, frame: np.ndarray) -> None:
+    def push_frame(self, frame: np.ndarray, *, capture_time_us: int) -> None:
         self.frames.append(frame)
+        self.stamps.append(capture_time_us)
 
 
 print("per-slot push ordering")
@@ -91,10 +92,9 @@ check(
     all(t.frames[0].shape == (8, 8, 3) for t in fake._tracks.values()),
 )
 
-print("keepalive")
 check(
-    "ping interval is inside the runtime's 20 s silence watchdog",
-    0 < c._PING_INTERVAL_S < 20,
+    "all camera views in a history slot share a capture timestamp",
+    all(len({t.stamps[i] for t in fake._tracks.values()}) == 1 for i in range(4)),
 )
 
 print()

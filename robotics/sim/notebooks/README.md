@@ -6,7 +6,7 @@ and a few minutes.
 
 The [FLUX 0.3.0 quickstart](../../flux3-action-droid) is also available, with
 synthetic or NPZ inputs and six checkpoints pinned per session. Follow its
-setup commands in its own directory to use the tested SDK 1.6.0 environment.
+setup commands in its own directory to use the tested locked Python SDK environment.
 
 Open the guide for the model you care about and run its script; there is no
 reading order. `xwam` is the reference implementation of
@@ -17,16 +17,38 @@ so it is the one to read if you want the contract itself rather than a model.
 
 The [robotics docs](https://docs.reactor.inc/robotics/overview) use this public
 folder for all first-action examples. From this directory, run
-`uv sync --frozen --python 3.12` to install the pinned `reactor-sdk==1.6.0`
-and the local `reactor_robotics` helpers. These helpers are example code, not
-part of the published SDK. SDK 1.6 owns transport keepalive and publishes frames
-through native tracks. On Linux, its glibc wheel requires glibc 2.34 or newer.
+`uv sync --frozen --python 3.12` to install the tested Python SDK from the lockfile
+and the [`reactor_robotics` helper directory in Reactor’s public cookbook](./reactor_robotics).
+Its README documents installation and return values. The SDK owns transport keepalive
+and publishes frames through native tracks. On Linux, its glibc wheel requires glibc 2.34 or newer.
 
 The docs' synthetic-input examples need no recorded data, simulator, GPU, or
 model weights. They check connectivity and response shape, not task success.
 Hosted model access and an API key are still required.
 
 Offline checks: `uv run --frozen python -m unittest discover -s tests -v`.
+
+## First actions without recorded inputs
+
+These scripts are the runnable examples shown in the official model quickstarts.
+They generate synthetic observations and only inspect returned actions; they do
+not execute robot motion. From this directory, use `uv run --frozen python <file>`.
+
+| Model | Script |
+| --- | --- |
+| Cosmos DROID | [first_cosmos_actions.py](first_cosmos_actions.py) |
+| FLUX Action DROID | [first_flux_actions.py](first_flux_actions.py) |
+| X-WAM RoboTwin | [first_xwam_actions.py](first_xwam_actions.py) |
+| LingBot-VA LIBERO | [first_lingbot_actions.py](first_lingbot_actions.py) |
+| DreamZero DROID | [first_dreamzero_droid_actions.py](first_dreamzero_droid_actions.py) |
+| DreamZero YAM | [first_dreamzero_yam_actions.py](first_dreamzero_yam_actions.py) |
+| XR-1 RoboCasa365 | [first_xr1_robocasa_actions.py](first_xr1_robocasa_actions.py) |
+| XR-1 Bimanual (access required) | [first_xr1_actions.py](first_xr1_actions.py) |
+| FastWAM LIBERO **draft** | [first_fastwam_actions.py](first_fastwam_actions.py) |
+
+FastWAM's `reactor/fastwam` slug is provisional. Run its draft only after Reactor
+confirms hosted availability and access. All examples need capacity on the chosen
+model; a successful SDK installation does not guarantee an available worker.
 
 ## Choose a model
 
@@ -145,12 +167,12 @@ registration, readiness, publishing) so no script has to:
 2. Publish tracks only after `READY`; the current SDK rejects an early
    `publish_track`.
 3. Push all views from one paced loop. One observation receives one shared
-   `capture_time_us`, so independently delivered tracks can still be paired.
+   `capture_time_us`, without claiming the model consumed synchronized observations.
    The current SDK sends the runtime keepalive itself every 10 s; the idle
    checks demonstrate that the session survives past the 20 s timeout.
 
-Keep `logging.basicConfig(level=INFO)` on: dropped commands are logged, not
-raised.
+SDK operation failures raise exceptions; model rejections may also arrive as
+`command_error` messages. See the [helper reference](./reactor_robotics#messages-and-return-values).
 
 ## What gets checked
 

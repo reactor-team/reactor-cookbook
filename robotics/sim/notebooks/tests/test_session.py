@@ -1,4 +1,4 @@
-"""SDK 1.6 lifecycle and reply-delivery regressions; no hosted model required."""
+"""SDK lifecycle and reply-delivery regressions; no hosted model required."""
 import asyncio
 import unittest
 from unittest.mock import AsyncMock, Mock

@@ -195,16 +195,15 @@ class DreamZeroClient:
         gripper: float,
         task: str,
     ) -> DreamZeroPrediction:
-        """Push one observation and return the chunk that saw it.
+        """Push an observation and wait for a newer model observation counter.
 
         Args:
             frames: ``{track_name: (H, W, 3) uint8}`` for all three of
                 :data:`TRACKS`. Keyed by name; ``exterior_1`` is the real
                 left view, see the module docstring.
-            joints: 7 measured joint positions in radians. Streaming the real
-                state is what makes the predicted joint targets **absolute**;
-                with zeros the model emits relative deltas instead, without
-                an error.
+            joints: 7 measured joint positions in radians. Returned targets are
+                absolute; fabricated state does not change the output convention
+                and must not be used to control a real robot.
             gripper: 0 = open, 1 = closed.
             task: Task instruction. Re-sent only when it changes (a change
                 mid-episode re-anchors the causal cache on the latest

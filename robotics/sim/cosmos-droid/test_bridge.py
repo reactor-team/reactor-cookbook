@@ -1,4 +1,4 @@
-"""Offline SDK 1.6 integration and protocol regressions; no session is created."""
+"""Offline SDK integration and protocol regressions; no session is created."""
 import asyncio
 import unittest
 from unittest.mock import AsyncMock, Mock, patch

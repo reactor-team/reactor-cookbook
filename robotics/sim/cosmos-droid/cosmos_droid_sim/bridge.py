@@ -8,13 +8,9 @@
 #   model -> sim:  @on_message -> {action: [32, 8], step} -> resolves the
 #                  pending GatewayRequest
 #
-# The executed-step echo is this model's flow-control gate, and the request
-# loop leans on a property the other examples' models don't have: the model
-# is STATELESS per request. There is no reset event and no KV cache (the
-# prompt and proprio are sent with every prediction), so a new episode or a
-# task change needs no wire ceremony at all. The gate simply will not emit
-# chunk N+1 until step N is echoed, which maps 1:1 onto RoboLab's
-# request/execute cadence:
+# The executed-step echo is the model's flow-control gate. The hosted API
+# exposes reset for the counter; this gateway preserves its counter across
+# task changes. Start a fresh gateway/session for strict episode separation.
 #
 #   request arrives -> frames+proprio out -> echo chunk N -> await N+1 -> reply
 #

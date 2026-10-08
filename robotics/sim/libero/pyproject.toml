@@ -5,7 +5,7 @@ description = "Minimal LIBERO sim-wrapper example: LIBERO/robosuite driven close
 requires-python = ">=3.10,<3.11"
 
 dependencies = [
-    "reactor-sdk==1.6.0",
+    "reactor-sdk>=1.8.0,<2",
     "robosuite==1.4.0",
     "bddl==1.0.1",
     "future",

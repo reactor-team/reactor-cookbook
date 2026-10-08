@@ -5,14 +5,14 @@ description = "Quickstart scripts + minimal clients for Reactor-served robotics 
 requires-python = ">=3.10"
 
 dependencies = [
-    "reactor-sdk==1.6.0",
+    "reactor-sdk>=1.8.0,<2",
     "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
 i2rt = ["opencv-python>=4.10"]
 
-# No simulator dependency. Every script replays recorded observations against
+# No simulator dependency. Scripts use synthetic or recorded observations against
 # the hosted model, so it needs no sim, no GPU and no model weights. The
 # optional full-simulator section at the bottom of each guide runs that
 # model's own benchmark in its own environment. For five of the six the

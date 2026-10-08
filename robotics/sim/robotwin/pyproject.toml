@@ -5,7 +5,7 @@ description = "Minimal RoboTwin 2.0 gateway example: the authors' evaluation cli
 requires-python = ">=3.10"
 
 dependencies = [
-    "reactor-sdk==1.6.0",
+    "reactor-sdk>=1.8.0,<2",
     "numpy>=1.26",
     # The authors' client speaks pickle over zmq; this is the other end.
     "pyzmq>=25.0",

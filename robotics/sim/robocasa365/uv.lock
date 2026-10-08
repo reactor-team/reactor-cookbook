@@ -8,23 +8,6 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "flux3-action-droid-client"
-version = "0.3.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "reactor-sdk" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "reactor-sdk", specifier = ">=1.8.0,<2" },
-]
-
-[[package]]
 name = "numpy"
 version = "2.2.6"
 source = { registry = "https://pypi.org/simple" }
@@ -259,4 +242,21 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/54/4a/96d3b6785ed07822c0cd01cafba3d5da94a5233b494a4efe590a2b19ed7c/reactor_sdk-1.8.0-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:ced81a3181b3985af5e3eecf5683c374fe362f4658d5bfac8d25bb3ceccdba71", size = 10504531, upload-time = "2026-10-06T01:06:10.28Z" },
     { url = "https://files.pythonhosted.org/packages/a3/c7/fe07020b4549cd0fb587a65a92a38c8e9a903ce9bc14b036464943e9e44d/reactor_sdk-1.8.0-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:c13c61522d4f6e00dc0158df6f49e4bebcc664dbd46ed3457d2ce46d211eef6f", size = 11190164, upload-time = "2026-10-06T01:06:12.877Z" },
     { url = "https://files.pythonhosted.org/packages/bc/ba/11ff7c8e99c05a97cc7eaa0976e1401aad18457b469061f9aef3a4d1145d/reactor_sdk-1.8.0-py3-none-win_amd64.whl", hash = "sha256:4af4f0bc6e0c961a03aa31085a1ae660edf73f3bcecfe19d8fcdcb478a735aa2", size = 9853284, upload-time = "2026-10-06T01:06:15.275Z" },
+]
+
+[[package]]
+name = "robocasa365-sim"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "reactor-sdk" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "reactor-sdk", specifier = ">=1.8.0,<2" },
 ]

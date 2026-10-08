@@ -16,11 +16,12 @@ The working reference for this protocol is in this repo:
 benchmark to the same model through an openpi-compatible gateway. This module
 drops the gateway and drives the model directly.
 
-## Stateless, so there is no episode
+## Session flow state
 
-No KV cache, no ``reset`` event on the wire at all. The task and the proprio
-are sent with every prediction, so a new episode or a task change needs no
-ceremony: just call :meth:`CosmosDroidClient.predict` with the new task.
+Predictions use current observations, but the session retains a flow-control
+counter. The hosted API exposes ``reset`` for that counter. This helper keeps
+its counter across task changes; create a fresh client for a separate episode
+rather than resetting the server behind the helper’s local counter.
 
 ## One chunk per executed-step report
 

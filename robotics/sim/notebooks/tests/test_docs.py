@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -55,7 +56,11 @@ class DocumentationConsistencyTest(unittest.TestCase):
     def test_all_relative_markdown_links_resolve(self) -> None:
         link_pattern = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
         heading_pattern = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$", re.MULTILINE)
-        for markdown in ROBOTICS_ROOT.rglob("*.md"):
+        tracked = subprocess.check_output(
+            ["git", "ls-files", "--", "*.md"], cwd=ROBOTICS_ROOT, text=True
+        ).splitlines()
+        for relative in tracked:
+            markdown = ROBOTICS_ROOT / relative
             text = markdown.read_text()
             for match in link_pattern.finditer(text):
                 raw_target = match.group(1)

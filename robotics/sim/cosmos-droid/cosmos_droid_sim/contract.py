@@ -12,8 +12,8 @@
 # (set_task_description / set_proprio_json / set_executed_step_json) in,
 # action_prediction messages out. The executed-step echo is the model's
 # flow-control gate: it will not predict chunk N+1 until the echoed step
-# counter passes chunk N (the model is stateless per request, and there is
-# no reset event on this wire at all).
+# counter passes chunk N. The API also exposes reset for that counter; this
+# adapter keeps the counter across task changes.
 # ──────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 

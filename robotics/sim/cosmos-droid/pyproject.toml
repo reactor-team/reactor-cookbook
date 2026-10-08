@@ -5,7 +5,7 @@ description = "Minimal RoboLab gateway example: Isaac Sim's DROID benchmark driv
 requires-python = ">=3.10"
 
 dependencies = [
-    "reactor-sdk==1.6.0",
+    "reactor-sdk>=1.8.0,<2",
     "numpy>=1.26",
     # The openpi WebSocket server RoboLab's own client connects to.
     "openpi-server",

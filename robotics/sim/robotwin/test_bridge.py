@@ -1,4 +1,4 @@
-"""Offline SDK 1.6 integration and request/retry lifecycle regressions."""
+"""Offline SDK integration and request/retry lifecycle regressions."""
 import asyncio
 import json
 import unittest

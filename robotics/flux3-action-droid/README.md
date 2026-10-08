@@ -63,7 +63,7 @@ use another environment, which must offer the selected checkpoint. The model
 name resolves the currently deployed release; this command does not pin a
 historical release version. This example targets the 0.3.0 contract.
 
-This example pins **reactor-sdk 1.6.0**, using native `Track.push_frame` and SDK
+This example uses the Python SDK version recorded in its lockfile, using native `Track.push_frame` and SDK
 keepalive. Its lockfile captures the tested dependencies. Run the setup commands
 from this example's directory; the other [policy quickstarts](../sim/notebooks)
 have their own project environment and dependency versions.
@@ -248,7 +248,7 @@ There is no FLUX closed-loop simulator integration included in this entry.
 | `REACTOR_API_KEY` is missing | Export a key in the same terminal that runs `uv run`. |
 | Authentication/access failure, or model unavailable | Confirm the key and `REACTOR_API_URL`. FLUX is public at `https://api.reactor.inc`; another environment may not offer it. Contact Reactor if a valid key still cannot connect. Do not share the key in logs. |
 | HTTP 429 `no available capacity` | Wait for capacity, including the previous session's worker release, before retrying. An open session reserves a worker. |
-| No SDK wheel or import errors | Run `uv sync --locked --python 3.12` in this example's directory. SDK 1.6.0 requires a supported platform; Linux wheels require glibc 2.34+. |
+| No SDK wheel or import errors | Run `uv sync --locked --python 3.12` in this example's directory. The Python SDK requires a supported platform; Linux wheels require glibc 2.34+. |
 | Checkpoint unavailable or discovery failed | The endpoint may serve an older release or a smaller checkpoint set. Inspect the reported choices; the client does not silently substitute one. |
 | No action before the timeout, or `command_error` | Check all three RGB views, measured state, task, and transport. Read the error, close the session, and correct the cause before retrying. |
 | Different actions with the same seed | Fast execution and encoded camera pixels can vary. This is not an exact-replay test. |

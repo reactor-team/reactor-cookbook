@@ -135,7 +135,11 @@ confirm only the intended surface moved.
 
 Public robotics docs consume `robotics/sim/notebooks/reactor_robotics` and the
 `cosmos-droid`, `robotwin`, `dreamzero`, and `libero` simulator packages.
-These five environments pin Python SDK 1.6.0. Preserve the notebook helper's
+The robotics environments use the current tested Python SDK with lockfiles.
+Upgrade their manifests and lockfiles together; run `.github/workflows/robotics.yml`.
+`robotics/sim/robocasa365` uses native SDK tracks in local mode; its historical
+rollout scores do not validate the migrated transport.
+The official docs follow main, and `reactor_robotics/README.md` owns helper docs. Preserve the notebook helper's
 shared camera capture timestamps when updating transport code; a timestamp
 on a frame does not guarantee model-level observation synchronization.
 `ReactorSession.send` returns the correlated SDK envelope or None; `next_message`
