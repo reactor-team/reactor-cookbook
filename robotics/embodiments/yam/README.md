@@ -107,16 +107,10 @@ The client validates the response shape, rotations, action prefix, and request
 correlation. A timeout, model error, or mismatch invalidates the session;
 reconnect before retrying.
 
-## Model version and normalization
+## Model
 
-The response contract matches the inspected 0.1.2 serving behavior. The hosted
-model name can point to a newer release, and this client does not verify weight
-or normalization hashes. A serving update may require a client update.
-
-Measured state is sent unchanged and normalized by the hosted model. Earlier
-YAM experiments found that changing state normalization materially affected
-behavior; the experimental simulator correction is not included here. Reliable
-grasp closure and task completion have not been established by these tests.
+Send measured state in the units described above. The hosted model handles
+normalization; you don't need to normalize the values before calling `predict()`.
 
 Microsoft publishes the upstream checkpoint at
 [microsoft/rho-yam-box](https://huggingface.co/microsoft/rho-yam-box) and its code
