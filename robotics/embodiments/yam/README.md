@@ -11,7 +11,7 @@ not execute them.
 Install [uv](https://docs.astral.sh/uv/) and `make`, then run:
 
 ```sh
-cd robotics/rho-yam
+cd robotics/embodiments/yam
 make setup
 make test
 export REACTOR_API_KEY='YOUR_OWN_API_KEY'
