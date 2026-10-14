@@ -14,3 +14,7 @@ Looking for the one reference frontend per API model — the templates
 - [`fast-h3-streaming-app`](./fast-h3-streaming-app): an endlessly directed
   FastH3 cooking show with native audio, clip-ID continuity, live prompt
   steering, and persistent text-driven props.
+- [`storyboard-previs`](./storyboard-previs): a storyboard that generates
+  itself with FastH3 Omni — reference-pinned cast, lip-synced dialogue, a whole
+  sequence through the model's playout queue, and "what happens next"
+  continuation from the last frame.

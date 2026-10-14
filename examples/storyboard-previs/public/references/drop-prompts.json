@@ -1,0 +1,18 @@
+{
+  "tool": "Built-in image generation",
+  "style": "Use case: photorealistic-natural. Consistency reference for a Hollywood previsualization storyboard called Dead Drop, a quiet thriller set in a grand old library. Single realistic photograph, not a contact sheet. Natural 35mm film texture, real skin texture, no beauty retouching, no logos, no readable text, no watermark, no celebrity resemblance.",
+  "assets": [
+    [
+      "drop-courier",
+      "Asset type: fictional character reference. A woman about 30, East Asian, straight black hair cut to the jaw, sharp dark eyes, a small scar through her left eyebrow, wearing a charcoal trench coat over a white shirt, a slim black crossbody bag. Waist-up three-quarter portrait, face clearly visible, guarded and alert expression, hands out of frame. Background softly defocused pale stone plaza and palm trunks in hard midday light. Horizontal 3:2."
+    ],
+    [
+      "drop-watcher",
+      "Asset type: fictional character reference. A man about 45, Black, shaved head, close grey-flecked beard, deep-set eyes, a faint crease between the brows, wearing a worn olive bomber jacket over a black t-shirt, a small black earpiece in his right ear. Waist-up three-quarter portrait leaning on the carved wooden railing of an upper gallery inside a grand old library reading room, looking down and to the side, face clearly visible, patient and watchful expression. Background a defocused reading room with tall shelves and green lamps. Horizontal 3:2."
+    ],
+    [
+      "drop-library",
+      "Asset type: location reference. Wide cinematic photograph of a grand old library reading room, nearly empty: long oak tables with green-shaded brass lamps, a high coffered ceiling, tall arched windows with shafts of afternoon light and drifting dust, floor-to-ceiling shelves, a carved wooden upper gallery with a railing running along both sides, and a rolling ladder. Two or three distant readers only. Warm lamp light against cool window light, deep quiet. Horizontal 16:9."
+    ]
+  ]
+}
