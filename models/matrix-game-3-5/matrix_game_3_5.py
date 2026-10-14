@@ -153,7 +153,8 @@ class MatrixGame35(ReactorApp):
             "Set the scene prompt without restarting the current world. Valid when an anchor "
             "image is selected; the text takes effect on the next generated 12-frame "
             "`main_video` chunk and does not clear the rollout limit. Returns `state_update` "
-            "on success, or `command_error` when `prompt` is empty or no image is selected."
+            "Fails with `prompt_required` when `prompt` is empty, or `image_required` when no "
+            "image is selected."
         ),
     )
     def set_prompt(
@@ -186,8 +187,9 @@ class MatrixGame35(ReactorApp):
             "Replace the anchor image and start a fresh world. Valid at any time; the new "
             "image clears progress and the rollout limit, releases all camera axes, and "
             "starts continuous 12-frame `main_video` generation from the fresh world. "
-            "Returns `state_update` on success, or `command_error` when "
-            "the upload is not a valid JPEG, PNG, WebP, or BMP within the size limits."
+            "Returns `state_update`. Fails with `unsupported_media`, `invalid_image`, or "
+            "`image_too_large` when the upload is not a valid JPEG, PNG, WebP, or BMP within "
+            "the size limits, or `prompt_required` when no prompt is available."
         ),
     )
     def set_image(
@@ -225,8 +227,9 @@ class MatrixGame35(ReactorApp):
         description=(
             "Set backward-to-forward camera translation. Valid after selecting an image and "
             "before the rollout limit; the value is sampled at the next 12-frame chunk "
-            "boundary and held for later chunks. Returns `state_update` on success, or "
-            "`command_error` until an image is selected or a limited rollout is reset."
+            "boundary and held for later chunks. Returns `state_update`. Fails with "
+            "`image_required` until an image is selected, or `rollout_limit_reached` until a "
+            "limited rollout is reset."
         ),
     )
     def set_forward(
@@ -252,8 +255,8 @@ class MatrixGame35(ReactorApp):
         description=(
             "Set left-to-right camera translation. Valid after selecting an image and before "
             "the rollout limit; the value is sampled at the next 12-frame chunk boundary and "
-            "held for later chunks. Returns `state_update` on success, or `command_error` until "
-            "an image is selected or a limited rollout is reset."
+            "held for later chunks. Returns `state_update`. Fails with `image_required` until "
+            "an image is selected, or `rollout_limit_reached` until a limited rollout is reset."
         ),
     )
     def set_strafe(
@@ -279,8 +282,8 @@ class MatrixGame35(ReactorApp):
         description=(
             "Set down-to-up camera translation. Valid after selecting an image and before the "
             "rollout limit; the value is sampled at the next 12-frame chunk boundary and held "
-            "for later chunks. Returns `state_update` on success, or `command_error` until an "
-            "image is selected or a limited rollout is reset."
+            "for later chunks. Returns `state_update`. Fails with `image_required` until an "
+            "image is selected, or `rollout_limit_reached` until a limited rollout is reset."
         ),
     )
     def set_vertical(
@@ -306,8 +309,8 @@ class MatrixGame35(ReactorApp):
         description=(
             "Set downward-to-upward camera pitch. Valid after selecting an image and before "
             "the rollout limit; the value is sampled at the next 12-frame chunk boundary and "
-            "held for later chunks. Returns `state_update` on success, or `command_error` until "
-            "an image is selected or a limited rollout is reset."
+            "held for later chunks. Returns `state_update`. Fails with `image_required` until "
+            "an image is selected, or `rollout_limit_reached` until a limited rollout is reset."
         ),
     )
     def set_pitch(
@@ -333,8 +336,8 @@ class MatrixGame35(ReactorApp):
         description=(
             "Set left-to-right camera yaw. Valid after selecting an image and before the "
             "rollout limit; the value is sampled at the next 12-frame chunk boundary and held "
-            "for later chunks. Returns `state_update` on success, or `command_error` until an "
-            "image is selected or a limited rollout is reset."
+            "for later chunks. Returns `state_update`. Fails with `image_required` until an "
+            "image is selected, or `rollout_limit_reached` until a limited rollout is reset."
         ),
     )
     def set_yaw(
@@ -360,8 +363,9 @@ class MatrixGame35(ReactorApp):
         description=(
             "Set counterclockwise-to-clockwise camera roll. Valid after selecting an image and "
             "before the rollout limit; the value is sampled at the next 12-frame chunk "
-            "boundary and held for later chunks. Returns `state_update` on success, or "
-            "`command_error` until an image is selected or a limited rollout is reset."
+            "boundary and held for later chunks. Returns `state_update`. Fails with "
+            "`image_required` until an image is selected, or `rollout_limit_reached` until a "
+            "limited rollout is reset."
         ),
     )
     def set_roll(
@@ -388,7 +392,7 @@ class MatrixGame35(ReactorApp):
             "Restart from the selected anchor image and active prompt. Valid when an image is "
             "selected; the reset applies before the next generated chunk, clears progress and "
             "the rollout limit, releases all camera axes, and resumes generation. Returns "
-            "`state_update` on success, or `command_error` when no image is selected."
+            "`state_update`. Fails with `image_required` when no image is selected."
         ),
     )
     def reset(

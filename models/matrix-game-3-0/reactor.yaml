@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: matrix-game-3-0-distilled
-  version: v0.1.2
+  version: v0.1.3
   description: |
     Explore a memory-augmented autoregressive world from an image, a prompt,
     player movement, and pitch/yaw view controls.

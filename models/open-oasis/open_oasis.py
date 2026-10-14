@@ -292,8 +292,8 @@ class OpenOasis(ReactorApp):
             "Select an uploaded Minecraft image as the starting frame for a fresh rollout. "
             "Valid any time during a session; the image replaces previous starting context at the "
             "next generated frame and clears all controls. Emits `conditioning_changed` and "
-            "broadcasts `state_update` on success, or `command_error` when the upload is "
-            "mislabeled or undecodable."
+            "broadcasts `state_update`. Fails with `unsupported_media` when the upload is not "
+            "an image, or `invalid_image` when it cannot be decoded."
         ),
     )
     async def set_image(
@@ -316,8 +316,9 @@ class OpenOasis(ReactorApp):
             "Select consecutive frames from an uploaded video as the starting context for a "
             "fresh rollout. Valid any time during a session; the frames replace prior "
             "context at the next generated frame and clear all controls. Emits "
-            "`conditioning_changed` and broadcasts `state_update` on success, or "
-            "`command_error` when the upload is mislabeled, undecodable, or too short."
+            "`conditioning_changed` and broadcasts `state_update`. Fails with "
+            "`unsupported_media` when the upload is not a video, or `invalid_video` when it "
+            "cannot be decoded or is too short."
         ),
     )
     async def set_video(
@@ -357,7 +358,8 @@ class OpenOasis(ReactorApp):
             "Select the built-in Open-Oasis Minecraft sample as the starting frame for a fresh "
             "rollout. Valid any time during a session; it replaces uploaded context at the next "
             "generated frame and clears all controls. Emits `conditioning_changed` and "
-            "broadcasts `state_update` on success."
+            "broadcasts `state_update`. Fails with `sample_unavailable` when the sample is "
+            "unavailable."
         ),
     )
     async def random_scene(self) -> ConditioningChanged:

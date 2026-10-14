@@ -150,8 +150,8 @@ class Diamond(ReactorApp):
         description=(
             "Select a random built-in spawn and queue it for the next model-step boundary, "
             "including recorded actions available to replay. Available throughout an active "
-            "session. Emits `scene_changed` and broadcasts `state_update` on success, or "
-            "`command_error` if the built-in scenes are unavailable."
+            "session. Emits `scene_changed` and broadcasts `state_update`. Fails with "
+            "`scene_unavailable` if the built-in scenes are unavailable."
         ),
     )
     async def random_scene(self) -> SceneChanged:
@@ -174,8 +174,8 @@ class Diamond(ReactorApp):
         description=(
             "Start a fresh world from an uploaded image at the next model-step boundary, "
             "switch to human input, and release held controls. Available throughout an active "
-            "session. Emits `scene_changed` and broadcasts `state_update` on success, or "
-            "`command_error` if the upload is not a decodable image."
+            "session. Emits `scene_changed` and broadcasts `state_update`. Fails with "
+            "`invalid_image` if the upload is not a decodable image."
         ),
     )
     async def set_spawn_image(
@@ -214,8 +214,8 @@ class Diamond(ReactorApp):
         description=(
             "Select client-controlled input or the built-in scene's recorded replay. A change "
             "queues a fresh compatible world and releases held controls. Emits "
-            "`action_changed` and broadcasts `state_update` on success, or `command_error` "
-            "when `controller` is unsupported."
+            "`action_changed` and broadcasts `state_update`. A `controller` outside the "
+            "listed values is refused before the command runs."
         ),
     )
     async def set_controller(
@@ -250,8 +250,8 @@ class Diamond(ReactorApp):
         description=(
             "Hold or release one native game key from the next generated frame until changed. "
             "Only human input uses the value; replay acknowledges and ignores it. Emits "
-            "`action_changed` and, for human input, broadcasts `state_update`, or returns "
-            "`command_error` when `key` is unsupported."
+            "`action_changed` and, for human input, broadcasts `state_update`. A `key` "
+            "outside the listed values is refused before the command runs."
         ),
     )
     async def set_key_state(
@@ -289,8 +289,8 @@ class Diamond(ReactorApp):
         description=(
             "Hold or release one native mouse button from the next generated frame until "
             "changed. Only human input uses the value; replay acknowledges and ignores it. "
-            "Emits `action_changed` and, for human input, broadcasts `state_update`, or returns "
-            "`command_error` when `button` is unsupported."
+            "Emits `action_changed` and, for human input, broadcasts `state_update`. A "
+            "`button` outside the listed values is refused before the command runs."
         ),
     )
     async def set_mouse_button_state(
@@ -330,8 +330,8 @@ class Diamond(ReactorApp):
         name="mouse_move",
         description=(
             "Apply one relative camera movement to the next generated frame. Human input "
-            "consumes it once; replay acknowledges and ignores it. Emits `action_changed`, or "
-            "returns `command_error` when either delta is outside its supported range."
+            "consumes it once; replay acknowledges and ignores it. Emits `action_changed`. A "
+            "delta outside its supported range is refused before the command runs."
         ),
     )
     def mouse_move(

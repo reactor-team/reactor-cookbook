@@ -138,7 +138,8 @@ class AlayaWorld(ReactorApp):
         description=(
             "Set the scene prompt for the next 32-frame chunk without resetting the world. "
             "Requires a selected image. Emits `prompt_queued` and broadcasts `state_update` "
-            "on success, or `command_error` when the prompt is empty or no image is selected."
+            "Fails with `prompt_required` when the prompt is empty, or `image_required` when no "
+            "image is selected."
         ),
     )
     async def set_prompt(
@@ -171,8 +172,8 @@ class AlayaWorld(ReactorApp):
         name="set_forward",
         description=(
             "Set backward or forward camera velocity for forthcoming chunks. Requires a "
-            "selected image. Emits `camera_motion_changed` and broadcasts `state_update` on "
-            "success, or `command_error` when no image is selected."
+            "selected image. Emits `camera_motion_changed` and broadcasts `state_update`. "
+            "Fails with `image_required` when no image is selected."
         ),
     )
     async def set_forward(
@@ -198,8 +199,8 @@ class AlayaWorld(ReactorApp):
         name="set_strafe",
         description=(
             "Set left or right camera velocity for forthcoming chunks. Requires a selected "
-            "image. Emits `camera_motion_changed` and broadcasts `state_update` on success, "
-            "or `command_error` when no image is selected."
+            "image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected."
         ),
     )
     async def set_strafe(
@@ -225,8 +226,8 @@ class AlayaWorld(ReactorApp):
         name="set_vertical",
         description=(
             "Set down or up camera velocity for forthcoming chunks. Requires a selected image. "
-            "Emits `camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` when no image is selected."
+            "Emits `camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected."
         ),
     )
     async def set_vertical(
@@ -252,8 +253,8 @@ class AlayaWorld(ReactorApp):
         name="set_pitch",
         description=(
             "Set down or up camera pitch velocity for forthcoming chunks. Requires a selected "
-            "image. Emits `camera_motion_changed` and broadcasts `state_update` on success, "
-            "or `command_error` when no image is selected."
+            "image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected."
         ),
     )
     async def set_pitch(
@@ -279,8 +280,8 @@ class AlayaWorld(ReactorApp):
         name="set_yaw",
         description=(
             "Set left or right camera yaw velocity for forthcoming chunks. Requires a selected "
-            "image. Emits `camera_motion_changed` and broadcasts `state_update` on success, "
-            "or `command_error` when no image is selected."
+            "image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected."
         ),
     )
     async def set_yaw(
@@ -307,7 +308,7 @@ class AlayaWorld(ReactorApp):
         description=(
             "Set counterclockwise or clockwise camera roll velocity for forthcoming chunks. "
             "Requires a selected image. Emits `camera_motion_changed` and broadcasts "
-            "`state_update` on success, or `command_error` when no image is selected."
+            "`state_update`. Fails with `image_required` when no image is selected."
         ),
     )
     async def set_roll(
@@ -334,7 +335,7 @@ class AlayaWorld(ReactorApp):
         description=(
             "Queue a fresh rollout from the selected image, current prompt, and neutral camera "
             "motion. Requires a selected image. Emits `rollout_reset_queued` and broadcasts "
-            "`state_update` on success, or `command_error` when no image is selected."
+            "`state_update`. Fails with `image_required` when no image is selected."
         ),
     )
     async def reset(
@@ -371,8 +372,9 @@ class AlayaWorld(ReactorApp):
         description=(
             "Select an uploaded image, queue a fresh rollout, and resume continuous generation. "
             "Can replace the image at any time. Emits `image_selected` and broadcasts "
-            "`state_update` on success, or `command_error` when the upload is missing, too "
-            "large, mislabeled, or undecodable."
+            "`state_update`. Fails with `invalid_image` when the upload is empty or "
+            "undecodable, `image_too_large` when it is over the size or pixel limit, or "
+            "`unsupported_media` when it is not, or does not contain, a supported image type."
         ),
     )
     async def set_image(
@@ -419,8 +421,9 @@ class AlayaWorld(ReactorApp):
         description=(
             "Select a built-in image and its matching prompt, queue a fresh rollout, and resume "
             "continuous generation. Valid when built-in examples are configured. Emits "
-            "`image_selected` and broadcasts `state_update` on success, or `command_error` when "
-            "no usable image or prompt is available."
+            "`image_selected` and broadcasts `state_update`. Fails with `image_unavailable` "
+            "when no built-in image is configured, or `prompt_unavailable` when the image has "
+            "no prompt."
         ),
     )
     async def random_image(self) -> ImageSelected:

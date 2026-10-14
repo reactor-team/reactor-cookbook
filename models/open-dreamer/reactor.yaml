@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: open-dreamer
-  version: v0.1.2
+  version: v0.1.3
   description: |
     Stream an interactive Minecraft rollout initialized from a configured
     dataset demo or an uploaded screenshot and controlled with keyboard and

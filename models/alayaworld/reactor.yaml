@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: alaya-world
-  version: v0.1.3
+  version: v0.1.4
   description: |
     Play the distilled AlayaWorld model with live prompt and six-axis camera controls.
   resources:

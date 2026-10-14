@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: solarwm-5b-stage2
-  version: v0.1.1
+  version: v0.1.2
   description: |
     Explore SolarWM's autoregressive Wan2.2 TI2V-5B world from an uploaded
     image, a prompt, and six-axis camera motion.

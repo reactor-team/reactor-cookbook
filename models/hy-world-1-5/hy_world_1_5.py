@@ -144,8 +144,8 @@ class HYWorld15(ReactorApp):
             "Queue a non-empty scene prompt without restarting the current world. Requires a "
             "selected image. The model rebuilds its text condition at the next causal chunk "
             "boundary while preserving latent history and geometric memory. Emits "
-            "`prompt_queued` and broadcasts `state_update` on success, or `command_error` when "
-            "the prompt is empty or no image is selected."
+            "`prompt_queued` and broadcasts `state_update`. Fails with `prompt_required` when "
+            "the prompt is empty, or `image_required` when no image is selected."
         ),
     )
     async def set_prompt(
@@ -179,7 +179,8 @@ class HYWorld15(ReactorApp):
             "Atomically set all four camera controls trained by HY-World 1.5. Requires an active "
             "world before its rollout limit. Values are sampled together at the next chunk and "
             "held for later chunks. Emits `camera_motion_changed` and broadcasts `state_update` "
-            "on success, or `command_error` when no image is selected or the limit is reached."
+            "Fails with `image_required` when no image is selected, or `rollout_limit_reached` "
+            "when the limit is reached."
         ),
     )
     async def set_camera(
@@ -225,7 +226,7 @@ class HYWorld15(ReactorApp):
         description=(
             "Return every held camera control to neutral. Requires a selected image and applies "
             "at the next chunk boundary. Emits `camera_motion_changed` and broadcasts "
-            "`state_update` on success, or `command_error` when no image is selected."
+            "`state_update`. Fails with `image_required` when no image is selected."
         ),
     )
     async def release_camera(self) -> CameraMotionChanged:
@@ -242,7 +243,7 @@ class HYWorld15(ReactorApp):
             "Queue a fresh world from the selected image and current prompt. Requires a selected "
             "image. Clears progress, geometric memory, KV cache, and camera motion while "
             "resuming continuous generation. Emits `rollout_reset_queued` and broadcasts `state_update` "
-            "on success, or `command_error` when no image is selected."
+            "Fails with `image_required` when no image is selected."
         ),
     )
     async def reset(
@@ -272,8 +273,9 @@ class HYWorld15(ReactorApp):
         description=(
             "Select an uploaded reference image and queue a fresh continuously generated world. "
             "The selected image queues an initial 13-frame chunk. Emits `image_selected` and "
-            "broadcasts `state_update` on "
-            "success, or `command_error` for an invalid upload."
+            "broadcasts `state_update`. Fails with `unsupported_media`, `invalid_image`, or "
+            "`image_too_large` when the upload is not a supported image, empty or undecodable, "
+            "or over the size or pixel limit."
         ),
     )
     async def set_image(
@@ -317,7 +319,7 @@ class HYWorld15(ReactorApp):
         description=(
             "Select an official built-in image and its matching prompt, begin continuous "
             "generation, and queue the initial 13-frame chunk. Emits `image_selected` and broadcasts "
-            "`state_update` on success, or `command_error` when no example is available."
+            "`state_update`. Fails with `image_unavailable` when no example is available."
         ),
     )
     async def random_image(self) -> ImageSelected:

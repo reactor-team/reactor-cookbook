@@ -120,7 +120,7 @@ class Yume15(ReactorApp):
 
     @event(
         name="set_image",
-        description="Start a new world from an uploaded image. The replacement starts at the next chunk boundary. A blank `prompt` uses a neutral continuation description. Emits `scene_queued` and `state_update` on success, or `command_error` if the image is invalid.",
+        description="Start a new world from an uploaded image. The replacement starts at the next chunk boundary. A blank `prompt` uses a neutral continuation description. Emits `scene_queued` and `state_update`. Fails with `invalid_image` if the image is empty or undecodable, `image_too_large` if it is over 25 MiB or 100 million pixels, or `unsupported_media` if it is not a supported image format.",
     )
     async def set_image(
         self,
@@ -169,7 +169,7 @@ class Yume15(ReactorApp):
 
     @event(
         name="set_video_scene",
-        description="Start a new world from an uploaded video and a prompt. The replacement starts at the next chunk boundary. Emits `scene_queued` and `state_update` on success, or `command_error` if the video or prompt is invalid.",
+        description="Start a new world from an uploaded video and a prompt. The replacement starts at the next chunk boundary. Emits `scene_queued` and `state_update`. Fails with `prompt_required` if `prompt` is blank, `invalid_video` if the video is empty or undecodable, `video_too_large` if it is over 500 MiB or a frame is over 100 million pixels, or `video_too_short` if it has fewer than 33 frames.",
     )
     async def set_video_scene(
         self,
@@ -222,7 +222,7 @@ class Yume15(ReactorApp):
 
     @event(
         name="set_text_scene",
-        description="Start a new world from a text description without reference media. The replacement starts at the next chunk boundary. Emits `scene_queued` and `state_update` on success, or `command_error` if `prompt` is blank.",
+        description="Start a new world from a text description without reference media. The replacement starts at the next chunk boundary. Emits `scene_queued` and `state_update`. Fails with `prompt_required` if `prompt` is blank.",
     )
     async def set_text_scene(
         self,
@@ -269,7 +269,7 @@ class Yume15(ReactorApp):
 
     @event(
         name="set_prompt",
-        description="Change the scene and event description without restarting the world. It is valid after a scene is selected and applies from the next chunk boundary. Emits `prompt_changed` and `state_update` on success, or `command_error` if no scene exists, the world has reached its chunk limit (after `rollout_limit_reached`), or `prompt` is blank.",
+        description="Change the scene and event description without restarting the world. It is valid after a scene is selected and applies from the next chunk boundary. Emits `prompt_changed` and `state_update`. Fails with `scene_required` if no scene exists, `rollout_limit_reached` if the world has reached its chunk limit, or `prompt_required` if `prompt` is blank.",
     )
     async def set_prompt(
         self,
@@ -291,7 +291,7 @@ class Yume15(ReactorApp):
 
     @event(
         name="set_key_state",
-        description="Press or release one persistent movement or view key. It is valid after a scene is selected and affects the next chunk boundary. Compatible keys may be held together. Emits `action_changed` and `state_update` on success, or `command_error` for no scene, a world at its chunk limit (after `rollout_limit_reached`), or an unsupported combination.",
+        description="Press or release one persistent movement or view key. It is valid after a scene is selected and affects the next chunk boundary. Compatible keys may be held together. Emits `action_changed` and `state_update`. Fails with `scene_required` for no scene, `rollout_limit_reached` for a world at its chunk limit, or `unsupported_key_combination` for an unsupported combination.",
     )
     async def set_key_state(
         self,
@@ -324,7 +324,7 @@ class Yume15(ReactorApp):
 
     @event(
         name="release_controls",
-        description="Release every held movement and view key. It is valid after a scene is selected and restores stationary controls from the next chunk boundary. Emits `action_changed` and `state_update` on success, or `command_error` if no scene exists or the world has reached its chunk limit (after `rollout_limit_reached`).",
+        description="Release every held movement and view key. It is valid after a scene is selected and restores stationary controls from the next chunk boundary. Emits `action_changed` and `state_update`. Fails with `scene_required` if no scene exists, or `rollout_limit_reached` if the world has reached its chunk limit.",
     )
     async def release_controls(self) -> ActionChanged:
         self._require_available_rollout()
@@ -340,7 +340,7 @@ class Yume15(ReactorApp):
 
     @event(
         name="reset",
-        description="Restart the selected scene and discard its generated history. It is valid after a scene is selected and begins at the next chunk boundary with all controls released. Emits `rollout_reset_queued` and `state_update` on success, or `command_error` if no scene exists.",
+        description="Restart the selected scene and discard its generated history. It is valid after a scene is selected and begins at the next chunk boundary with all controls released. Emits `rollout_reset_queued` and `state_update`. Fails with `scene_required` if no scene exists.",
     )
     async def reset(
         self,

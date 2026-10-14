@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: abot-world
-  version: v0.1.2
+  version: v0.1.3
   description: |
     Play the distilled ABot-World model with uploaded images, prompts, and native keyboard controls.
   resources:

@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: sana-wm-streaming
-  version: v0.2.1
+  version: v0.2.2
   description: |
     Explore SANA-WM's distilled autoregressive video world from an image,
     a prompt, and native camera controls.

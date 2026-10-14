@@ -130,8 +130,9 @@ class MatrixGame2(ReactorApp):
             "Select an uploaded starting image and initialize a fresh autoregressive world. "
             "Valid at any time; the image is center-cropped to Matrix's 352x640 input, clears "
             "the prior rollout and controls, and starts continuous `main_video` generation. "
-            "Returns `StateUpdate` on success, or `CommandError` when the "
-            "upload is not a valid JPEG, PNG, WebP, or BMP within the size limits."
+            "Returns `state_update`. Fails with `unsupported_media`, `invalid_image`, or "
+            "`image_too_large` when the upload is not a valid JPEG, PNG, WebP, or BMP within "
+            "the size limits."
         ),
     )
     def set_image(
@@ -178,7 +179,8 @@ class MatrixGame2(ReactorApp):
             "Hold or release one WASD movement key for forthcoming chunks. Requires a selected "
             "image; the complete held-key set is sampled as the official four-value multi-hot "
             "condition when the next chunk starts. Emits `action_changed` and broadcasts "
-            "`state_update` on success, or `command_error` when a reset is required."
+            "`state_update`. Fails with `image_required` when no image is selected, or "
+            "`rollout_limit_reached` when a reset is required."
         ),
     )
     async def set_key_state(
@@ -220,7 +222,9 @@ class MatrixGame2(ReactorApp):
             "Set continuous look-down or look-up camera velocity for forthcoming chunks. "
             "Requires a selected image; the normalized value is sampled at the next chunk "
             "boundary and mapped to Matrix's native vertical mouse condition. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected, or `rollout_limit_reached` when a "
+            "reset is required."
         ),
     )
     async def set_pitch(
@@ -247,7 +251,9 @@ class MatrixGame2(ReactorApp):
             "Set continuous turn-left or turn-right camera velocity for forthcoming chunks. "
             "Requires a selected image; the normalized value is sampled at the next chunk "
             "boundary and mapped to Matrix's native horizontal mouse condition. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected, or `rollout_limit_reached` when a "
+            "reset is required."
         ),
     )
     async def set_yaw(
@@ -287,7 +293,7 @@ class MatrixGame2(ReactorApp):
             "Restart from the selected image with empty model, keyboard, mouse, cross-attention, "
             "and causal VAE caches. Valid after image selection; it resumes continuous generation, "
             "clears controls and progress, and automatically queues one visible chunk. Returns "
-            "`StateUpdate` on success, or `CommandError` when no image is selected."
+            "`state_update`. Fails with `image_required` when no image is selected."
         ),
     )
     def reset(

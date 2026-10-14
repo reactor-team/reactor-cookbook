@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: sgf-plus
-  version: v0.2.1
+  version: v0.2.2
   description: Generate long silent videos from text and optional uploaded images with SGF+.
   resources:
     gpu:

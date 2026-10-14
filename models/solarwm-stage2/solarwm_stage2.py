@@ -102,8 +102,9 @@ class SolarWM(ReactorApp):
             "Replace the anchor image and start a fresh world with continuous `main_video` "
             "generation. Valid at any time; progress and camera axes reset, and the upload is "
             "decoded before the command succeeds. Emits `image_selected` and broadcasts "
-            "`state_update` on success, or `command_error` for invalid image bytes, media "
-            "type, or dimensions."
+            "`state_update`. Fails with `image_empty`, `image_too_large`, "
+            "`image_type_unsupported`, `image_invalid`, `image_type_mismatch`, or "
+            "`image_dimensions_invalid` for invalid image bytes, media type, or dimensions."
         ),
     )
     async def set_image(
@@ -148,8 +149,8 @@ class SolarWM(ReactorApp):
         description=(
             "Replace the text condition and queue a fresh rollout from the selected image. The "
             "new prompt begins at chunk one and continuous generation resumes from the fresh "
-            "world. Emits `prompt_queued` and broadcasts `state_update` on success, or "
-            "`command_error` before image selection or for empty text."
+            "world. Emits `prompt_queued` and broadcasts `state_update`. Fails with "
+            "`image_required` before image selection, or `prompt_required` for empty text."
         ),
     )
     async def set_prompt(
@@ -182,8 +183,9 @@ class SolarWM(ReactorApp):
         description=(
             "Set backward-to-forward camera translation for the next chunk. Valid after image "
             "selection and before the rollout limit; the value is held for later chunks. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` when no image is selected or a fresh rollout is required."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected, or `rollout_limit_reached` when a "
+            "fresh rollout is required."
         ),
     )
     async def set_forward(
@@ -206,8 +208,9 @@ class SolarWM(ReactorApp):
         description=(
             "Set left-to-right camera translation for the next chunk. Valid after image "
             "selection and before the rollout limit; the value is held for later chunks. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` when no image is selected or a fresh rollout is required."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected, or `rollout_limit_reached` when a "
+            "fresh rollout is required."
         ),
     )
     async def set_strafe(
@@ -230,8 +233,9 @@ class SolarWM(ReactorApp):
         description=(
             "Set down-to-up camera translation for the next chunk. Valid after image selection "
             "and before the rollout limit; the value is held for later chunks. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` when no image is selected or a fresh rollout is required."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected, or `rollout_limit_reached` when a "
+            "fresh rollout is required."
         ),
     )
     async def set_vertical(
@@ -254,8 +258,9 @@ class SolarWM(ReactorApp):
         description=(
             "Set downward-to-upward camera pitch for the next chunk. Valid after image selection "
             "and before the rollout limit; the value is held for later chunks. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` when no image is selected or a fresh rollout is required."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected, or `rollout_limit_reached` when a "
+            "fresh rollout is required."
         ),
     )
     async def set_pitch(
@@ -278,8 +283,9 @@ class SolarWM(ReactorApp):
         description=(
             "Set left-to-right camera yaw for the next chunk. Valid after image selection and "
             "before the rollout limit; the value is held for later chunks. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` when no image is selected or a fresh rollout is required."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected, or `rollout_limit_reached` when a "
+            "fresh rollout is required."
         ),
     )
     async def set_yaw(
@@ -302,8 +308,9 @@ class SolarWM(ReactorApp):
         description=(
             "Set counterclockwise-to-clockwise camera roll for the next chunk. Valid after image "
             "selection and before the rollout limit; the value is held for later chunks. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` when no image is selected or a fresh rollout is required."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected, or `rollout_limit_reached` when a "
+            "fresh rollout is required."
         ),
     )
     async def set_roll(
@@ -325,8 +332,9 @@ class SolarWM(ReactorApp):
         name="release_camera",
         description=(
             "Return every held camera axis to neutral for forthcoming chunks. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` when no image is selected or a fresh rollout is required."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected, or `rollout_limit_reached` when a "
+            "fresh rollout is required."
         ),
     )
     async def release_camera(self) -> CameraMotionChanged:
@@ -342,8 +350,8 @@ class SolarWM(ReactorApp):
         description=(
             "Restart from the selected image and prompt with continuous generation from chunk "
             "one. Valid when an anchor exists; progress and camera axes reset. Emits "
-            "`rollout_reset_queued` and broadcasts `state_update` on success, or "
-            "`command_error` when no image is selected."
+            "`rollout_reset_queued` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected."
         ),
     )
     async def reset(

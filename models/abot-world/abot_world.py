@@ -132,8 +132,8 @@ class ABotWorld(ReactorApp):
             "Hold or release one native ABot-World action key. Valid before the rollout limit; "
             "the state is sampled at the next autoregressive chunk boundary and held for later "
             "chunks. A press followed by a release before sampling is retained as one short tap. "
-            "Emits `action_changed` and broadcasts `state_update` on success, or "
-            "`command_error` with `rollout_limit_reached` when a fresh world is required."
+            "Emits `action_changed` and broadcasts `state_update`. Fails with "
+            "`rollout_limit_reached` when a fresh world is required."
         ),
     )
     async def set_key_state(
@@ -193,9 +193,9 @@ class ABotWorld(ReactorApp):
         description=(
             "Queue a non-empty scene prompt without clearing the rolling KV cache. Valid before "
             "or after an image is selected; the text rebuilds upstream cross-attention for the "
-            "next generated chunk. Emits `prompt_queued` and broadcasts `state_update` on "
-            "success, or `command_error` when the prompt is empty or the rollout limit requires "
-            "a reset."
+            "next generated chunk. Emits `prompt_queued` and broadcasts `state_update`. Fails "
+            "with `prompt_required` when the prompt is empty, or `rollout_limit_reached` when "
+            "the rollout limit requires a reset."
         ),
     )
     async def set_prompt(
@@ -227,8 +227,10 @@ class ABotWorld(ReactorApp):
         description=(
             "Select an uploaded starting frame and begin a fresh continuous rollout. Valid at "
             "any time; the upload is checked before replacing "
-            "the active world. Emits `image_selected` and broadcasts `state_update` on success, "
-            "or `command_error` when the file is too large, mislabeled, or undecodable."
+            "the active world. Emits `image_selected` and broadcasts `state_update`. Fails with "
+            "`image_too_large`, `unsupported_media`, `invalid_image_dimensions`, or "
+            "`invalid_image` when the file is too large, not a supported image type, over the "
+            "pixel limit, or undecodable."
         ),
     )
     async def set_image(
@@ -273,8 +275,8 @@ class ABotWorld(ReactorApp):
         description=(
             "Select a built-in ABot-World starting frame and its matching prompt, then begin a "
             "fresh continuous rollout. Valid when examples "
-            "are configured. Emits `image_selected` and broadcasts `state_update` on success, "
-            "or `command_error` with `image_unavailable` when no built-in image exists."
+            "are configured. Emits `image_selected` and broadcasts `state_update`. Fails with "
+            "`image_unavailable` when no built-in image exists."
         ),
     )
     async def random_image(self) -> ImageSelected:
@@ -310,8 +312,8 @@ class ABotWorld(ReactorApp):
             "Restart the selected starting image as a fresh causal world. Valid after an image "
             "is selected; the reset applies at the next inference boundary, preserves the "
             "prompt, and clears controls and the rollout limit. Emits "
-            "`rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` "
-            "when no image is selected or the seed is out of range."
+            "`rollout_reset_queued` and broadcasts `state_update`. Fails with `image_required` "
+            "when no image is selected."
         ),
     )
     async def reset(

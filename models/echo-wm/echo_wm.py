@@ -141,8 +141,9 @@ class EchoWM(ReactorApp):
             "Select an uploaded first frame and start a fresh audiovisual world with continuous "
             "generation. Supply a prompt or leave it blank to use the configured image-neutral "
             "default. Emits "
-            "`image_selected` and broadcasts `state_update` on success, or `command_error` "
-            "when the upload is invalid."
+            "`image_selected` and broadcasts `state_update`. Fails with `unsupported_media`, "
+            "`invalid_image`, or `image_too_large` when the upload is not a supported image, "
+            "empty or undecodable, or over the size or pixel limit."
         ),
     )
     async def set_image(
@@ -194,8 +195,8 @@ class EchoWM(ReactorApp):
         description=(
             "Select a different public Echo-WM example with its matching prompt, field of "
             "view, and seed, then start continuous generation from it. Emits `image_selected` "
-            "and broadcasts `state_update` on success, "
-            "or `command_error` when no example is configured."
+            "and broadcasts `state_update`. Fails with `image_unavailable` when no example is "
+            "configured."
         ),
     )
     async def random_image(self) -> ImageSelected:
@@ -230,8 +231,8 @@ class EchoWM(ReactorApp):
             "Replace the text condition and queue a fresh rollout from the selected image. "
             "The new prompt begins at chunk one and continuous generation resumes from the "
             "fresh world. Emits `prompt_queued` and broadcasts "
-            "`state_update` on success, or `command_error` before image selection or for empty "
-            "text."
+            "`state_update`. Fails with `image_required` before image selection, or "
+            "`prompt_required` for empty text."
         ),
     )
     async def set_prompt(
@@ -263,8 +264,8 @@ class EchoWM(ReactorApp):
         description=(
             "Set Echo-WM's four native held camera axes atomically. Values are sampled at the "
             "next chunk boundary and remain active until changed or released. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` before image selection."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` before image selection."
         ),
     )
     async def set_camera_motion(
@@ -308,8 +309,8 @@ class EchoWM(ReactorApp):
         name="release_camera",
         description=(
             "Return every held camera axis to neutral for forthcoming chunks. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` before image selection."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` before image selection."
         ),
     )
     async def release_camera(self) -> CameraMotionChanged:
@@ -325,8 +326,8 @@ class EchoWM(ReactorApp):
         description=(
             "Set the horizontal camera field of view for forthcoming chunks. The value is "
             "sampled at the next chunk boundary and remains active. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` before image selection."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` before image selection."
         ),
     )
     async def set_fov(
@@ -350,8 +351,8 @@ class EchoWM(ReactorApp):
         description=(
             "Queue a fresh bounded rollout from the selected image and current prompt. The "
             "command releases camera motion and continues generation from chunk one. Emits "
-            "`rollout_reset_queued` and broadcasts `state_update` on success, or "
-            "`command_error` before image selection."
+            "`rollout_reset_queued` and broadcasts `state_update`. Fails with "
+            "`image_required` before image selection."
         ),
     )
     async def reset(

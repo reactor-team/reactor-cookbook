@@ -132,8 +132,8 @@ class MatrixGame30(ReactorApp):
             "Replace the scene prompt and start a fresh rollout from the selected image. "
             "Valid after an image is selected; the prompt is encoded before the next "
             "57-frame `main_video` chunk and resumes continuous generation. Returns "
-            "`state_update` on success, or `command_error` when "
-            "`prompt` is empty or no image is selected."
+            "`state_update`. Fails with `prompt_required` when "
+            "`prompt` is empty, or `image_required` when no image is selected."
         ),
     )
     def set_prompt(
@@ -168,7 +168,9 @@ class MatrixGame30(ReactorApp):
             "uploaded image and optional prompt apply before continuous `main_video` generation, "
             "and all prior "
             "latents, camera memory, actions, poses, and VAE cache are discarded. Returns "
-            "`state_update` on success, or `command_error` for an invalid image."
+            "`state_update`. Fails with `unsupported_media`, `invalid_image`, or "
+            "`image_too_large` when the upload is not a supported image, empty or "
+            "undecodable, or over the size or pixel limit."
         ),
     )
     def set_image(
@@ -230,8 +232,8 @@ class MatrixGame30(ReactorApp):
             "Hold or release one native W/S/A/D keyboard token for subsequent chunks. Valid "
             "before the 12-chunk rollout limit; the complete binary "
             "key state is sampled at the next 57- or 40-frame chunk boundary. Emits "
-            "`controls_changed` and broadcasts `state_update` on success, or `command_error` "
-            "with `rollout_limit_reached` at the limit."
+            "`controls_changed` and broadcasts `state_update`. Fails with `image_required` "
+            "before an image is selected, or `rollout_limit_reached` at the limit."
         ),
     )
     async def set_key_state(
@@ -268,8 +270,8 @@ class MatrixGame30(ReactorApp):
             "Set continuous camera pitch for subsequent native chunks. Valid before the "
             "12-chunk rollout limit; the normalized value is scaled "
             "to Matrix's native mouse-x range and sampled at the next chunk boundary. Emits "
-            "`controls_changed` and broadcasts `state_update` on success, or `command_error` "
-            "with `rollout_limit_reached` at the limit."
+            "`controls_changed` and broadcasts `state_update`. Fails with `image_required` "
+            "before an image is selected, or `rollout_limit_reached` at the limit."
         ),
     )
     async def set_pitch(
@@ -297,8 +299,8 @@ class MatrixGame30(ReactorApp):
             "Set continuous camera yaw for subsequent native chunks. Valid before the "
             "12-chunk rollout limit; the normalized value is scaled "
             "to Matrix's native mouse-y range and sampled at the next chunk boundary. Emits "
-            "`controls_changed` and broadcasts `state_update` on success, or `command_error` "
-            "with `rollout_limit_reached` at the limit."
+            "`controls_changed` and broadcasts `state_update`. Fails with `image_required` "
+            "before an image is selected, or `rollout_limit_reached` at the limit."
         ),
     )
     async def set_yaw(
@@ -326,7 +328,7 @@ class MatrixGame30(ReactorApp):
             "Restart from the selected anchor image and active prompt. Valid after an image "
             "is selected; the reset clears all autoregressive memory and held controls, "
             "resumes continuous generation, and queues the fresh 57-frame `main_video` chunk. Returns "
-            "`state_update` on success, or `command_error` when no image is selected."
+            "`state_update`. Fails with `image_required` when no image is selected."
         ),
     )
     def reset(

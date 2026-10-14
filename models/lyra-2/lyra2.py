@@ -92,8 +92,8 @@ class Lyra2(ReactorApp):
         description=(
             "Select an uploaded image and begin a fresh continuous rollout from it. Valid at any "
             "time; the selected image, prompt, and seed replace the current world when the next "
-            "chunk begins. Emits `image_selected` and broadcasts `state_update` on success, or "
-            "`command_error` when the upload is missing, unsupported, empty, or larger than 25 MiB."
+            "chunk begins. Emits `image_selected` and broadcasts `state_update`. Fails with "
+            "`invalid_image` when the upload is missing, unsupported, empty, or larger than 25 MiB."
         ),
     )
     async def set_image(
@@ -139,8 +139,8 @@ class Lyra2(ReactorApp):
         name="random_image",
         description=(
             "Select a random built-in image and begin a fresh continuous rollout using its paired "
-            "prompt. Valid at any time. Emits `image_selected` and broadcasts `state_update` on "
-            "success, or `command_error` when no built-in images are available."
+            "prompt. Valid at any time. Emits `image_selected` and broadcasts `state_update`. "
+            "Fails with `image_unavailable` when no built-in images are available."
         ),
     )
     async def random_image(self) -> ImageSelected:
@@ -185,8 +185,8 @@ class Lyra2(ReactorApp):
         description=(
             "Set the text condition without restarting the current continuous world. Requires a "
             "selected image; the normalized text is sampled when the next chunk begins. Emits "
-            "`prompt_queued` and broadcasts `state_update` on success, or `command_error` for empty "
-            "text or a missing image."
+            "`prompt_queued` and broadcasts `state_update`. Fails with `prompt_required` for empty "
+            "text, or `image_required` for a missing image."
         ),
     )
     async def set_prompt(
@@ -216,7 +216,7 @@ class Lyra2(ReactorApp):
         description=(
             "Set all six held camera axes for the next chunk in one command. Requires a selected "
             "image; values are sampled at the next chunk boundary and held for later chunks. Emits "
-            "`camera_changed` and broadcasts `state_update` on success, or `command_error` when no "
+            "`camera_changed` and broadcasts `state_update`. Fails with `image_required` when no "
             "image is selected."
         ),
     )
@@ -274,7 +274,7 @@ class Lyra2(ReactorApp):
         description=(
             "Stop all held camera translation and rotation. Requires a selected image; neutral values "
             "are sampled at the next chunk boundary and held. Emits `camera_changed` and broadcasts "
-            "`state_update` on success, or `command_error` when no image is selected."
+            "`state_update`. Fails with `image_required` when no image is selected."
         ),
     )
     async def release_camera(self) -> CameraChanged:
@@ -288,7 +288,7 @@ class Lyra2(ReactorApp):
         description=(
             "Restart from the selected image and prompt with continuous generation from chunk one. "
             "Valid when an image exists; progress and camera axes reset. Emits `reset_queued` and "
-            "broadcasts `state_update` on success, or `command_error` when no image is selected."
+            "broadcasts `state_update`. Fails with `image_required` when no image is selected."
         ),
     )
     async def reset(

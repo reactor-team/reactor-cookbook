@@ -1,7 +1,7 @@
 $schema: reactor/v2
 model:
   name: lyra-2-dmd
-  version: v0.1.1
+  version: v0.1.2
   description: Autoregressively explore an image-conditioned Lyra 2.0 video world one native 80-frame chunk at a time.
   resources:
     gpu: {type: NVIDIA_B200, count: 1}

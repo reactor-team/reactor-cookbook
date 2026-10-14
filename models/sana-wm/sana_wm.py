@@ -247,8 +247,9 @@ class SanaWM(ReactorApp):
         description=(
             "Select an uploaded first frame and begin continuous 24-frame chunk generation. "
             "Use set_intrinsics separately to upload native camera calibration. "
-            "Emits `image_selected` and `state_update` on success, or `command_error` when an "
-            "upload is empty, too large, undecodable, or has an unsupported calibration shape."
+            "Emits `image_selected` and `state_update`. Fails with `image_empty`, "
+            "`image_too_large`, `image_too_many_pixels`, or `image_invalid` when the upload is "
+            "empty, over 25 MiB, over the pixel limit, or undecodable."
         ),
     )
     async def set_image(
@@ -294,7 +295,7 @@ class SanaWM(ReactorApp):
 
     @event(
         name="set_intrinsics",
-        description="Upload camera calibration as NumPy .npy, separately from the image. Before image selection it applies to the next upload; after selection it restarts the current world. Emits state_update.",
+        description="Upload camera calibration as NumPy .npy, separately from the image. Before image selection it applies to the next upload; after selection it restarts the current world. Emits `state_update`. Fails with `intrinsics_empty`, `intrinsics_too_large`, or `intrinsics_invalid` for an unusable upload, `intrinsics_shape` for an unsupported shape, or `intrinsics_values` for non-numeric, non-finite, or non-positive focal values.",
     )
     async def set_intrinsics(
         self,
@@ -318,7 +319,8 @@ class SanaWM(ReactorApp):
         description=(
             "Select a different built-in SANA-WM first frame and prompt, then begin "
             "continuous 24-frame chunk generation. Emits `image_selected` and "
-            "`state_update` on success, or `command_error` if the selected example has no prompt."
+            "`state_update`. Fails with `prompt_unavailable` if the selected example has no "
+            "prompt."
         ),
     )
     async def random_image(self) -> ImageSelected:
@@ -358,8 +360,8 @@ class SanaWM(ReactorApp):
         description=(
             "Set non-empty scene text and restart generation from the selected first frame so "
             "the new prompt applies from chunk 1. Emits "
-            "`prompt_changed` and `state_update` on success, or `command_error` before image "
-            "selection or when the trimmed prompt is empty."
+            "`prompt_changed` and `state_update`. Fails with `image_required` before image "
+            "selection, or `prompt_required` when the trimmed prompt is empty."
         ),
     )
     async def set_prompt(
@@ -390,7 +392,8 @@ class SanaWM(ReactorApp):
             "Press or release one native SANA-WM control. Values are held and sampled at the "
             "next 24-frame boundary; simultaneous controls are preserved. Valid only in live "
             "interactive mode after image selection. Emits `control_changed` and `state_update` "
-            "on success, or `command_error` for an unavailable mode or control."
+            "Fails with `image_required` before image selection, `trajectory_active` during "
+            "trajectory playback, or `control_invalid` for an unknown control."
         ),
     )
     async def set_control(
@@ -435,7 +438,7 @@ class SanaWM(ReactorApp):
         description=(
             "Release every held live camera control. The upstream velocity smoother coasts "
             "toward neutral on the next chunk. Valid after image selection. Emits "
-            "`controls_released` and `state_update` on success, or `command_error` before an "
+            "`controls_released` and `state_update`. Fails with `image_required` before an "
             "image is selected."
         ),
     )
@@ -452,8 +455,11 @@ class SanaWM(ReactorApp):
         description=(
             "Upload SANA-WM's native (F,4,4) camera-to-world NumPy trajectory and queue a "
             "fresh rollout that consumes it in 24-frame chunks. Valid after image selection. "
-            "Emits `trajectory_selected` and `state_update` on success, or `command_error` for "
-            "a missing image, invalid upload, unsupported shape, or fewer than 25 poses."
+            "Emits `trajectory_selected` and `state_update`. Fails with `image_required` for a "
+            "missing image; `trajectory_empty`, `trajectory_too_large`, or `trajectory_invalid` "
+            "for an unusable upload; `trajectory_shape` or `trajectory_values` for a wrong "
+            "shape or non-finite values; `trajectory_too_short` for fewer than 25 poses; or "
+            "`trajectory_origin_singular` when the first pose is not invertible."
         ),
     )
     async def set_camera_trajectory(
@@ -515,7 +521,7 @@ class SanaWM(ReactorApp):
         description=(
             "Leave finite trajectory playback and queue a fresh rollout controlled by native "
             "held camera actions. Valid after image selection. Emits `rollout_reset_queued` and "
-            "`state_update` on success, or `command_error` before an image is selected."
+            "`state_update`. Fails with `image_required` before an image is selected."
         ),
     )
     async def use_interactive_controls(self) -> RolloutResetQueued:
@@ -539,7 +545,7 @@ class SanaWM(ReactorApp):
         description=(
             "Restart generation from the selected first frame and current prompt. An optional "
             "non-negative seed replaces the active seed, and continuous generation resumes. "
-            "Emits `rollout_reset_queued` and `state_update` on success, or `command_error` "
+            "Emits `rollout_reset_queued` and `state_update`. Fails with `image_required` "
             "before an image is selected."
         ),
     )

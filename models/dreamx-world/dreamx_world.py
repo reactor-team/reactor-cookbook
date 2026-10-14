@@ -122,8 +122,10 @@ class DreamXWorld(ReactorApp):
             "Select an uploaded image and queue a fresh world. Valid at any time; the image "
             "applies to chunk 1, clears rollout progress, releases held keys, and starts "
             "continuous generation. Emits "
-            "`image_selected`, `state_update`, and then `chunk_generated` on success, or "
-            "`command_error` when the upload is invalid."
+            "`image_selected`, `state_update`, and then `chunk_generated`. Fails with "
+            "`unsupported_media`, `invalid_image`, or `image_too_large` when the upload is not "
+            "a supported image, empty or undecodable, or over the size or pixel limit, or "
+            "`prompt_required` when no prompt is available."
         ),
     )
     async def set_image(
@@ -196,8 +198,8 @@ class DreamXWorld(ReactorApp):
             "Queue a new scene or event prompt without clearing causal visual history. Valid "
             "after an image is selected; the text refreshes cross-attention at the next native "
             "chunk boundary while preserving the rolling visual KV cache. Emits "
-            "`prompt_queued` and broadcasts `state_update` on success, or `command_error` when "
-            "the prompt is empty or no image is selected."
+            "`prompt_queued` and broadcasts `state_update`. Fails with `prompt_required` when "
+            "the prompt is empty, or `image_required` when no image is selected."
         ),
     )
     async def set_prompt(
@@ -229,7 +231,8 @@ class DreamXWorld(ReactorApp):
         description=(
             "Hold or release one native DreamX camera key for subsequent chunks. Valid after "
             "an image is selected. Emits `action_changed` and `state_update` after changing "
-            "the complete held-key set. Unsupported values are rejected before state changes."
+            "the complete held-key set. Unsupported values are rejected before state changes. "
+            "Fails with `image_required` before an image is selected."
         ),
     )
     async def set_key_state(
@@ -272,8 +275,8 @@ class DreamXWorld(ReactorApp):
             "Restart from the selected image and queued prompt. Valid after image selection; "
             "the reset applies before the next native chunk, clears every autoregressive and "
             "VAE cache, releases held keys, and resumes continuous generation. Emits "
-            "`rollout_reset_queued` and broadcasts `state_update` on success, or "
-            "`command_error` when no image is selected."
+            "`rollout_reset_queued` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected."
         ),
     )
     async def reset(

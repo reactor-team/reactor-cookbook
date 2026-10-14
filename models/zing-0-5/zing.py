@@ -98,8 +98,8 @@ class Zing(ReactorApp):
             "Set the text condition without restarting the current world. Before generation, the "
             "prompt starts a text-to-video world; during generation, the normalized text is "
             "sampled when the next chunk begins and preserves prior world history. Emits "
-            "`prompt_queued` and broadcasts `state_update` on success, or `command_error` for "
-            "empty text."
+            "`prompt_queued` and broadcasts `state_update`. Fails with `empty_prompt` for "
+            "empty text, or `rollout_limit_reached` when the world has reached its chunk limit."
         ),
     )
     async def set_prompt(
@@ -146,8 +146,10 @@ class Zing(ReactorApp):
         description=(
             "Select an uploaded anchor image and queue a fresh world with continuous generation. "
             "Valid at any time; the image replaces prior world history before chunk one. Emits "
-            "`image_selected` and broadcasts `state_update` on success, or `command_error` when "
-            "the upload is empty, oversized, mislabeled, or undecodable."
+            "`image_selected` and broadcasts `state_update`. Fails with `image_too_large` when "
+            "the upload is over 25 MiB, `image_format` when it is not a supported image "
+            "format, `image_dimensions` when it is over 100 million pixels, or `invalid_image` "
+            "when it is empty or undecodable."
         ),
     )
     async def set_image(
@@ -202,8 +204,8 @@ class Zing(ReactorApp):
         description=(
             "Select Zing's public example image and matching prompt, then queue a fresh world "
             "with continuous generation. Valid whenever the configured example is available and "
-            "takes no input. Emits `image_selected` and broadcasts `state_update` on success, or "
-            "`command_error` when the example is unavailable."
+            "takes no input. Emits `image_selected` and broadcasts `state_update`. Fails with "
+            "`example_unavailable` when the example is unavailable."
         ),
     )
     async def example_image(self) -> ImageSelected:
@@ -246,7 +248,8 @@ class Zing(ReactorApp):
             "`w`: move forward; `a`: strafe left; `s`: move backward; `d`: strafe right; "
             "`i`: look up; `j`: look left; `k`: look down; `l`: look right. The complete "
             "held state is sampled when the next chunk begins and remains active until changed or "
-            "released. Emits `action_changed` and broadcasts `state_update` on success."
+            "released. Emits `action_changed` and broadcasts `state_update`. Fails with "
+            "`rollout_limit_reached` when the world has reached its chunk limit."
         ),
     )
     async def set_key(
@@ -308,7 +311,7 @@ class Zing(ReactorApp):
             "Queue a fresh world from the selected text or image condition and current prompt. "
             "Use after selecting a prompt or image; the reset clears progress, releases held "
             "controls, and resumes continuous generation from chunk one. Emits `rollout_reset` "
-            "and broadcasts `state_update` on success, or `command_error` when no prompt or "
+            "and broadcasts `state_update`. Fails with `scene_required` when no prompt or "
             "image is selected."
         ),
     )

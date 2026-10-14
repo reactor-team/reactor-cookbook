@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: dreamx-world-5b
-  version: v0.1.2
+  version: v0.1.3
   description: |
     Explore an autoregressive world from an image, event prompt, and native
     composable camera controls.

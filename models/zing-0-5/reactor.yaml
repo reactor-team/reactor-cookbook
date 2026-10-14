@@ -1,7 +1,7 @@
 $schema: reactor/v2
 model:
   name: zing-0-5
-  version: v0.1.1
+  version: v0.1.2
   description: Explore Zing 0.5 through prompt, image, and its native W/A/S/D/I/J/K/L controls.
   resources:
     gpu:

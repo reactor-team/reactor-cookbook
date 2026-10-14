@@ -1,7 +1,7 @@
 $schema: reactor/v2
 model:
   name: open-oasis
-  version: v0.1.1
+  version: v0.1.2
   description: Stream an autoregressive Minecraft world from image or video context using Open-Oasis's native keyboard, mouse-button, and camera actions.
   resources:
     gpu: {type: NVIDIA_B200, count: 1}

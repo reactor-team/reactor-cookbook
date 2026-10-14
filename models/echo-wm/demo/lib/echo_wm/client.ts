@@ -26,7 +26,7 @@ export type EchoWmFlashRecvTrackName =
   "main_video"
   | "main_audio";
 
-/** Select an uploaded first frame and start a fresh audiovisual world with continuous generation. Supply a prompt or leave it blank to use the configured image-neutral default. Emits `image_selected` and broadcasts `state_update` on success, or `command_error` when the upload is invalid. */
+/** Select an uploaded first frame and start a fresh audiovisual world with continuous generation. Supply a prompt or leave it blank to use the configured image-neutral default. Emits `image_selected` and broadcasts `state_update`. Fails with `unsupported_media`, `invalid_image`, or `image_too_large` when the upload is not a supported image, empty or undecodable, or over the size or pixel limit. */
 export interface EchoWmFlashSetImageParams {
   /** Reference to a file uploaded via the Reactor upload protocol. */
 
@@ -48,7 +48,7 @@ export interface EchoWmFlashSetImageParams {
   seed?: number;
 }
 
-/** Replace the text condition and queue a fresh rollout from the selected image. The new prompt begins at chunk one and continuous generation resumes from the fresh world. Emits `prompt_queued` and broadcasts `state_update` on success, or `command_error` before image selection or for empty text. */
+/** Replace the text condition and queue a fresh rollout from the selected image. The new prompt begins at chunk one and continuous generation resumes from the fresh world. Emits `prompt_queued` and broadcasts `state_update`. Fails with `image_required` before image selection, or `prompt_required` for empty text. */
 export interface EchoWmFlashSetPromptParams {
   /**
    * Non-empty scene, character, perspective, sound, music, and speech description.
@@ -59,7 +59,7 @@ export interface EchoWmFlashSetPromptParams {
   prompt?: string;
 }
 
-/** Set Echo-WM's four native held camera axes atomically. Values are sampled at the next chunk boundary and remain active until changed or released. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection. */
+/** Set Echo-WM's four native held camera axes atomically. Values are sampled at the next chunk boundary and remain active until changed or released. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` before image selection. */
 export interface EchoWmFlashSetCameraMotionParams {
   /**
    * Backward (-1) to forward (1); zero is neutral.
@@ -95,7 +95,7 @@ export interface EchoWmFlashSetCameraMotionParams {
   yaw?: number;
 }
 
-/** Set the horizontal camera field of view for forthcoming chunks. The value is sampled at the next chunk boundary and remains active. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection. */
+/** Set the horizontal camera field of view for forthcoming chunks. The value is sampled at the next chunk boundary and remains active. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` before image selection. */
 export interface EchoWmFlashSetFovParams {
   /**
    * Horizontal field of view in degrees from 30 through 120.
@@ -107,7 +107,7 @@ export interface EchoWmFlashSetFovParams {
   fov_degrees?: number;
 }
 
-/** Queue a fresh bounded rollout from the selected image and current prompt. The command releases camera motion and continues generation from chunk one. Emits `rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` before image selection. */
+/** Queue a fresh bounded rollout from the selected image and current prompt. The command releases camera motion and continues generation from chunk one. Emits `rollout_reset_queued` and broadcasts `state_update`. Fails with `image_required` before image selection. */
 export interface EchoWmFlashResetParams {
   /**
    * Fresh-rollout seed, or -1 to retain the active seed.
@@ -359,8 +359,8 @@ export class EchoWmFlashModel extends Reactor {
   }
 
   /**
-   * Select an uploaded first frame and start a fresh audiovisual world with continuous generation. Supply a prompt or leave it blank to use the configured image-neutral default. Emits `image_selected` and broadcasts `state_update` on success, or `command_error` when the upload is invalid.
-   * @param params - Select an uploaded first frame and start a fresh audiovisual world with continuous generation. Supply a prompt or leave it blank to use the configured image-neutral default. Emits `image_selected` and broadcasts `state_update` on success, or `command_error` when the upload is invalid.
+   * Select an uploaded first frame and start a fresh audiovisual world with continuous generation. Supply a prompt or leave it blank to use the configured image-neutral default. Emits `image_selected` and broadcasts `state_update`. Fails with `unsupported_media`, `invalid_image`, or `image_too_large` when the upload is not a supported image, empty or undecodable, or over the size or pixel limit.
+   * @param params - Select an uploaded first frame and start a fresh audiovisual world with continuous generation. Supply a prompt or leave it blank to use the configured image-neutral default. Emits `image_selected` and broadcasts `state_update`. Fails with `unsupported_media`, `invalid_image`, or `image_too_large` when the upload is not a supported image, empty or undecodable, or over the size or pixel limit.
    * @returns The correlated {@link EchoWmFlashImageSelectedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -370,7 +370,7 @@ export class EchoWmFlashModel extends Reactor {
   }
 
   /**
-   * Select a different public Echo-WM example with its matching prompt, field of view, and seed, then start continuous generation from it. Emits `image_selected` and broadcasts `state_update` on success, or `command_error` when no example is configured.
+   * Select a different public Echo-WM example with its matching prompt, field of view, and seed, then start continuous generation from it. Emits `image_selected` and broadcasts `state_update`. Fails with `image_unavailable` when no example is configured.
    * @returns The correlated {@link EchoWmFlashImageSelectedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -380,8 +380,8 @@ export class EchoWmFlashModel extends Reactor {
   }
 
   /**
-   * Replace the text condition and queue a fresh rollout from the selected image. The new prompt begins at chunk one and continuous generation resumes from the fresh world. Emits `prompt_queued` and broadcasts `state_update` on success, or `command_error` before image selection or for empty text.
-   * @param params - Replace the text condition and queue a fresh rollout from the selected image. The new prompt begins at chunk one and continuous generation resumes from the fresh world. Emits `prompt_queued` and broadcasts `state_update` on success, or `command_error` before image selection or for empty text.
+   * Replace the text condition and queue a fresh rollout from the selected image. The new prompt begins at chunk one and continuous generation resumes from the fresh world. Emits `prompt_queued` and broadcasts `state_update`. Fails with `image_required` before image selection, or `prompt_required` for empty text.
+   * @param params - Replace the text condition and queue a fresh rollout from the selected image. The new prompt begins at chunk one and continuous generation resumes from the fresh world. Emits `prompt_queued` and broadcasts `state_update`. Fails with `image_required` before image selection, or `prompt_required` for empty text.
    * @returns The correlated {@link EchoWmFlashPromptQueuedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -391,8 +391,8 @@ export class EchoWmFlashModel extends Reactor {
   }
 
   /**
-   * Set Echo-WM's four native held camera axes atomically. Values are sampled at the next chunk boundary and remain active until changed or released. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection.
-   * @param params - Set Echo-WM's four native held camera axes atomically. Values are sampled at the next chunk boundary and remain active until changed or released. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection.
+   * Set Echo-WM's four native held camera axes atomically. Values are sampled at the next chunk boundary and remain active until changed or released. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` before image selection.
+   * @param params - Set Echo-WM's four native held camera axes atomically. Values are sampled at the next chunk boundary and remain active until changed or released. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` before image selection.
    * @returns The correlated {@link EchoWmFlashCameraMotionChangedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -402,7 +402,7 @@ export class EchoWmFlashModel extends Reactor {
   }
 
   /**
-   * Return every held camera axis to neutral for forthcoming chunks. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection.
+   * Return every held camera axis to neutral for forthcoming chunks. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` before image selection.
    * @returns The correlated {@link EchoWmFlashCameraMotionChangedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -412,8 +412,8 @@ export class EchoWmFlashModel extends Reactor {
   }
 
   /**
-   * Set the horizontal camera field of view for forthcoming chunks. The value is sampled at the next chunk boundary and remains active. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection.
-   * @param params - Set the horizontal camera field of view for forthcoming chunks. The value is sampled at the next chunk boundary and remains active. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` before image selection.
+   * Set the horizontal camera field of view for forthcoming chunks. The value is sampled at the next chunk boundary and remains active. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` before image selection.
+   * @param params - Set the horizontal camera field of view for forthcoming chunks. The value is sampled at the next chunk boundary and remains active. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` before image selection.
    * @returns The correlated {@link EchoWmFlashCameraMotionChangedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -423,8 +423,8 @@ export class EchoWmFlashModel extends Reactor {
   }
 
   /**
-   * Queue a fresh bounded rollout from the selected image and current prompt. The command releases camera motion and continues generation from chunk one. Emits `rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` before image selection.
-   * @param params - Queue a fresh bounded rollout from the selected image and current prompt. The command releases camera motion and continues generation from chunk one. Emits `rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` before image selection.
+   * Queue a fresh bounded rollout from the selected image and current prompt. The command releases camera motion and continues generation from chunk one. Emits `rollout_reset_queued` and broadcasts `state_update`. Fails with `image_required` before image selection.
+   * @param params - Queue a fresh bounded rollout from the selected image and current prompt. The command releases camera motion and continues generation from chunk one. Emits `rollout_reset_queued` and broadcasts `state_update`. Fails with `image_required` before image selection.
    * @returns The correlated {@link EchoWmFlashRolloutResetQueuedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 

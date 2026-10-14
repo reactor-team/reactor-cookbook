@@ -52,7 +52,7 @@ class SGFPlus(ReactorApp):
 
     @event(
         name="start",
-        description="Start a fresh text-only video. Requires a non-empty prompt; clears any selected image. Returns and broadcasts state_update.",
+        description="Start a fresh text-only video. Requires a non-empty prompt; clears any selected image. Returns and broadcasts `state_update`. Fails with `empty_prompt` when the prompt is blank.",
     )
     async def start(
         self,
@@ -72,7 +72,7 @@ class SGFPlus(ReactorApp):
 
     @event(
         name="set_image",
-        description="Start a fresh video from an uploaded image and non-empty prompt. Returns and broadcasts state_update; invalid images or empty text return command_error.",
+        description="Start a fresh video from an uploaded image and non-empty prompt. Returns and broadcasts `state_update`. Fails with `invalid_image` when the upload is not a usable PNG, JPEG, WebP, or BMP, or `empty_prompt` when the prompt is blank.",
     )
     async def set_image(
         self,
@@ -107,7 +107,7 @@ class SGFPlus(ReactorApp):
 
     @event(
         name="set_prompt",
-        description="Update the prompt for the next generated chunk, retaining video history and pause state. Requires a started, unfinished video; returns and broadcasts state_update. Already buffered frames keep playing.",
+        description="Update the prompt for the next generated chunk, retaining video history and pause state. Requires a started, unfinished video; returns and broadcasts `state_update`. Already buffered frames keep playing. Fails with `not_started` before a video starts, `rollout_complete` after it finishes, or `empty_prompt` when the prompt is blank.",
     )
     async def set_prompt(
         self,
@@ -129,7 +129,7 @@ class SGFPlus(ReactorApp):
 
     @event(
         name="reset",
-        description="Restart the selected prompt and optional image with a new seed. Requires a started rollout; returns and broadcasts state_update.",
+        description="Restart the selected prompt and optional image with a new seed. Requires a started rollout; returns and broadcasts `state_update`. Fails with `not_started` before a video starts.",
     )
     async def reset(
         self,

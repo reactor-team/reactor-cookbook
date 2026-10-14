@@ -146,8 +146,8 @@ class LingBotWorldV2(ReactorApp):
             "Set the text condition without restarting the current causal world. Requires a "
             "selected image and an available chunk; the normalized text replaces cross-attention "
             "conditioning when the next chunk begins. Emits `prompt_queued` and broadcasts "
-            "`state_update` on success, or `command_error` for empty text, a missing image, or "
-            "an exhausted rollout."
+            "`state_update`. Fails with `prompt_required` for empty text, `image_required` for "
+            "a missing image, or `rollout_limit_reached` for an exhausted rollout."
         ),
     )
     async def set_prompt(
@@ -179,8 +179,8 @@ class LingBotWorldV2(ReactorApp):
             "Set all six held camera axes atomically for forthcoming chunks. Requires a selected "
             "image and an available chunk; values are sampled together when the next chunk begins "
             "and remain active until changed or released. Emits `camera_motion_changed` and "
-            "broadcasts `state_update` on success, or `command_error` when generation is not "
-            "available."
+            "broadcasts `state_update`. Fails with `image_required` when no image is selected, "
+            "or `rollout_limit_reached` when the rollout is exhausted."
         ),
     )
     async def set_camera(
@@ -240,8 +240,8 @@ class LingBotWorldV2(ReactorApp):
         description=(
             "Return every held camera axis to neutral for forthcoming chunks. Requires a selected "
             "image and an available chunk; neutral motion is sampled at the next boundary. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or `command_error` "
-            "when generation is not available."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` "
+            "when no image is selected, or `rollout_limit_reached` when the rollout is exhausted."
         ),
     )
     async def release_camera(self) -> CameraMotionChanged:
@@ -259,7 +259,7 @@ class LingBotWorldV2(ReactorApp):
             "Queue a fresh causal rollout from the selected image and current prompt. Requires a "
             "selected image; the reset clears progress and the positional limit, releases camera "
             "motion, and resumes continuous generation. Emits `rollout_reset_queued` and "
-            "broadcasts `state_update` on success, or `command_error` when no image is selected."
+            "broadcasts `state_update`. Fails with `image_required` when no image is selected."
         ),
     )
     async def reset(
@@ -293,7 +293,7 @@ class LingBotWorldV2(ReactorApp):
         description=(
             "Select an uploaded anchor and queue a fresh rollout with continuous generation. "
             "Valid at any time; the image replaces prior causal state before chunk one. Emits "
-            "`image_selected` and broadcasts `state_update` on success, or `command_error` when "
+            "`image_selected` and broadcasts `state_update`. Fails with `invalid_image` when "
             "the upload is empty, oversized, mislabeled, or undecodable."
         ),
     )
@@ -342,7 +342,7 @@ class LingBotWorldV2(ReactorApp):
         description=(
             "Select a public example image and its matching prompt, then queue a fresh rollout "
             "with continuous generation. Valid when configured examples are available. Emits "
-            "`image_selected` and broadcasts `state_update` on success, or `command_error` "
+            "`image_selected` and broadcasts `state_update`. Fails with `image_unavailable` "
             "when no usable example exists."
         ),
     )

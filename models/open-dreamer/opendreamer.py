@@ -314,8 +314,8 @@ class OpenDreamer(ReactorApp):
         description=(
             "Select a configured dataset demo as the next starting scene. Valid any time during "
             "a session; the selection resets the rollout at the next inference boundary and "
-            "clears all controls. Emits `conditioning_changed` and `state_update` on success, "
-            "or `command_error` with `demo_unavailable` when the demo is not configured."
+            "clears all controls. Emits `conditioning_changed` and `state_update`. Fails with "
+            "`demo_unavailable` when the demo is not configured."
         ),
     )
     async def set_demo(
@@ -343,8 +343,8 @@ class OpenDreamer(ReactorApp):
         description=(
             "Select a random configured dataset demo as the next starting scene. Valid any time "
             "during a session; the selection resets the rollout at the next inference boundary "
-            "and clears all controls. Emits `conditioning_changed` and `state_update` on "
-            "success, or `command_error` with `demo_unavailable` when no demos are configured."
+            "and clears all controls. Emits `conditioning_changed` and `state_update`. Fails "
+            "with `demo_unavailable` when no demos are configured."
         ),
     )
     async def random_demo(self) -> ConditioningChanged:
@@ -362,8 +362,9 @@ class OpenDreamer(ReactorApp):
             "Select an uploaded Minecraft screenshot as the next starting scene. Valid after "
             "the model has loaded; the image is prepared immediately, then resets the rollout "
             "at the next inference boundary and clears all controls. Emits "
-            "`conditioning_changed` and `state_update` on success, or `command_error` with "
-            "`model_not_ready`, `unsupported_media`, or `invalid_image` when validation fails."
+            "`conditioning_changed` and `state_update`. Fails with `model_not_ready` while the "
+            "model is loading, `unsupported_media` for a non-image upload, or `invalid_image` "
+            "when the image cannot be prepared."
         ),
     )
     async def set_conditioning_image(

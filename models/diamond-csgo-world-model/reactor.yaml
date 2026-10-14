@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: diamond-csgo-world-model
-  version: v0.1.2
+  version: v0.1.3
   description: |
     Play DIAMOND's Counter-Strike world model with native keyboard and mouse input.
   resources:

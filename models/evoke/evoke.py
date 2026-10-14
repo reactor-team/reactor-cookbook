@@ -186,8 +186,10 @@ class Evoke(ReactorApp):
         description=(
             "Start a fresh camera-controlled i2v world from an uploaded image. Valid at any "
             "time; it clears rollout progress and releases all camera axes. "
-            "Emits `command_applied` and broadcasts `state_update` on success, or "
-            "`command_error` for invalid image bytes."
+            "Emits `command_applied` and broadcasts `state_update`. Fails with "
+            "`unsupported_image_type`, `invalid_image_size`, `image_too_large`, or "
+            "`invalid_image` when the upload is not a supported image type, is empty or over "
+            "25 MiB, is over the pixel limit, or cannot be decoded."
         ),
     )
     async def set_image(
@@ -237,8 +239,10 @@ class Evoke(ReactorApp):
             "Start a fresh v2v world from a reference video plus its camera-pose NPZ. The "
             "configured five-second prefix is encoded with the uploaded poses, then six-axis "
             "controls continue from its final pose. Emits `command_applied` and broadcasts "
-            "`state_update` on success, or `command_error` for invalid media, pose arrays, "
-            "dimensions, or frame rate."
+            "`state_update`. Fails with `unsupported_video_type` or `invalid_video_size` for an "
+            "unusable video, or `invalid_pose_size` or `invalid_pose` for an unusable pose "
+            "file. Dimensions or a frame rate outside their ranges are refused before the "
+            "command runs."
         ),
     )
     async def set_reference_video(
@@ -372,7 +376,8 @@ class Evoke(ReactorApp):
         description=(
             "Set backward-to-forward camera translation for camera-controlled modes. The value "
             "is sampled at the next 36-pose chunk boundary and held. Emits `command_applied` "
-            "and broadcasts `state_update` on success, or `command_error` in prompt-only t2v mode."
+            "and broadcasts `state_update`. Fails with `camera_unavailable` in prompt-only t2v "
+            "mode."
         ),
     )
     async def set_forward(
@@ -391,7 +396,7 @@ class Evoke(ReactorApp):
         name="set_strafe",
         description=(
             "Set left-to-right camera translation at the next native chunk boundary. Emits "
-            "`command_applied` and broadcasts `state_update` on success, or `command_error` "
+            "`command_applied` and broadcasts `state_update`. Fails with `camera_unavailable` "
             "in prompt-only t2v mode."
         ),
     )
@@ -411,7 +416,7 @@ class Evoke(ReactorApp):
         name="set_vertical",
         description=(
             "Set down-to-up camera translation at the next native chunk boundary. Emits "
-            "`command_applied` and broadcasts `state_update` on success, or `command_error` "
+            "`command_applied` and broadcasts `state_update`. Fails with `camera_unavailable` "
             "in prompt-only t2v mode."
         ),
     )
@@ -431,7 +436,7 @@ class Evoke(ReactorApp):
         name="set_pitch",
         description=(
             "Set downward-to-upward pitch at the next native chunk boundary. Emits "
-            "`command_applied` and broadcasts `state_update` on success, or `command_error` "
+            "`command_applied` and broadcasts `state_update`. Fails with `camera_unavailable` "
             "in prompt-only t2v mode."
         ),
     )
@@ -451,7 +456,8 @@ class Evoke(ReactorApp):
         name="set_yaw",
         description=(
             "Set left-to-right yaw at the next native chunk boundary. Emits `command_applied` "
-            "and broadcasts `state_update` on success, or `command_error` in prompt-only t2v mode."
+            "and broadcasts `state_update`. Fails with `camera_unavailable` in prompt-only t2v "
+            "mode."
         ),
     )
     async def set_yaw(
@@ -470,7 +476,7 @@ class Evoke(ReactorApp):
         name="set_roll",
         description=(
             "Set counterclockwise-to-clockwise roll at the next native chunk boundary. Emits "
-            "`command_applied` and broadcasts `state_update` on success, or `command_error` "
+            "`command_applied` and broadcasts `state_update`. Fails with `camera_unavailable` "
             "in prompt-only t2v mode."
         ),
     )
@@ -491,8 +497,8 @@ class Evoke(ReactorApp):
         description=(
             "Start a fresh rollout from the active image, video, or text conditioning. It "
             "clears generated progress and all camera axes while preserving the prompt. "
-            "Emits `command_applied` and broadcasts `state_update` on success, or "
-            "`command_error` if conditioning is missing."
+            "Emits `command_applied` and broadcasts `state_update`. Fails with "
+            "`conditioning_required` if conditioning is missing."
         ),
     )
     async def reset(
