@@ -275,6 +275,11 @@ Key messages include `prompt_accepted`, `live_prompt_received`,
 and `state_update`. The generated schema at `/schema` is the source of truth for
 all fields and command responses.
 
+A refused command raises a `CommandError` with a stable code, such as
+`no_prompt`, `already_streaming`, `not_streaming`, or `prompt_too_long`. The
+runtime answers only the client that sent the command, on that command's own
+call. Each command's description names its codes.
+
 ## Project layout
 
 | Path | Responsibility |

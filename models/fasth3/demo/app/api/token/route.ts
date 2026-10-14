@@ -4,7 +4,6 @@ import { readConfig } from "@/lib/config";
 
 const TOKEN_LIFETIME_SECONDS = 60 * 60;
 const MAX_SESSIONS = 10;
-const CACHE_SKEW_SECONDS = 60;
 const DEFAULT_API_URL = "https://api.reactor.inc";
 
 /** Mint a browser token scoped to this model for a hosted deployment. */
@@ -48,12 +47,8 @@ export async function GET() {
     jwt: string;
     expires_at: number;
   };
-  const maxAge = Math.max(
-    0,
-    expires_at - Math.floor(Date.now() / 1000) - CACHE_SKEW_SECONDS,
-  );
   return NextResponse.json(
-    { jwt },
-    { headers: { "Cache-Control": `private, max-age=${maxAge}` } },
+    { jwt, expires_at },
+    { headers: { "Cache-Control": "private, no-store" } },
   );
 }

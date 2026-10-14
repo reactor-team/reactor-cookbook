@@ -108,8 +108,23 @@ copies verbatim:
   awaited call and raises that connection's `message` event — so an acceptance
   listener does fire, but for any call of that command and never on a second
   client in the session. Read answers off the await; keep subscriptions for what
-  the model broadcasts. Which commands answer, and where a refusal surfaces, is
-  per-model — each skill carries its own table.
+  the model broadcasts. Which commands answer is per-model — each skill carries
+  its own table.
+- **A refusal belongs on the awaited call too.** A model refuses a command by
+  raising `CommandError(code, message)` (see
+  [GUIDELINES.md](./GUIDELINES.md#refusing-a-command)), and the runtime answers
+  only the caller, on that call. In JavaScript, `sendCommand()` and every typed
+  wrapper never reject: a refused call resolves `undefined` and the SDK emits a
+  `ReactorError` on the `error` event with `operation: "sendCommand"`, the
+  model's code in `code`, and a message of the form
+  `command 'enqueue' failed (queue_full): <reason>`. For a command that
+  declares a reply, `undefined` means refused; for one that does not, only the
+  `error` event tells. In Python, `send_command()` raises a `ReactorError` with
+  the same `code` and `operation == "send_command"`. Do not wait for a
+  `command_error` message. In React, the store copies every `error` event into
+  `lastError` and never clears it, so never render an error with
+  `operation === "sendCommand"` as a connection or session failure. The retired
+  JavaScript SDK 2.x is the only client that does not receive the failure.
 
 Verify a change the way a reader would:
 

@@ -67,13 +67,16 @@ states, which commands each accepts, message ordering, and SDK sequences.
 | Command | When | Effect |
 | --- | --- | --- |
 | `set_prompt` | any time | Stores the edit instruction. `start` reads it; a change during a run applies from the next `start`. Replies `prompt_accepted`, broadcasts `session_state`. |
-| `set_reference_image` | while not generating | Stores a reference image (PNG or JPEG) whose appearance guides the edit. It is fitted, aspect kept, into the nearest of a square, 4:3 or 3:4 frame and padded with grey. Replies `reference_image_accepted`, broadcasts `session_state`; `command_error` while generating. |
+| `set_reference_image` | while not generating | Stores a reference image (PNG or JPEG) whose appearance guides the edit. It is fitted, aspect kept, into the nearest of a square, 4:3 or 3:4 frame and padded with grey. Replies `reference_image_accepted`, broadcasts `session_state`. Fails with `generation_active` while generating, or `invalid_image` for an undecodable upload. |
 | `set_seed` | any time | Stores the noise seed. `start` reads it. |
-| `start` | while not generating | Begins a run with the current instruction, reference image and seed. Replies `generation_started`, broadcasts `session_state`; `command_error` if already generating. |
+| `start` | while not generating | Begins a run with the current instruction, reference image and seed. Replies `generation_started`, broadcasts `session_state`. Fails with `already_generating` if already generating. |
 | `reset` | any time | Ends the run and returns to waiting; the instruction, reference image and seed are kept. While generating, broadcasts `generation_reset` then `generation_complete`; always broadcasts `session_state`. |
 
 Frames start flowing once `camera` delivers video. `set_prompt`'s instruction
 and the reference image are moderated when the deployment moderates.
+
+A refused command fails its own call with a code and a reason; only the client
+that sent it is told, and nothing changes.
 
 ## Messages
 
@@ -82,7 +85,7 @@ and the reference image are moderated when the deployment moderates.
 | `session_state` | On connect, after each command above except `set_seed`, and when a run ends: `started`, `prompt`, `has_reference_image`, `seed`. |
 | `chunk_complete` | Before each chunk's frames go out on `main_video`: the chunk's index in the run, its frame count (usually 8; the first chunk of a run, and an occasional later one, carry 1), and the milliseconds it took. |
 | `generation_complete` | When a run ends, by `reset` or when the last client disconnects: the run's chunk and frame totals. |
-| `prompt_accepted`, `reference_image_accepted`, `generation_started`, `generation_reset`, `command_error` | As listed under Commands. |
+| `prompt_accepted`, `reference_image_accepted`, `generation_started`, `generation_reset` | As listed under Commands. |
 
 ## How it is served
 

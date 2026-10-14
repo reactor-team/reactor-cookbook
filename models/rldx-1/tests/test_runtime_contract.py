@@ -27,6 +27,7 @@ pytest.importorskip("reactor_runtime", reason="reactor-runtime is not installed"
 import rldx1 as pipeline  # noqa: E402
 from rldx1_rtc import RTCRequestMailbox, RTCTiming  # noqa: E402
 from rldx1_state import FrameStateTags  # noqa: E402
+from reactor_runtime import CommandError as RuntimeCommandError  # noqa: E402
 from rldx1_types import (  # noqa: E402
     ActionPrediction,
     CommandError,
@@ -278,20 +279,67 @@ def test_request_action_event_reports_a_bad_plan_chain():
         sent.append(message)
 
     p.send = send
-    asyncio.run(
-        p.request_action(
-            request_id=5,
-            base_plan_id=3,
-            install_step=10,
-            rtc_prefix_len=2,
-            action_prefix=[[0.0] * 12, [0.0] * 12],
+    with pytest.raises(RuntimeCommandError) as refused:
+        asyncio.run(
+            p.request_action(
+                request_id=5,
+                base_plan_id=3,
+                install_step=10,
+                rtc_prefix_len=2,
+                action_prefix=[[0.0] * 12, [0.0] * 12],
+            )
         )
-    )
 
+    assert refused.value.code == "invalid_request"
+    assert "does not match active plan" in refused.value.message
     assert p._rtc_requests.pending is None
-    assert len(sent) == 1
-    assert isinstance(sent[0], CommandError)
-    assert "does not match active plan" in sent[0].reason
+    assert sent == []
+
+
+def test_request_action_event_refuses_while_rtc_is_disabled():
+    p = pipeline.RLDXPipeline()
+    p._rtc_timing = RTCTiming(
+        action_horizon=16,
+        delay=0,
+        exec_horizon=8,
+        enabled=False,
+    )
+    p._rtc_requests = RTCRequestMailbox()
+
+    with pytest.raises(RuntimeCommandError) as refused:
+        asyncio.run(
+            p.request_action(
+                request_id=0,
+                base_plan_id=-1,
+                install_step=0,
+                rtc_prefix_len=0,
+                action_prefix=[],
+            )
+        )
+
+    assert refused.value.code == "rtc_disabled"
+    assert p._rtc_requests.pending is None
+
+
+def test_a_second_pending_request_action_is_refused():
+    p = pipeline.RLDXPipeline()
+    p._rtc_timing = RTCTiming(
+        action_horizon=16,
+        delay=2,
+        exec_horizon=8,
+        enabled=True,
+    )
+    p._rtc_requests = RTCRequestMailbox()
+    p._last_plan_id = None
+    p._action_dim = 12
+    cold = dict(base_plan_id=-1, install_step=0, rtc_prefix_len=0, action_prefix=[])
+    asyncio.run(p.request_action(request_id=0, **cold))
+
+    with pytest.raises(RuntimeCommandError) as refused:
+        asyncio.run(p.request_action(request_id=1, **cold))
+
+    assert refused.value.code == "invalid_request"
+    assert p._rtc_requests.pending.request_id == 0
 
 
 def _pipeline_resolving_state(fallback="error"):

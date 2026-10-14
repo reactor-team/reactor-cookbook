@@ -293,9 +293,13 @@ correctly chained suffix.
 
 - Model messages use the shape `{"type": "action_prediction", "data": {...}}`.
   The client handles `model_schema`, `action_prediction`, and `command_error`.
-- Always surface `command_error` messages. RLDX-1 uses `command="state"` when
-  missing-state fallback engages; actions may continue with stale or zeroed
-  state.
+- Always surface `command_error` messages. RLDX-1 broadcasts one with
+  `command="state"` when missing-state fallback engages; actions may continue
+  with stale or zeroed state.
+- A refused command fails its own call: `send_command()` raises a
+  `ReactorError` whose `code` is the model's code. A refused `request_action`
+  raises `invalid_request` (a stale, unchained, or overlapping request) or
+  `rtc_disabled`, and the client restarts RTC from a cold request.
 - The initial `model_schema` message can race the data channel opening. The
   client requests it with `get_schema`, waits, and starts publishing before its
   final retry.

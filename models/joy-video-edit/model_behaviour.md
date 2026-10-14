@@ -41,7 +41,7 @@ connect  ->  session_state
 | GENERATING (a run)                                           |
 | Accepted: set_prompt, set_seed (both apply from the next     |
 |           start), reset                                      |
-| Refused with command_error: start, set_reference_image       |
+| Refused (the call fails): start, set_reference_image         |
 | Once camera has frames: chunk_complete, then that chunk's    |
 | frames on main_video, for every chunk                        |
 +------------------------------+-------------------------------+
@@ -63,9 +63,9 @@ again. `reset` keeps the instruction, reference image, and seed, so a bare
 | Command | Parameters | Accepted | Answer |
 | --- | --- | --- | --- |
 | `set_prompt` | `prompt: str`, up to 2000 characters; `""` clears it | any time | replies `prompt_accepted`; broadcasts `session_state` |
-| `set_reference_image` | `reference_image`: an uploaded PNG or JPEG | while waiting | replies `reference_image_accepted`; broadcasts `session_state`. While generating: `command_error` to the sender |
+| `set_reference_image` | `reference_image`: an uploaded PNG or JPEG | while waiting | replies `reference_image_accepted`; broadcasts `session_state`. Fails with `generation_active` while generating, or `invalid_image` if the upload cannot be decoded |
 | `set_seed` | `seed: int`, 0 or more (default 42) | any time | nothing; `start` reads it |
-| `start` | none | while waiting | replies `generation_started`; broadcasts `session_state`. While generating: `command_error` to the sender |
+| `start` | none | while waiting | replies `generation_started`; broadcasts `session_state`. Fails with `already_generating` while generating |
 | `reset` | none | any time | while generating: broadcasts `generation_reset`, `generation_complete`, then `session_state`. While waiting: `session_state` only |
 
 The prompt and the reference image are free-form client content and are
@@ -90,7 +90,6 @@ broadcast to every connected client.
 | `chunk_complete` | before each chunk's frames go out on `main_video` | `chunk_index` (0-based, per run), `frames_emitted`, `elapsed_ms` |
 | `generation_reset` | `reset` while generating | `reason` (`client requested`) |
 | `generation_complete` | when a run ends | `total_chunks`, `total_frames` of the run |
-| `command_error` | to the sender of a refused command | `command`, `reason` |
 
 ## Timing
 
@@ -158,6 +157,27 @@ await reactor.sendCommand("start");
 
 A `set_prompt` during a run is stored and answered, but the running edit keeps
 its instruction until the next `start`.
+
+### Read a refusal
+
+A refused command fails its own call. `sendCommand` never rejects: it resolves
+`undefined` and emits a `ReactorError` on the `error` event, with
+`operation: "sendCommand"` and the code in `code`:
+
+```js
+reactor.on("error", (error) => {
+  if (error.operation === "sendCommand") showRefusal(error.code, error.message);
+  // e.g. "already_generating", "command 'start' failed (already_generating): Already generating."
+});
+
+const started = await reactor.sendCommand("start");
+if (started === undefined) {
+  // refused; the error event above carries the code and the reason
+}
+```
+
+The Python SDK raises a `ReactorError` from `send_command()` instead, with the
+same `code`.
 
 ## Connections
 

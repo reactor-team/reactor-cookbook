@@ -437,10 +437,3 @@ class ChannelReset(ModelMessage):
     was_running: bool = MessageField(
         description="A channel was live and has been stopped, so no `channel_stopped` will follow it."
     )
-
-
-class CommandError(ModelMessage):
-    """Emitted when a command is rejected. The command had no effect."""
-
-    command: str = MessageField(description="Name of the command that was rejected.")
-    reason: str = MessageField(description="Why it was rejected.")

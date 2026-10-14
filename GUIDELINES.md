@@ -28,7 +28,9 @@ skill; `models/lingbot-world-v1-fast/` is the example in this repo.
   result onto the `Output` tracks, sends every message with an explicit
   `await self.send()`, and either recovers from a model error it expects or
   re-raises it. Handlers write state, decode uploads, flush playout, and
-  call the model half's `reset()`; they never run inference.
+  call the model half's `reset()`; they never run inference. A handler
+  refuses its command with `CommandError` (see
+  [Refusing a command](#refusing-a-command)).
 - **The model half** is a plain class in `<model>_model.py` with `load()`,
   `generate(input)`, and `reset()`. It imports nothing from
   `reactor_runtime` and knows nothing about clients, tracks, or commands. It
@@ -95,12 +97,68 @@ exist, and **no** `__init__.py` — model modules are imported flat by
 - Every `@event` handler declares a concrete `ModelMessage` return type (or
   `None`) and returns exactly that type. A command that changes shared state
   returns its specific result message and broadcasts a full `state_update`.
+  A refusal raises instead of returning (see
+  [Refusing a command](#refusing-a-command)).
 - `process_input()` is annotated to return `<Model>Input`, `generate()` to
   take it and return `<Model>Result`, and `process_output()` to take a
   `StepOutcome` and return `<Model>Output | None`. Never import private
   runtime names (anything underscore-prefixed) to type a signature.
 - Do not annotate `output:` on the model class — `self.output` is the
   runtime's `OutputStream`; the `Output` subclass only declares tracks.
+
+## Refusing a command
+
+A command handler refuses by raising `CommandError(code, message)` from
+`reactor_runtime`. This applies to every model, and only to command handlers;
+a step that is not ready is refused with `ApplicationError` in
+`process_input()`.
+
+```python
+from reactor_runtime import CommandError
+
+@event(
+    name="pause",
+    description="Freeze the stream. Emits `generation_paused`. Fails with "
+    "`not_generating` when nothing is generating.",
+)
+async def pause(self) -> GenerationPaused:
+    if not self.state.generating:
+        raise CommandError("not_generating", "Nothing is generating.")
+    ...
+```
+
+- `code` is a short, stable `snake_case` token that a client branches on.
+  Keep it stable across releases. `message` goes to the client unchanged, so
+  write it for the client and name no internals.
+- The command's description names every code it can fail with: "Fails with
+  `invalid_image` when …".
+- Catch what a check raises (a `ValueError` from a decoder, say) and raise it
+  again as a `CommandError` with its own code. Any other exception reaches the
+  client as a generic internal error with a fixed message.
+- Never refuse by sending an error message and returning. The runtime treats
+  that as a success: it acknowledges the command, the caller's call resolves
+  as it does on success, and every other client in the session gets a message
+  about a command it never sent.
+- A new model publishes no `command_error` message of its own. A message that
+  reports something other than a refused command, such as a warning from the
+  step loop, gets a name that says what it reports.
+
+Why a raise:
+
+1. **The caller learns on its own call.** The runtime answers the command's
+   request with a failure that carries the code and the message.
+2. **Only the caller is told.** Viewers and other clients in the session do
+   not see a refusal of a command they did not send.
+3. **The runtime knows that the command failed.** It records the failure.
+   In a session started with a starting input and a step count, a starting
+   command that raises ends the session and fails its remaining steps
+   (Reactor Runtime 3.8.2 or later; the raise itself works on every 3.x
+   release these folders pin).
+
+Every SDK that Reactor publishes (JavaScript 3.x, Python 1.x, C++, Swift,
+Java) receives the failure. The only client that misses it is the retired
+JavaScript SDK 2.x, whose commands carry no request id that a failure can
+answer.
 
 ## Moderation marks
 
@@ -167,6 +225,7 @@ intended to change may move.
 Tests drive the application half through its three hooks with a fake model
 half, and the model half with the GPU work faked, so they run without a GPU,
 the weights, or the upstream dependencies. At least: a refused step never
-reaches the model; `generate()` reads only its input; a fresh world carries
-its anchor once; a model error out of `generate()` reaches `process_output()`
-and does not count as a completed step.
+reaches the model; a refused command raises `CommandError` with its code and
+sends nothing; `generate()` reads only its input; a fresh world carries its
+anchor once; a model error out of `generate()` reaches `process_output()` and
+does not count as a completed step.

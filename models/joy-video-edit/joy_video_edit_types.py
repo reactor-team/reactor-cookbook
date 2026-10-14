@@ -148,12 +148,6 @@ class ReferenceImageAccepted(ModelMessage):
     height: int = MessageField(description="Height of the uploaded image, in pixels, before it is fitted.")
 
 
-class CommandError(ModelMessage):
-    """Emitted to the sending client when a command is rejected; nothing changes."""
-    command: str = MessageField(description="Wire name of the rejected command: `start` or `set_reference_image`.")
-    reason: str = MessageField(description="Human-readable reason the command was rejected.")
-
-
 class SessionState(ModelMessage):
     """Emitted on connect, after `set_prompt`, `set_reference_image`, `start` and `reset`, and when a run ends."""
     started: bool = MessageField(

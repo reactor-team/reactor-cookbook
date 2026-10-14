@@ -202,5 +202,7 @@ class ActionPrediction(ModelMessage):
 
 
 class CommandError(ModelMessage):
-    command: str = MessageField(default="", description="the command that failed")
-    reason: str = MessageField(default="", description="why it failed")
+    """Broadcast when inference continues on fallback robot state. A refused command fails its own call instead."""
+
+    command: str = MessageField(default="", description="Always `state`: the robot state this tick could not be read.")
+    reason: str = MessageField(default="", description="Which fallback engaged, and why.")

@@ -36,7 +36,6 @@ from joy_video_edit_model import (
 )
 from joy_video_edit_types import (
     ChunkComplete,
-    CommandError,
     GenerationComplete,
     GenerationReset,
     GenerationStarted,
@@ -50,7 +49,7 @@ from joy_video_edit_types import (
 from PIL import Image as PILImage
 from reactor_runtime import (
     ApplicationError,
-    ClientInfo,
+    CommandError,
     InputField,
     ReactorApp,
     ReadMode,
@@ -305,7 +304,8 @@ class JoyVideoEdit(ReactorApp):
         "the object to add or the look to match). Accepted only while not generating: send "
         "it before `start`, or after `reset`. It stays loaded for later runs until another "
         "upload replaces it. Emits `reference_image_accepted` and broadcasts "
-        "`session_state`, or `command_error` while generating."
+        "`session_state`. Fails with `generation_active` while generating, or "
+        "`invalid_image` if the upload cannot be decoded as an image."
     ))
     async def set_reference_image(
         self,
@@ -318,17 +318,17 @@ class JoyVideoEdit(ReactorApp):
             ),
             moderate=True,
         ),
-        client: ClientInfo = None,
     ) -> ReferenceImageAccepted:
         logger.info("set_reference_image", name=reference_image.name, bytes=reference_image.size)
         if self.state._started:
-            if client is not None:
-                await client.send(CommandError(
-                    command="set_reference_image",
-                    reason="Generation is active; send set_reference_image before start.",
-                ))
-            return
-        pil = PILImage.open(io.BytesIO(reference_image.data)).convert("RGB")
+            raise CommandError(
+                "generation_active",
+                "Generation is active; send set_reference_image before start.",
+            )
+        try:
+            pil = PILImage.open(io.BytesIO(reference_image.data)).convert("RGB")
+        except (OSError, ValueError) as error:
+            raise CommandError("invalid_image", "The reference image cannot be decoded.") from error
         self.state.reference_image = reference_image
         self.state._reference = np.asarray(pil)
         await self._send_state()
@@ -339,14 +339,12 @@ class JoyVideoEdit(ReactorApp):
         "Accepted when not already generating. Fixes the current instruction, reference "
         "image, and seed for the run. Frames flow once `camera` delivers video, with a "
         "`chunk_complete` per chunk. Emits `generation_started` and broadcasts "
-        "`session_state`, or `command_error` if already generating."
+        "`session_state`. Fails with `already_generating` if already generating."
     ))
-    async def start(self, client: ClientInfo = None) -> GenerationStarted:
+    async def start(self) -> GenerationStarted:
         logger.info("start")
         if self.state._started:
-            if client is not None:
-                await client.send(CommandError(command="start", reason="Already generating."))
-            return
+            raise CommandError("already_generating", "Already generating.")
         # A new run id: the model opens a new run on the next step that has camera frames.
         self.state._started = True
         self.state._run_id += 1

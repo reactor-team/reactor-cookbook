@@ -26,7 +26,6 @@ from joy_video_edit_model import (
 )
 from joy_video_edit_types import (
     ChunkComplete,
-    CommandError,
     GenerationComplete,
     GenerationReset,
     GenerationStarted,
@@ -37,7 +36,7 @@ from joy_video_edit_types import (
     SessionState,
 )
 from PIL import Image
-from reactor_runtime import ApplicationError, ClientInfo, StepOutcome, UploadedFile
+from reactor_runtime import ApplicationError, CommandError, StepOutcome, UploadedFile
 from reactor_runtime.core.model import ClientConnected, ClientDisconnected, EndReason, SessionEnded, SessionStarted
 from reactor_runtime.core.values import ConnId, InputFrame
 from reactor_runtime.interface.internal.input_buffer import InputBuffer
@@ -99,10 +98,6 @@ async def _step(app: JoyVideoEdit) -> JoyVideoEditOutput | None:
     """One turn of the runtime's step loop: the three hooks in order."""
     input = await app.process_input()
     return await app.process_output(StepOutcome(result=app.generate(input), elapsed=0.2))
-
-
-def _client(inbox: list[Any]) -> ClientInfo:
-    return ClientInfo(id=ConnId(1), joined_at=0.0, _send=inbox.append)
 
 
 def _upload(size: tuple[int, int] = (64, 32), color: tuple[int, int, int] = (200, 10, 10)) -> UploadedFile:
@@ -289,11 +284,10 @@ async def test_start_opens_a_run_once() -> None:
     assert isinstance(state, SessionState) and state.started is True
     assert app.state._run_id == 1
 
-    inbox: list[Any] = []
     sent.clear()
-    assert await app.start(client=_client(inbox)) is None
-    (error,) = inbox
-    assert isinstance(error, CommandError) and error.command == "start"
+    with pytest.raises(CommandError) as refused:
+        await app.start()
+    assert refused.value.code == "already_generating"
     assert sent == [] and app.state._run_id == 1
     assert model.resets == 0
 
@@ -364,10 +358,20 @@ async def test_set_reference_image_is_refused_while_generating() -> None:
     await _live(app)
     await app.start()
     sent.clear()
-    inbox: list[Any] = []
-    assert await app.set_reference_image(_upload(), client=_client(inbox)) is None
-    (error,) = inbox
-    assert isinstance(error, CommandError) and error.command == "set_reference_image"
+    with pytest.raises(CommandError) as refused:
+        await app.set_reference_image(_upload())
+    assert refused.value.code == "generation_active"
+    assert app.state._reference is None and sent == []
+
+
+async def test_an_undecodable_reference_image_is_refused() -> None:
+    app, _, sent, _ = _app()
+    await _live(app)
+    sent.clear()
+    garbage = UploadedFile(name="ref.png", mime_type="image/png", data=b"not an image")
+    with pytest.raises(CommandError) as refused:
+        await app.set_reference_image(garbage)
+    assert refused.value.code == "invalid_image"
     assert app.state._reference is None and sent == []
 
 

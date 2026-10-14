@@ -32,6 +32,7 @@ import numpy as np
 import yaml
 from reactor_runtime import (
     ApplicationError,
+    CommandError,
     ReactorApp,
     ReadMode,
     StepOutcome,
@@ -51,11 +52,11 @@ from rldx1_schema import build_schema
 from rldx1_state import STATE_TAG_KEYS, FrameStateTags, parse_state, zero_state
 from rldx1_types import (
     ActionPrediction,
-    CommandError,
     ModelSchema,
     RLDXInput,
     RLDXState,
 )
+from rldx1_types import CommandError as CommandErrorMessage
 
 VIEWS = ("left_view", "right_view", "wrist_view")
 
@@ -196,7 +197,7 @@ class _Publication:
     source_seq: int | None
     view_skew_us: int | None
     started_at: float | None
-    messages: tuple[ModelSchema | CommandError, ...]
+    messages: tuple[ModelSchema | CommandErrorMessage, ...]
 
 
 class RLDXPipeline(ReactorApp):
@@ -342,7 +343,10 @@ class RLDXPipeline(ReactorApp):
         description=(
             "Trigger one RTC inference. The first request uses base_plan_id=-1 "
             "and an empty prefix; later requests name the active plan and send "
-            "the physical-unit actions that remain scheduled during inference."
+            "the physical-unit actions that remain scheduled during inference. "
+            "Fails with `rtc_disabled` when the deployment does not run RTC, or "
+            "`invalid_request` when the request is malformed, does not continue "
+            "the active plan, or arrives while another request is pending."
         ),
     )
     async def request_action(
@@ -354,13 +358,10 @@ class RLDXPipeline(ReactorApp):
         action_prefix: list[list[float]],
     ) -> None:
         if not self._rtc_timing.enabled:
-            await self.send(
-                CommandError(
-                    command="request_action",
-                    reason="RTC is disabled; set rtc_inference_mode and rtc_inference_delay",
-                )
+            raise CommandError(
+                "rtc_disabled",
+                "RTC is disabled; set rtc_inference_mode and rtc_inference_delay",
             )
-            return
         try:
             request = build_rtc_request(
                 request_id=request_id,
@@ -374,7 +375,7 @@ class RLDXPipeline(ReactorApp):
             )
             self._rtc_requests.offer(request)
         except ValueError as exc:
-            await self.send(CommandError(command="request_action", reason=str(exc)))
+            raise CommandError("invalid_request", str(exc)) from exc
 
     @event(name="reset", description="Reset episode memory and frame buffers")
     async def reset(self) -> None:
@@ -543,7 +544,7 @@ class RLDXPipeline(ReactorApp):
         if degraded is not None:
             if not self._state_degraded:
                 self._state_degraded = True
-                messages.append(CommandError(command="state", reason=degraded))
+                messages.append(CommandErrorMessage(command="state", reason=degraded))
         else:
             self._state_degraded = False
         if robot_state is None:

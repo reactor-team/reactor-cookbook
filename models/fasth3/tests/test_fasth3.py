@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import yaml
+from reactor_runtime import CommandError
 
 import fasth3_clip_plan as clip_plan
 import fasth3_session_rules as session_rules
@@ -211,17 +212,17 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def refusal(model):
-    """The most recent `command_error` broadcast, or None if there is none.
+def refused(model, coro) -> CommandError:
+    """Drive a handler that must refuse, and return the raised `CommandError`.
 
-    A refusal is not an exception here: a handler reports failure by
-    broadcasting `command_error` and returning without a value, so that clients
-    on every SDK generation can see it.
+    A refusal is raised, never sent: the runtime answers only the caller, with
+    the code and message, correlated to its command. Nothing is broadcast.
     """
-    errors = [
-        message for message in model.sent if type(message).__name__ == "CommandError"
-    ]
-    return errors[-1] if errors else None
+    sent_before = len(model.sent)
+    with pytest.raises(CommandError) as raised:
+        run(coro)
+    assert model.sent[sent_before:] == [], "a refusal must not broadcast"
+    return raised.value
 
 
 @pytest.fixture
@@ -276,8 +277,7 @@ def test_start_needs_a_prompt(model):
     """A fresh session has no prompt, so the channel waits for the client."""
     assert model._active_prompt == ""
     assert list(model._prompt_queue) == []
-    assert run(model.start()) is None
-    assert refusal(model).command == "start"
+    assert refused(model, model.start()).code == "no_prompt"
     assert model._started is False
 
 
@@ -289,8 +289,7 @@ def test_start_arms_the_channel(model):
 
 def test_start_is_refused_while_a_channel_runs(model):
     model._running = True
-    assert run(model.start()) is None
-    assert refusal(model).command == "start"
+    assert refused(model, model.start()).code == "already_streaming"
 
 
 def test_an_empty_prompt_clears_the_condition(model):
@@ -302,16 +301,14 @@ def test_an_empty_prompt_clears_the_condition(model):
     assert model._active_prompt == ""
     assert list(model._prompt_queue) == []
     # And `start` goes back to being refused.
-    assert run(model.start()) is None
-    assert refusal(model).command == "start"
+    assert refused(model, model.start()).code == "no_prompt"
 
 
 def test_an_overlong_tokenized_prompt_is_refused_without_entering_the_queue(model):
-    reply = run(model.set_prompt(prompt=" ".join(["token"] * 257)))
+    error = refused(model, model.set_prompt(prompt=" ".join(["token"] * 257)))
 
-    assert reply is None
-    assert refusal(model).command == "set_prompt"
-    assert "at most 256" in refusal(model).reason
+    assert error.code == "prompt_too_long"
+    assert "at most 256" in error.message
     assert list(model._prompt_queue) == []
 
 
@@ -910,10 +907,9 @@ def test_style_set_while_idle_applies_to_the_first_clip(model):
 def test_style_rejects_a_combination_that_exceeds_the_token_budget(model):
     run(model.set_style(style_prompt=""))
     run(model.set_prompt(prompt=" ".join(["subject"] * 225)))
-    reply = run(model.set_style(style_prompt=" ".join(["style"] * 35)))
+    error = refused(model, model.set_style(style_prompt=" ".join(["style"] * 35)))
 
-    assert reply is None
-    assert refusal(model).command == "set_style"
+    assert error.code == "style_too_long"
     assert model._style_prompt == ""
 
 
@@ -928,26 +924,22 @@ def test_the_canvas_is_locked_once_a_channel_runs(model):
     reply = run(model.set_canvas(aspect="9:16"))
     assert (reply.height, reply.width) == clip_plan.canvas_for_choice("9:16")
     model._running = True
-    assert run(model.set_canvas(aspect="1:1")) is None
-    assert refusal(model).command == "set_canvas"
+    assert refused(model, model.set_canvas(aspect="1:1")).code == "already_streaming"
     # The refused command had no effect.
     assert model._aspect == "9:16"
 
 
 def test_pause_and_resume_only_apply_to_a_live_channel(model):
-    assert run(model.pause()) is None
-    assert refusal(model).command == "pause"
+    assert refused(model, model.pause()).code == "not_streaming"
 
     model._running = True
     assert run(model.pause()) is not None  # accepted: a real reply comes back
     assert model._paused is True
-    assert run(model.pause()) is None
-    assert refusal(model).command == "pause"
+    assert refused(model, model.pause()).code == "already_paused"
 
     assert run(model.resume()) is not None
     assert model._paused is False
-    assert run(model.resume()) is None
-    assert refusal(model).command == "resume"
+    assert refused(model, model.resume()).code == "not_paused"
 
 
 def test_stop_keeps_the_conditions(model):
@@ -1070,29 +1062,15 @@ def test_the_ramp_shortens_only_the_opening_clip(model):
     assert model._frames_for_clip(50) == model.default_clip_frames
 
 
-def test_a_refusal_never_masquerades_as_a_reply(model):
-    """A handler must return only the type its annotation names.
-
-    `pause` is annotated `-> ChannelPaused`; a refusal that returned a
-    `CommandError` from it would reach the client typed as the message the
-    schema promised, with every guaranteed field undefined.
-    """
-    assert run(model.pause()) is None
-    error = refusal(model)
-    assert type(error).__name__ == "CommandError"
-    assert error.reason
+def test_stop_is_refused_without_a_channel(model):
+    assert refused(model, model.stop_channel()).code == "not_streaming"
 
 
-def test_the_runtime_exception_is_never_raised(model):
-    """Its correlated failure frame is withheld from v0 clients, so a raise is
-    silence for anyone on the 2.x SDK. The broadcast is what reaches them."""
-    source = (MODEL_DIR / "fasth3.py").read_text(encoding="utf-8")
-    assert "raise CommandError" not in source
-    # And the name in scope is the model's own message, not the runtime's.
-    from fasth3 import CommandError as in_scope
-    from fasth3_types import CommandError as ours
+def test_the_model_publishes_no_error_message_of_its_own():
+    """A refusal is the runtime's correlated failure, not a model message."""
+    import fasth3_types
 
-    assert in_scope is ours
+    assert not hasattr(fasth3_types, "CommandError")
 
 
 # ----------------------------------------------------------------- the channel
@@ -1459,7 +1437,6 @@ EXPECTED_MESSAGES = {
     "clip_complete",
     "clip_length_accepted",
     "clip_started",
-    "command_error",
     "live_chat_status",
     "live_prompt_queued",
     "live_prompt_received",
@@ -1469,17 +1446,17 @@ EXPECTED_MESSAGES = {
     "style_accepted",
 }
 
-# Commands that can be refused. Each one has to say so in its own summary, and
-# name the message a client will actually receive.
-EXPECTED_REJECTIONS = (
-    "set_prompt",
-    "set_style",
-    "set_canvas",
-    "start",
-    "pause",
-    "resume",
-    "stop",
-)
+# Commands that can be refused, and the codes each raises. Each one has to name
+# its codes in its own summary, so a client knows what to branch on.
+EXPECTED_REJECTIONS = {
+    "set_prompt": ("prompt_too_long",),
+    "set_style": ("style_too_long",),
+    "set_canvas": ("already_streaming", "invalid_aspect"),
+    "start": ("already_streaming", "no_prompt"),
+    "pause": ("not_streaming", "already_paused"),
+    "resume": ("not_paused",),
+    "stop": ("not_streaming",),
+}
 
 
 @pytest.fixture(scope="module")
@@ -1602,10 +1579,12 @@ def test_every_command_summary_names_what_it_emits(schema):
         )
 
 
-def test_every_refusable_command_documents_its_failure(schema):
-    for name in EXPECTED_REJECTIONS:
+def test_every_refusable_command_documents_its_failure_codes(schema):
+    for name, codes in EXPECTED_REJECTIONS.items():
         summary = schema["paths"][f"/events/{name}"]["post"]["summary"]
-        assert "`command_error`" in summary, f"{name} does not document its failure"
+        assert "`command_error`" not in summary, name
+        for code in codes:
+            assert f"`{code}`" in summary, f"{name} does not document `{code}`"
 
 
 def test_a_prompt_that_is_not_set_is_null_not_empty(schema):

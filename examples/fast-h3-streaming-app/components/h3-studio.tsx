@@ -45,6 +45,7 @@ import {
   FAST_H3_MODEL,
   clipFromMessageData,
   queueFromMessageData,
+  sendFastH3Command,
   type FastH3ClipInfo,
   type FastH3ClipSeconds,
   type FastH3Queue,
@@ -235,10 +236,6 @@ function phaseLabel(phase: StreamPhase) {
   if (phase === "stopped") return "Stream stopped";
   if (phase === "error") return "Needs attention";
   return "Ready";
-}
-
-function recordFrom(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? value as Record<string, unknown> : {};
 }
 
 export function H3Studio() {
@@ -477,7 +474,12 @@ export function H3Studio() {
     const threshold = prebufferChunksRef.current;
     if (threshold > 0 && queueRef.current.playout.length < threshold) return;
     autoplayEnabledRef.current = true;
-    await reactor.sendCommand("set_autoplay", { enabled: true });
+    const result = await sendFastH3Command(reactor, "set_autoplay", { enabled: true });
+    if (!result.ok) {
+      autoplayEnabledRef.current = false;
+      pushActivity(`set_autoplay: ${result.reason}`, "bad");
+      return;
+    }
     pushActivity(threshold ? `${threshold}-clip prebuffer ready. Playback started.` : "Playback starts on the first ready clip.", "good");
   }, [pushActivity]);
 
@@ -507,12 +509,10 @@ export function H3Studio() {
         };
         if (isFirst && startingFrameRef.current) payload.starting_frame = startingFrameRef.current;
         else if (lastQueuedClipIdRef.current) payload.continue_from_clip_id = lastQueuedClipIdRef.current;
-        const reply = await reactor.sendCommand("enqueue", payload);
-        const clip = clipFromMessageData(reply?.data);
-        if (!clip) {
-          const lastError = reactor.getLastError();
-          throw new Error(lastError?.message || "FastH3 did not accept the next clip.");
-        }
+        const result = await sendFastH3Command(reactor, "enqueue", payload, { expectsReply: true });
+        if (!result.ok) throw new Error(result.reason);
+        const clip = clipFromMessageData(result.reply?.data);
+        if (!clip) throw new Error("FastH3 did not accept the next clip.");
         lastQueuedClipIdRef.current = clip.clip_id;
         startingFrameRef.current = null;
         upsertClip(clip, "queued", {
@@ -584,13 +584,6 @@ export function H3Studio() {
       setNotice(`Clip ${clipsRef.current.find((item) => item.clip_id === clip.clip_id)?.ordinal ?? ""} failed; the queue is continuing.`);
       pushActivity("A clip failed to build. Filling the queue again.", "bad");
       window.setTimeout(() => void ensureQueueRef.current(), 0);
-      return;
-    }
-    if (message.type === "command_error") {
-      const data = recordFrom(message.data);
-      const reason = typeof data.reason === "string" ? data.reason : "Reactor rejected a command.";
-      setNotice(reason);
-      pushActivity(`${String(data.command ?? "Command")}: ${reason}`, "bad");
     }
   }, [maybeEnableAutoplay, pushActivity, setPhaseState, upsertClip]);
 
@@ -643,6 +636,8 @@ export function H3Studio() {
         }
       });
       reactor.on("error", (reactorError) => {
+        // A refused command is reported by the call that sent it.
+        if (reactorError.operation === "sendCommand") return;
         setNotice(reactorError.message);
         pushActivity(reactorError.message, "bad");
       });
@@ -666,9 +661,14 @@ export function H3Studio() {
         return;
       }
       setReactorStatus("ready");
-      await reactor.sendCommand("set_canvas", { aspect: "16:9" });
-      await reactor.sendCommand("set_clip_seconds", { seconds: chunkSeconds });
-      await reactor.sendCommand("set_flush_on_clip_end", { enabled: false });
+      for (const [command, data] of [
+        ["set_canvas", { aspect: "16:9" }],
+        ["set_clip_seconds", { seconds: chunkSeconds }],
+        ["set_flush_on_clip_end", { enabled: false }],
+      ] as const) {
+        const result = await sendFastH3Command(reactor, command, data);
+        if (!result.ok) throw new Error(`${command}: ${result.reason}`);
+      }
       if (startImage) {
         setPhaseState("connecting");
         startingFrameRef.current = await reactor.uploadFile(await dataUrlToFile(startImage.dataUrl, startImage.name));

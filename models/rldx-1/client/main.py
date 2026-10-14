@@ -169,7 +169,7 @@ class Client:
         self.schema_event = asyncio.Event()
         self.loop: asyncio.AbstractEventLoop | None = None
         self.rtc_scheduler: RTCPlanScheduler | None = None
-        self.rtc_events: asyncio.Queue[tuple[str, dict]] | None = None
+        self.rtc_events: asyncio.Queue[dict] | None = None
         self.rtc_task: asyncio.Task | None = None
         self.rtc_requests = 0
         self.rtc_resets = 0
@@ -216,19 +216,19 @@ class Client:
                 self.schema_event.set()
         elif mtype == "action_prediction":
             self.on_action(body)
-            self.queue_rtc_event("action", body)
+            self.queue_rtc_event(body)
         elif mtype == "command_error":
+            # Broadcast when inference runs on fallback robot state. A refused
+            # command raises from its own `send_command()` call instead.
             self.command_errors.append(body)
             print(f"[command_error] {body.get('command')}: {body.get('reason')}")
-            if body.get("command") == "request_action":
-                self.queue_rtc_event("error", body)
 
-    def queue_rtc_event(self, kind: str, body: dict) -> None:
-        """Move callback-thread RTC messages onto the asyncio control loop."""
+    def queue_rtc_event(self, body: dict) -> None:
+        """Move a callback-thread action chunk onto the asyncio control loop."""
 
         if self.loop is None or self.rtc_events is None:
             return
-        self.loop.call_soon_threadsafe(self.rtc_events.put_nowait, (kind, body))
+        self.loop.call_soon_threadsafe(self.rtc_events.put_nowait, body)
 
     def on_action(self, body: dict) -> None:
         """Place one action chunk on the client's own timeline."""
@@ -316,12 +316,9 @@ class Client:
 
         assert self.rtc_events is not None
         while True:
-            kind, body = await self.rtc_events.get()
+            body = await self.rtc_events.get()
             scheduler = self.rtc_scheduler
             if scheduler is None:
-                continue
-            if kind == "error":
-                await self.reset_rtc(f"server rejected request: {body.get('reason')}")
                 continue
             try:
                 plan = scheduler.accept(body)
@@ -509,8 +506,15 @@ class Client:
                         if request is not None:
                             request_id = int(request["request_id"])
                             self.rtc_request_started[request_id] = time.monotonic()
-                            await self.reactor.send_command("request_action", request)
-                            self.rtc_requests += 1
+                            try:
+                                await self.reactor.send_command("request_action", request)
+                                self.rtc_requests += 1
+                            except ReactorError as exc:
+                                if exc.operation != "send_command":
+                                    raise
+                                # The model refused this request: `invalid_request`
+                                # or `rtc_disabled`, with the reason in the message.
+                                await self.reset_rtc(f"server refused request [{exc.code}]: {exc.message}")
                         control_step = scheduler.current_step
                         action = scheduler.action_for_current_step()
                         if action is not None:

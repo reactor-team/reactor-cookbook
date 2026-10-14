@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: joy-video-edit
-  version: v0.1.0
+  version: v0.2.0
   description: |
     Edit a live camera stream from a natural-language instruction, with an
     optional reference image, in real time at 1248x720. JoyAI-Video-Edit

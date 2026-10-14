@@ -4,7 +4,7 @@ $schema: reactor/v2
 
 model:
   name: rldx-1
-  version: v0.6.2
+  version: v0.7.0
   description: |
     Serve RLDX-1 as a three-camera vision-language-action policy. The model
     aligns camera frames and robot state by capture time and returns RTC action
