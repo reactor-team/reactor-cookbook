@@ -391,7 +391,7 @@ class SanaWM(ReactorApp):
         description=(
             "Press or release one native SANA-WM control. Values are held and sampled at the "
             "next 24-frame boundary; simultaneous controls are preserved. Valid only in live "
-            "interactive mode after image selection. Emits `control_changed` and `state_update` "
+            "interactive mode after image selection. Emits `control_changed` and `state_update`. "
             "Fails with `image_required` before image selection, `trajectory_active` during "
             "trajectory playback, or `control_invalid` for an unknown control."
         ),

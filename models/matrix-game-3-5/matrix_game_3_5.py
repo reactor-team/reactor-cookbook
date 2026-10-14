@@ -152,7 +152,7 @@ class MatrixGame35(ReactorApp):
         description=(
             "Set the scene prompt without restarting the current world. Valid when an anchor "
             "image is selected; the text takes effect on the next generated 12-frame "
-            "`main_video` chunk and does not clear the rollout limit. Returns `state_update` "
+            "`main_video` chunk and does not clear the rollout limit. Returns `state_update`. "
             "Fails with `prompt_required` when `prompt` is empty, or `image_required` when no "
             "image is selected."
         ),

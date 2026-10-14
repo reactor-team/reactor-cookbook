@@ -24,7 +24,7 @@ export const AlayaWorldTracks = [
 export type AlayaWorldRecvTrackName =
   "main_video";
 
-/** Set the scene prompt for the next 32-frame chunk without resetting the world. Requires a selected image. Emits `prompt_queued` and broadcasts `state_update` Fails with `prompt_required` when the prompt is empty, or `image_required` when no image is selected. */
+/** Set the scene prompt for the next 32-frame chunk without resetting the world. Requires a selected image. Emits `prompt_queued` and broadcasts `state_update`. Fails with `prompt_required` when the prompt is empty, or `image_required` when no image is selected. */
 export interface AlayaWorldSetPromptParams {
   /**
    * Non-empty scene prompt, trimmed and sampled when the next 32-frame chunk starts. Requires an image selected by `set_image` or `random_image`.
@@ -322,8 +322,8 @@ export class AlayaWorldModel extends Reactor {
   }
 
   /**
-   * Set the scene prompt for the next 32-frame chunk without resetting the world. Requires a selected image. Emits `prompt_queued` and broadcasts `state_update` Fails with `prompt_required` when the prompt is empty, or `image_required` when no image is selected.
-   * @param params - Set the scene prompt for the next 32-frame chunk without resetting the world. Requires a selected image. Emits `prompt_queued` and broadcasts `state_update` Fails with `prompt_required` when the prompt is empty, or `image_required` when no image is selected.
+   * Set the scene prompt for the next 32-frame chunk without resetting the world. Requires a selected image. Emits `prompt_queued` and broadcasts `state_update`. Fails with `prompt_required` when the prompt is empty, or `image_required` when no image is selected.
+   * @param params - Set the scene prompt for the next 32-frame chunk without resetting the world. Requires a selected image. Emits `prompt_queued` and broadcasts `state_update`. Fails with `prompt_required` when the prompt is empty, or `image_required` when no image is selected.
    * @returns The correlated {@link AlayaWorldPromptQueuedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 

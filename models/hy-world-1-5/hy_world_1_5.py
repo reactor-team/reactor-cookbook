@@ -178,7 +178,7 @@ class HYWorld15(ReactorApp):
         description=(
             "Atomically set all four camera controls trained by HY-World 1.5. Requires an active "
             "world before its rollout limit. Values are sampled together at the next chunk and "
-            "held for later chunks. Emits `camera_motion_changed` and broadcasts `state_update` "
+            "held for later chunks. Emits `camera_motion_changed` and broadcasts `state_update`. "
             "Fails with `image_required` when no image is selected, or `rollout_limit_reached` "
             "when the limit is reached."
         ),
@@ -242,7 +242,7 @@ class HYWorld15(ReactorApp):
         description=(
             "Queue a fresh world from the selected image and current prompt. Requires a selected "
             "image. Clears progress, geometric memory, KV cache, and camera motion while "
-            "resuming continuous generation. Emits `rollout_reset_queued` and broadcasts `state_update` "
+            "resuming continuous generation. Emits `rollout_reset_queued` and broadcasts `state_update`. "
             "Fails with `image_required` when no image is selected."
         ),
     )

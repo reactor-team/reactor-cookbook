@@ -137,7 +137,7 @@ class AlayaWorld(ReactorApp):
         name="set_prompt",
         description=(
             "Set the scene prompt for the next 32-frame chunk without resetting the world. "
-            "Requires a selected image. Emits `prompt_queued` and broadcasts `state_update` "
+            "Requires a selected image. Emits `prompt_queued` and broadcasts `state_update`. "
             "Fails with `prompt_required` when the prompt is empty, or `image_required` when no "
             "image is selected."
         ),
