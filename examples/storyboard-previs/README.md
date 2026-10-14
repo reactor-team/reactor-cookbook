@@ -85,7 +85,9 @@ is loaded before the current one ends.
 **Continuing.** `continueStory` takes the binding lines from the previous
 shot, adds a sentence about what carries over, appends the new action, and
 enqueues with `continue_mode: "frame"`. If the model refuses (for instance the
-source clip aged out of the eight it keeps) it retries with `latent`. The
+source clip aged out of the eight it keeps) it retries with `latent`. A refusal
+arrives on the call that sent the command: `lib/command.ts` reads it there and
+throws the model's reason. The
 session log at the bottom shows every upload, enqueue, clip event, and the
 assembled prompt.
 
@@ -100,6 +102,7 @@ lib/storyboard.ts           the two scripts
 lib/reference-kit.ts        pictures per story
 lib/recordings.ts           IndexedDB for takes
 lib/image.ts                shrink before upload
+lib/command.ts              send a command, throw its refusal
 public/references/          pictures + the prompts that made them
 public/boards/PROMPTS.md    prompts for drawn panels, if you want them
 ```

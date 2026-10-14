@@ -6,6 +6,7 @@
 - Reference pictures are uploaded once per session and cached by asset id; every shot passes its pictures in the order its `refs` lists them, which is the `<Picture N>` order in the prompt.
 - Generate storyboard uses the model's playout queue with `set_autoplay` and `set_flush_on_clip_end: false`; the app records the WebRTC stream, it does not splice video in the browser.
 - A continuation keeps the previous shot's binding lines and pictures, states what carries over, and sends `continue_from_clip_id` with `continue_mode: "frame"`, falling back to `latent` if the model refuses.
+- A refused command fails its own call. `command()` in `app/page.tsx` goes through `sendModelCommand` in `lib/command.ts`, which throws the model's reason; never listen for a `command_error` message, and never show an `error` event with `operation: "sendCommand"` as a connection error.
 
 <!-- BEGIN:nextjs-agent-rules -->
 

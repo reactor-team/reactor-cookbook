@@ -5,6 +5,7 @@ import { loadReferenceKit, kitStory } from '@/lib/reference-kit';
 import { shrinkImage } from '@/lib/image';
 import { GenerationOverlay } from '@/components/generation-overlay';
 import { readRecordings, saveRecording, recordingMime, type Recording } from '@/lib/recordings';
+import { sendModelCommand } from '@/lib/command';
 import type { Reactor, FileRef } from '@reactor-team/js-sdk';
 import { Board, Shot, Reference, StoryId, desertSignal, storyBoards, stories, durations, durationLabel, moveShot, readReferences, saveReference, deleteReference } from '@/lib/storyboard';
 type SavedTake = Recording & { url: string };
@@ -139,14 +140,15 @@ export default function Studio() {
       const response = await fetch('/api/token', { method: 'POST' }); const data = await response.json() as { jwt: string; error?: string }; if (!response.ok) throw new Error(data.error);
       const { Reactor } = await import('@reactor-team/js-sdk');
       const r = new Reactor({ modelName: 'reactor/fast-h3-omni' }); client.current = r;
-      r.on('statusChanged', s => { setStatus(s); note(`Connection: ${s}`); if (s === 'ready') { setSessionStart(prev => prev ?? now()); void r.sendCommand('set_flush_on_clip_end', { enabled: false }).catch(() => {}); void preloadUploads(); } if (s === 'disconnected') { setSessionStart(null); setPicturesReady(0); setPreloading(false); } if (s === 'disconnected') { setLive(false); readyClips.current.clear(); uploads.current.clear(); capture.current?.cancel('Session disconnected before capture finished.'); setPlaying(''); setTakes(t => Object.fromEntries(Object.entries(t).map(([id, take]) => [id, { ...take, status: 'expired' }]))); pending.current.forEach(p => { clearTimeout(p.timer); p.reject(new Error('Session disconnected')); }); pending.current.clear(); } });
+      r.on('statusChanged', s => { setStatus(s); note(`Connection: ${s}`); if (s === 'ready') { setSessionStart(prev => prev ?? now()); void sendModelCommand(r, 'set_flush_on_clip_end', { enabled: false }).catch(e => note(`set_flush_on_clip_end refused: ${errorText(e)}`, 'error')); void preloadUploads(); } if (s === 'disconnected') { setSessionStart(null); setPicturesReady(0); setPreloading(false); } if (s === 'disconnected') { setLive(false); readyClips.current.clear(); uploads.current.clear(); capture.current?.cancel('Session disconnected before capture finished.'); setPlaying(''); setTakes(t => Object.fromEntries(Object.entries(t).map(([id, take]) => [id, { ...take, status: 'expired' }]))); pending.current.forEach(p => { clearTimeout(p.timer); p.reject(new Error('Session disconnected')); }); pending.current.clear(); } });
       r.on('trackReceived', (name, _track, stream) => { if (name === 'main_video' && video.current) { video.current.srcObject = stream; void video.current.play().catch(() => setNotice('Press Play in the video controls to enable playback.')); } if (name === 'main_audio' && audio.current) { audio.current.srcObject = stream; audio.current.muted = !sound; void audio.current.play().catch(() => { note('Browser blocked audio until the next click; it will start on your next action.'); const retry = () => { if (audio.current) { audio.current.muted = !sound; void audio.current.play().catch(() => {}); } }; document.addEventListener('pointerdown', retry, { once: true }); }); } });
-      r.on('error', e => { setError(e.message); note(`SDK error: ${e.message}`, 'error'); });
-      r.on('message', message => { const d = message.data as { clip?: Clip; reason?: string; generation?: Clip[]; playout?: Clip[] }; if (d?.clip) handleClip(message.type, d.clip, d.reason); if (message.type === 'queue_update') for (const c of [...(d.generation ?? []), ...(d.playout ?? [])]) if (typeof c.build_seconds === 'number' && c.metadata) setTakes(t => t[c.metadata] ? { ...t, [c.metadata]: { ...t[c.metadata], buildSeconds: c.build_seconds as number } } : t); if (message.type === 'command_error') { setError(d.reason || 'Command refused.'); note(`Command refused: ${d.reason || 'no reason'}`, 'error'); } });
+      // A refused command is reported by the call that sent it; see `sendModelCommand`.
+      r.on('error', e => { if (e.operation === 'sendCommand') return; setError(e.message); note(`SDK error: ${e.message}`, 'error'); });
+      r.on('message', message => { const d = message.data as { clip?: Clip; reason?: string; generation?: Clip[]; playout?: Clip[] }; if (d?.clip) handleClip(message.type, d.clip, d.reason); if (message.type === 'queue_update') for (const c of [...(d.generation ?? []), ...(d.playout ?? [])]) if (typeof c.build_seconds === 'number' && c.metadata) setTakes(t => t[c.metadata] ? { ...t, [c.metadata]: { ...t[c.metadata], buildSeconds: c.build_seconds as number } } : t); });
       await r.connect(data.jwt);
     } catch (e) { setError(errorText(e)); note(`Connect failed: ${errorText(e)}`, 'error'); setStatus('disconnected'); await client.current?.disconnect(); client.current = null; } finally { connecting.current = false; }
   }
-  async function command(name: string, data: Record<string, unknown> = {}) { if (!client.current) throw new Error('Connect to H3 Omni first.'); const reply = await client.current.sendCommand(name, data); if (reply?.type === 'command_error') throw new Error((reply.data as { reason: string }).reason); return reply; }
+  async function command(name: string, data: Record<string, unknown> = {}) { if (!client.current) throw new Error('Connect to H3 Omni first.'); return sendModelCommand(client.current, name, data); }
   function waitForClip(id: string): Promise<string> {
     const known = readyClips.current.get(id); if (known) return Promise.resolve(known);
     const existing = pending.current.get(id); if (existing) return existing.promise;
@@ -274,7 +276,7 @@ export default function Studio() {
       setNotice(saveSequence ? 'Sequence saved. The picture is holding on the last frame: tell it what happens next.' : 'Added to the storyboard. What happens next?');
       return true;
     } catch (e) { setError(errorText(e)); note(`Sequence stopped: ${errorText(e)}`, 'error'); setTakes(t => Object.fromEntries(Object.entries(t).map(([id, take]) => [id, take.status === 'queued' ? { ...take, status: 'failed' } : take]))); return false; }
-    finally { sequence.current = null; void command('set_autoplay', { enabled: false }).catch(() => {}); setBusy(false); setPhase(''); setActiveShot(''); setPlaying(''); }
+    finally { sequence.current = null; void command('set_autoplay', { enabled: false }).catch(e => note(`set_autoplay refused: ${errorText(e)}`, 'error')); setBusy(false); setPhase(''); setActiveShot(''); setPlaying(''); }
   }
   // "What happens next?": append a linked shot and play it from the held frame.
   async function continueStory() {
