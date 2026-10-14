@@ -230,3 +230,10 @@
 .next-overlay .generation-copy h2{font-size:clamp(22px,2.6vw,34px)}
 .next-overlay .generation-copy p{font-size:clamp(13px,1.3vw,17px);color:#e8e2c8;max-width:60ch;line-height:1.4}
 .next-status{display:none}
+/* Product name in the top bar. */
+.studio-label{display:flex;flex-direction:column;justify-content:center;gap:2px;line-height:1}
+.studio-label strong{font-size:17px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:#c7c099}
+.studio-label small{font-size:10px;letter-spacing:.04em;color:#9a9a8c}
+.brand-divider{height:26px}
+.story-switch{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.story-switch-label{font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:#8f8f82}
