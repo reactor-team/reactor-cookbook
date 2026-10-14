@@ -67,7 +67,7 @@ states, which commands each accepts, message ordering, and SDK sequences.
 | Command | When | Effect |
 | --- | --- | --- |
 | `set_prompt` | any time | Stores the edit instruction. `start` reads it; a change during a run applies from the next `start`. Replies `prompt_accepted`, broadcasts `session_state`. |
-| `set_reference_image` | while not generating | Stores a reference image (PNG or JPEG) whose appearance guides the edit. It is fitted, aspect kept, into the nearest of a square, 4:3 or 3:4 frame and padded with grey. Replies `reference_image_accepted`, broadcasts `session_state`. Fails with `generation_active` while generating, or `invalid_image` for an undecodable upload. |
+| `set_reference_image` | while not generating | Stores a reference image (PNG or JPEG) whose appearance guides the edit. It is fitted, aspect kept, into the nearest of a square, 4:3 or 3:4 frame and padded with grey. Replies `reference_image_accepted`, broadcasts `session_state`. Fails with `already_generating` while generating, or `invalid_image` for an undecodable upload. |
 | `set_seed` | any time | Stores the noise seed. `start` reads it. |
 | `start` | while not generating | Begins a run with the current instruction, reference image and seed. Replies `generation_started`, broadcasts `session_state`. Fails with `already_generating` if already generating. |
 | `reset` | any time | Ends the run and returns to waiting; the instruction, reference image and seed are kept. While generating, broadcasts `generation_reset` then `generation_complete`; always broadcasts `session_state`. |

@@ -74,7 +74,7 @@ export async function sendFastH3Command(
 ): Promise<FastH3CommandResult> {
   let refusal: ReactorError | null = null;
   const onError = (error: ReactorError) => {
-    if (error.operation === "sendCommand" && error.message.includes(`'${command}'`)) refusal = error;
+    if (error.operation === "sendCommand" && error.message.startsWith(`command '${command}' failed`)) refusal = error;
   };
   reactor.on("error", onError);
   let reply: ReactorMessage | undefined;

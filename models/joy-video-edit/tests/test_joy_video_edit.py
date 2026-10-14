@@ -360,7 +360,7 @@ async def test_set_reference_image_is_refused_while_generating() -> None:
     sent.clear()
     with pytest.raises(CommandError) as refused:
         await app.set_reference_image(_upload())
-    assert refused.value.code == "generation_active"
+    assert refused.value.code == "already_generating"
     assert app.state._reference is None and sent == []
 
 

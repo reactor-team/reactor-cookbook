@@ -442,7 +442,7 @@ function FastH3Workspace({ config }: { config: DemoConfig }) {
     async (name: string, params: Record<string, unknown> = {}) => {
       let refusal: ReactorError | null = null;
       const onError = (error: ReactorError) => {
-        if (error.operation === "sendCommand" && error.message.includes(`'${name}'`)) {
+        if (error.operation === "sendCommand" && error.message.startsWith(`command '${name}' failed`)) {
           refusal = error;
         }
       };

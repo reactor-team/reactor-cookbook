@@ -63,7 +63,7 @@ again. `reset` keeps the instruction, reference image, and seed, so a bare
 | Command | Parameters | Accepted | Answer |
 | --- | --- | --- | --- |
 | `set_prompt` | `prompt: str`, up to 2000 characters; `""` clears it | any time | replies `prompt_accepted`; broadcasts `session_state` |
-| `set_reference_image` | `reference_image`: an uploaded PNG or JPEG | while waiting | replies `reference_image_accepted`; broadcasts `session_state`. Fails with `generation_active` while generating, or `invalid_image` if the upload cannot be decoded |
+| `set_reference_image` | `reference_image`: an uploaded PNG or JPEG | while waiting | replies `reference_image_accepted`; broadcasts `session_state`. Fails with `already_generating` while generating, or `invalid_image` if the upload cannot be decoded |
 | `set_seed` | `seed: int`, 0 or more (default 42) | any time | nothing; `start` reads it |
 | `start` | none | while waiting | replies `generation_started`; broadcasts `session_state`. Fails with `already_generating` while generating |
 | `reset` | none | any time | while generating: broadcasts `generation_reset`, `generation_complete`, then `session_state`. While waiting: `session_state` only |

@@ -304,7 +304,7 @@ class JoyVideoEdit(ReactorApp):
         "the object to add or the look to match). Accepted only while not generating: send "
         "it before `start`, or after `reset`. It stays loaded for later runs until another "
         "upload replaces it. Emits `reference_image_accepted` and broadcasts "
-        "`session_state`. Fails with `generation_active` while generating, or "
+        "`session_state`. Fails with `already_generating` while generating, or "
         "`invalid_image` if the upload cannot be decoded as an image."
     ))
     async def set_reference_image(
@@ -322,7 +322,7 @@ class JoyVideoEdit(ReactorApp):
         logger.info("set_reference_image", name=reference_image.name, bytes=reference_image.size)
         if self.state._started:
             raise CommandError(
-                "generation_active",
+                "already_generating",
                 "Generation is active; send set_reference_image before start.",
             )
         try:
