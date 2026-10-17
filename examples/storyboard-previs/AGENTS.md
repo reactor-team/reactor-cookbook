@@ -4,7 +4,9 @@
 - Scoped session JWTs are minted in `app/api/token/route.ts` for `reactor/fast-h3-omni` only. Keep that the only auth path.
 - The stories and their prompts live in `lib/storyboard.ts`. Prompts follow the model's prompt guide: subject lines binding `<Subject N>` to `<Picture N>`, one "In one shot," beat, then Camera, Dialogue, Soundscape, Music.
 - Reference pictures are uploaded once per session and cached by asset id; every shot passes its pictures in the order its `refs` lists them, which is the `<Picture N>` order in the prompt.
-- Generate storyboard uses the model's playout queue with `set_autoplay` and `set_flush_on_clip_end: false`; the app records the WebRTC stream, it does not splice video in the browser.
+- Without live monitoring, Generate storyboard uses the model's playout queue with `set_autoplay` and `set_flush_on_clip_end: false`; the app records the WebRTC stream, it does not splice video in the browser.
+- With live monitoring enabled at generation start, prepare and play shots serially so observations can change the next prompt. Save individual takes; never enqueue future shots before the current playback finishes.
+- Live monitoring uses OpenAI Decisions only. `OPENAI_API_KEY` stays in server route handlers. A rule fires once after two distinct positive checks; stopped/edited/old-shot checks must not execute actions.
 - A continuation keeps the previous shot's binding lines and pictures, states what carries over, and sends `continue_from_clip_id` with `continue_mode: "frame"`, falling back to `latent` if the model refuses.
 - A refused command fails its own call. `command()` in `app/page.tsx` goes through `sendModelCommand` in `lib/command.ts`, which throws the model's reason; never listen for a `command_error` message, and never show an `error` event with `operation: "sendCommand"` as a connection error.
 

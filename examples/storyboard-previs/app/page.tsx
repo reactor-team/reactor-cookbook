@@ -4,6 +4,9 @@ import { ArrowDown, ArrowUp, Terminal, Sparkles, Timer, Radio, Clapperboard, Dow
 import { loadReferenceKit, kitStory } from '@/lib/reference-kit';
 import { shrinkImage } from '@/lib/image';
 import { GenerationOverlay } from '@/components/generation-overlay';
+import { LiveMonitor, captureFrame } from '@/components/live-monitor';
+import { eventMemory, type Observation, type RuleEvent } from '@/lib/live-rules';
+import { runReactivePlan } from '@/lib/reactive';
 import { readRecordings, saveRecording, recordingMime, type Recording } from '@/lib/recordings';
 import { sendModelCommand } from '@/lib/command';
 import type { Reactor, FileRef } from '@reactor-team/js-sdk';
@@ -35,6 +38,15 @@ export default function Studio() {
   const [live, setLive] = useState(false);
   const [nextPrompt, setNextPrompt] = useState('');
   const [nextMode, setNextMode] = useState<'continue' | 'cut'>('continue');
+  const [inspectorTab, setInspectorTab] = useState<'shot' | 'rules'>('shot');
+  const [monitorEnabled, setMonitorEnabled] = useState(false);
+  const [brief, setBrief] = useState('');
+  const [pendingDirection, setPendingDirection] = useState('');
+  const directionQueue = useRef<RuleEvent[]>([]);
+  const observedEvents = useRef<RuleEvent[]>([]);
+  const operation = useRef<AbortController | null>(null);
+  const playback = useRef<{ id: string; clipId: string; start: number } | null>(null);
+  const liveSettings = useRef({ brief, monitorEnabled }); liveSettings.current = { brief, monitorEnabled };
   const [preloading, setPreloading] = useState(false);
   const [picturesReady, setPicturesReady] = useState(0);
   const nextInput = useRef<HTMLInputElement>(null);
@@ -73,6 +85,7 @@ export default function Studio() {
   const builtShots = timelineShots.filter(s => buildFor(s.id) !== undefined);
   const buildTotal = builtShots.reduce((n, s) => n + (buildFor(s.id) ?? 0), 0);
   useEffect(() => {
+    setBrief(localStorage.getItem('previs-creative-brief-v1') || '');
     const story = (localStorage.getItem('reactor-story') as StoryId | null) ?? 'desert';
     const initial = readSavedBoard(story) ?? storyBoards[story]();
     setBoard(initial); setSelected(initial.shots[0].id); setLoaded(true);
@@ -81,17 +94,18 @@ export default function Studio() {
     readRecordings().then(rows => { if (cancelled) return; setRecordings(Object.fromEntries(rows.map(row => { const url = URL.createObjectURL(row.blob); assetUrls.current.push(url); return [row.id, { ...row, url }]; }))); }).catch(() => setError('Saved takes could not be loaded.'));
     const onFullscreen = () => { if (!document.fullscreenElement) setPresent(false); };
     document.addEventListener('fullscreenchange', onFullscreen);
-    return () => { cancelled = true; document.removeEventListener('fullscreenchange', onFullscreen); capture.current?.cancel('Session closed'); void client.current?.disconnect(); assetUrls.current.forEach(URL.revokeObjectURL); pending.current.forEach(p => { clearTimeout(p.timer); p.reject(new Error('Session closed')); }); pending.current.clear(); };
+    return () => { cancelled = true; operation.current?.abort(); document.removeEventListener('fullscreenchange', onFullscreen); capture.current?.cancel('Session closed'); sequence.current?.cancel('Session closed'); void client.current?.disconnect(); assetUrls.current.forEach(URL.revokeObjectURL); pending.current.forEach(p => { clearTimeout(p.timer); p.reject(new Error('Session closed')); }); pending.current.clear(); };
   }, []);
   useEffect(() => { if (!notice) return; const id = setTimeout(() => setNotice(''), 7000); return () => clearTimeout(id); }, [notice]);
   useEffect(() => { if (!sessionStart) return; const id = setInterval(() => setTick(t => t + 1), 1000); return () => clearInterval(id); }, [sessionStart]);
   useEffect(() => { if (loaded) try { const story = board.story ?? 'desert'; localStorage.setItem(`reactor-storyboard-v21:${story}`, JSON.stringify(board)); localStorage.setItem('reactor-story', story); } catch { setError('Browser storage is full.'); } }, [board, loaded]);
+  useEffect(() => { if (loaded) try { localStorage.setItem('previs-creative-brief-v1', brief); } catch { /* The active brief still works without storage. */ } }, [brief, loaded]);
   function update(patch: Partial<Shot>) { if (shot) setBoard(b => ({ ...b, shots: b.shots.map(s => s.id === shot.id ? { ...s, ...patch } : s) })); }
   function reorder(source: string, target: string) { if (source === target) return; setBoard(b => ({ ...b, shots: moveShot(b.shots, source, target) })); setNotice('Order updated. Regenerate linked shots to follow the new sequence.'); }
   function addShot() { const s: Shot = { id: crypto.randomUUID(), title: 'New shot', prompt: '', seconds: 8, image: '', refs: shot ? [...shot.refs] : [], connected: false }; setBoard(b => ({ ...b, shots: [...b.shots, s] })); setSelected(s.id); }
   function readSavedBoard(id: StoryId): Board | null { try { const saved = JSON.parse(localStorage.getItem(`reactor-storyboard-v21:${id}`) || 'null'); if (saved && typeof saved.title === 'string' && Array.isArray(saved.shots) && saved.shots.length && saved.shots.every((s: Shot) => typeof s.id === 'string' && typeof s.prompt === 'string' && Array.isArray(s.refs) && durations.includes(s.seconds))) return { ...saved, story: id }; } catch {} return null; }
   // Switching stories keeps each one's edits; Reset script returns the current story to its original script.
-  function loadStory(id: StoryId, fresh = false) { const b = (fresh ? null : readSavedBoard(id)) ?? storyBoards[id](); setBoard(b); setSelected(b.shots[0].id); setReplay(null); setLive(false); void restoreKit(); note(fresh ? `Reset script: ${b.title}` : `Story: ${b.title}`); }
+  function loadStory(id: StoryId, fresh = false) { setMonitorEnabled(false); clearDirections(); observedEvents.current = []; playback.current = null; const b = (fresh ? null : readSavedBoard(id)) ?? storyBoards[id](); setBoard(b); setSelected(b.shots[0].id); setReplay(null); setLive(false); void restoreKit(); note(fresh ? `Reset script: ${b.title}` : `Story: ${b.title}`); }
   function resetBoard() { loadStory(board.story ?? 'desert', true); }
   function clearAdded() { const keep = board.shots.filter(s => !s.added); if (keep.length === board.shots.length) return; setBoard(b => ({ ...b, shots: b.shots.filter(s => !s.added) })); setSelected(keep[keep.length - 1].id); setReplay(null); setLive(false); setNotice(`Removed ${addedCount} added beat${addedCount === 1 ? '' : 's'}. The original script is back.`); }
   async function upload(files: FileList | null) {
@@ -112,6 +126,8 @@ export default function Studio() {
   async function removeAsset(a: Asset) { try { await deleteReference(a.id); uploads.current.delete(a.id); setAssets(v => v.filter(x => x.id !== a.id)); setBoard(b => ({ ...b, shots: b.shots.map(s => ({ ...s, refs: s.refs.filter(id => id !== a.id) })) })); URL.revokeObjectURL(a.url); } catch (e) { setError(errorText(e)); } }
   function handleClip(type: string, clip: Clip, reason?: string) {
     const id = clip.metadata; if (!id) return;
+    if (type === 'clip_started' && playback.current?.clipId !== clip.clip_id) playback.current = { id, clipId: clip.clip_id, start: video.current?.currentTime ?? 0 };
+    if (['clip_finished', 'clip_stopped', 'clip_failed'].includes(type) && playback.current?.id === id) playback.current = null;
     const state: Take['status'] = type === 'clip_generated' ? 'ready' : type === 'clip_started' ? 'playing' : type === 'clip_failed' ? 'failed' : type === 'clip_finished' || type === 'clip_stopped' ? 'played' : 'queued';
     // Prefer the model's own build time; fall back to the enqueue-to-ready interval measured here.
     const started = buildStart.current.get(id);
@@ -140,7 +156,7 @@ export default function Studio() {
       const response = await fetch('/api/token', { method: 'POST' }); const data = await response.json() as { jwt: string; error?: string }; if (!response.ok) throw new Error(data.error);
       const { Reactor } = await import('@reactor-team/js-sdk');
       const r = new Reactor({ modelName: 'reactor/fast-h3-omni' }); client.current = r;
-      r.on('statusChanged', s => { setStatus(s); note(`Connection: ${s}`); if (s === 'ready') { setSessionStart(prev => prev ?? now()); void sendModelCommand(r, 'set_flush_on_clip_end', { enabled: false }).catch(e => note(`set_flush_on_clip_end refused: ${errorText(e)}`, 'error')); void preloadUploads(); } if (s === 'disconnected') { setSessionStart(null); setPicturesReady(0); setPreloading(false); } if (s === 'disconnected') { setLive(false); readyClips.current.clear(); uploads.current.clear(); capture.current?.cancel('Session disconnected before capture finished.'); setPlaying(''); setTakes(t => Object.fromEntries(Object.entries(t).map(([id, take]) => [id, { ...take, status: 'expired' }]))); pending.current.forEach(p => { clearTimeout(p.timer); p.reject(new Error('Session disconnected')); }); pending.current.clear(); } });
+      r.on('statusChanged', s => { setStatus(s); note(`Connection: ${s}`); if (s === 'ready') { setSessionStart(prev => prev ?? now()); void sendModelCommand(r, 'set_flush_on_clip_end', { enabled: false }).catch(e => note(`set_flush_on_clip_end refused: ${errorText(e)}`, 'error')); void preloadUploads(); } if (s === 'disconnected') { setSessionStart(null); setPicturesReady(0); setPreloading(false); } if (s === 'disconnected') { operation.current?.abort(); playback.current = null; setMonitorEnabled(false); setLive(false); readyClips.current.clear(); uploads.current.clear(); capture.current?.cancel('Session disconnected before capture finished.'); setPlaying(''); setTakes(t => Object.fromEntries(Object.entries(t).map(([id, take]) => [id, { ...take, status: 'expired' }]))); pending.current.forEach(p => { clearTimeout(p.timer); p.reject(new Error('Session disconnected')); }); pending.current.clear(); } });
       r.on('trackReceived', (name, _track, stream) => { if (name === 'main_video' && video.current) { video.current.srcObject = stream; void video.current.play().catch(() => setNotice('Press Play in the video controls to enable playback.')); } if (name === 'main_audio' && audio.current) { audio.current.srcObject = stream; audio.current.muted = !sound; void audio.current.play().catch(() => { note('Browser blocked audio until the next click; it will start on your next action.'); const retry = () => { if (audio.current) { audio.current.muted = !sound; void audio.current.play().catch(() => {}); } }; document.addEventListener('pointerdown', retry, { once: true }); }); } });
       // A refused command is reported by the call that sent it; see `sendModelCommand`.
       r.on('error', e => { if (e.operation === 'sendCommand') return; setError(e.message); note(`SDK error: ${e.message}`, 'error'); });
@@ -182,7 +198,8 @@ export default function Studio() {
     note(`Preloading ${refs.length} pictures`); setPreloading(true); setPicturesReady(0);
     try { for (const a of refs) await uploadAsset(a); setPicturesReady(refs.length); note('Pictures ready'); } catch (e) { note(`Preload failed: ${errorText(e)}`, 'error'); } finally { setPreloading(false); }
   }
-  async function enqueue(s: Shot, previous?: Shot) {
+  async function enqueue(s: Shot, previous?: Shot, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     if (!s.prompt.trim()) throw new Error(`Add direction for “${s.title}”.`);
     const refs = s.refs.map(id => assets.find(a => a.id === id)).filter((a): a is Asset => !!a);
     if (refs.length > 9) throw new Error('Use up to 9 reference pictures per shot.');
@@ -193,13 +210,15 @@ export default function Studio() {
     for (const [i, a] of refs.entries()) {
       if (!uploads.current.has(a.id)) setPhase(`Uploading picture ${i + 1} of ${refs.length}`);
       uploaded.push(await uploadAsset(a));
+      signal?.throwIfAborted();
     }
+    signal?.throwIfAborted();
     const payload: Record<string, unknown> = { prompt: s.prompt, seconds: s.seconds, metadata: s.id };
     if (uploaded.length) payload.reference_images = uploaded;
     if (continuation) { payload.continue_from_clip_id = continuation; payload.continue_mode = s.continueMode ?? 'latent'; }
     readyClips.current.delete(s.id);
     buildStart.current.set(s.id, now());
-    const t1 = clock(); note(`Enqueue “${s.title}” (${durationLabel(s.seconds)}, ${uploaded.length} pictures${continuation ? `, continues clip ${continuation.slice(0, 8)} in ${s.continueMode ?? 'latent'} mode` : ''})`); let reply; try { reply = await command('enqueue', payload); } catch (e) { if (continuation && payload.continue_mode === 'frame') { note(`Frame continuation refused (${errorText(e)}); retrying in latent mode`, 'error'); payload.continue_mode = 'latent'; reply = await command('enqueue', payload); } else throw e; } note(`Enqueue acknowledged in ${((clock() - t1) / 1000).toFixed(2)}s`); if (reply?.type !== 'clip_queued') throw new Error('Reactor did not confirm this shot.');
+    const t1 = clock(); note(`Enqueue “${s.title}” (${durationLabel(s.seconds)}, ${uploaded.length} pictures${continuation ? `, continues clip ${continuation.slice(0, 8)} in ${s.continueMode ?? 'latent'} mode` : ''})`); let reply; try { reply = await command('enqueue', payload); } catch (e) { if (continuation && payload.continue_mode === 'frame') { note(`Frame continuation refused (${errorText(e)}); retrying in latent mode`, 'error'); payload.continue_mode = 'latent'; signal?.throwIfAborted(); reply = await command('enqueue', payload); } else throw e; } note(`Enqueue acknowledged in ${((clock() - t1) / 1000).toFixed(2)}s`); if (reply?.type !== 'clip_queued') throw new Error('Reactor did not confirm this shot.');
     handleClip('clip_queued', (reply.data as { clip: Clip }).clip);
   }
   async function captureShot(s: Shot, clipId: string) {
@@ -223,7 +242,97 @@ export default function Studio() {
       void command('play', { clip_id: clipId }).then(reply => { if (reply?.type === 'clip_started') handleClip('clip_started', (reply.data as { clip: Clip }).clip); }).catch(e => cancel(errorText(e)));
     });
   }
+  function clearDirections() { directionQueue.current = []; setPendingDirection(''); }
+  function receiveEvent(event: RuleEvent) {
+    observedEvents.current = [...observedEvents.current.slice(-11), { ...event, image: undefined, text: undefined }];
+    note(`Live rule · ${event.source} · ${event.seconds.toFixed(1)}s: ${event.condition}`);
+    if (event.action === 'stop') { stopPlayback(); setNotice(`Stopped by rule: ${event.condition}`); return; }
+    if (event.action === 'direct') {
+      if (directionQueue.current.length >= 8) { setError('Eight directions are already pending. Apply or clear them before adding more.'); return; }
+      directionQueue.current.push(event);
+      setPendingDirection(directionQueue.current.map(e => e.direction).join('\n'));
+      setNotice('Director cue queued for the next ungenerated shot.');
+    } else setNotice(`Cue at ${event.seconds.toFixed(1)}s: ${event.condition}`);
+  }
+  function getScene(): Observation | null {
+    const replayId = replay?.ids[replay.position];
+    const element = replay ? (replay.position % 2 === 0 ? slotA.current : slotB.current) : video.current;
+    const current = playback.current;
+    if (!replay && (!current || !playing)) return null;
+    const image = captureFrame(element); if (!image || !element) return null;
+    const shotId = replayId || current!.id;
+    return { source: 'scene', shotId, image, seconds: Math.max(0, element.currentTime - (replay ? 0 : current!.start)), key: `${replay ? 'replay' : current!.clipId}:${shotId}:${element.currentTime}`, capturedAt: now() };
+  }
+  async function writeDirection(beat: string, source: Shot | undefined, target: Shot | undefined, mode: 'continue' | 'cut', signal: AbortSignal) {
+    const refs = target?.refs ?? source?.refs ?? [];
+    const currentBoard = boardRef.current;
+    const res = await fetch('/api/direct', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, signal,
+      body: JSON.stringify({ beat, mode, seconds: target?.seconds ?? 8,
+        story: { title: currentBoard.title, shots: currentBoard.shots.slice(-12).map(x => ({ title: x.title, prompt: x.prompt })) },
+        source: source ? { title: source.title, prompt: source.prompt } : null,
+        target: target ? { title: target.title, prompt: target.prompt } : undefined,
+        pictures: refs.map(id => assetsRef.current.find(a => a.id === id)?.name.replace(/\.[^.]+$/, '') ?? 'picture'),
+        brief: liveSettings.current.brief, observations: eventMemory(observedEvents.current),
+      }),
+    });
+    const data = await res.json() as { prompt?: string; error?: string };
+    signal.throwIfAborted();
+    if (!res.ok || !data.prompt) throw new Error(data.error || 'The director could not write this shot.');
+    return data.prompt;
+  }
+  async function prepareReactiveShot(target: Shot, previous: Shot | undefined, signal: AbortSignal) {
+    const cues = [...directionQueue.current];
+    if (!cues.length && !liveSettings.current.brief.trim()) return target;
+    setPhase('Writing the direction…');
+    const beat = cues.length ? cues.map(e => e.direction).join('\n') : 'Adapt this planned shot to the creative brief and recent observations, preserving its role in the story.';
+    const direction = await writeDirection(beat, previous, target, target.connected ? 'continue' : 'cut', signal);
+    // Cancelled cues must not alter a shot even when their provider request finishes late.
+    if (cues.some(e => !directionQueue.current.some(q => q.id === e.id))) return target;
+    const bindings = target.prompt.split('\n').filter(l => /^<(Subject|Picture) \d+> is /.test(l));
+    const body = direction.split('\n').filter(l => !/^<(Subject|Picture) \d+> is /.test(l));
+    const revised = { ...target, prompt: [...bindings, ...body].join('\n') };
+    setBoard(b => ({ ...b, shots: b.shots.map(s => s.id === target.id ? revised : s) }));
+    directionQueue.current = directionQueue.current.filter(e => !cues.some(c => c.id === e.id));
+    setPendingDirection(directionQueue.current.map(e => e.direction).join('\n'));
+    note(`Director updated “${target.title}”: ${revised.prompt.replace(/\n/g, ' / ')}`);
+    return revised;
+  }
+  async function runReactiveSequence(plan: Shot[], order: Shot[] = board.shots, applyDirector = true): Promise<boolean> {
+    if (!plan.length) return false;
+    const controller = new AbortController(); operation.current = controller;
+    const signal = controller.signal;
+    setBusy(true); setError(''); setNotice(''); setReplay(null); ensureAudio();
+    const previousOf = (s: Shot) => {
+      const previous = order[order.findIndex(x => x.id === s.id) - 1];
+      return previous && (boardRef.current.shots.find(x => x.id === previous.id) ?? previous);
+    };
+    try {
+      recordingMime();
+      await command('set_autoplay', { enabled: false });
+      await runReactivePlan(plan, signal, {
+        prepare: async s => {
+          setActiveShot(s.id); setSelected(s.id);
+          return applyDirector ? prepareReactiveShot(s, previousOf(s), signal) : s;
+        },
+        enqueue: async s => { await enqueue(s, previousOf(s), signal); setPhase(`Generating “${s.title}”`); },
+        wait: s => waitForClip(s.id),
+        play: (s, clipId) => captureShot(s, clipId),
+      });
+      setLive(true);
+      setNotice(directionQueue.current.length ? 'Takes saved. A director cue is waiting; generate the next beat to apply it.' : 'Takes saved. Tell the director what happens next.');
+      return true;
+    } catch (e) {
+      if (!signal.aborted) { setError(errorText(e)); note(`Reactive sequence stopped: ${errorText(e)}`, 'error'); }
+      setTakes(t => Object.fromEntries(Object.entries(t).map(([id, take]) => [id, take.status === 'queued' || take.status === 'playing' ? { ...take, status: 'failed' } : take])));
+      return false;
+    } finally {
+      if (operation.current === controller) operation.current = null;
+      setBusy(false); setPhase(''); setActiveShot(''); setPlaying('');
+    }
+  }
   async function runSequence(plan: Shot[] = timelineShots, order: Shot[] = board.shots, saveSequence = true): Promise<boolean> {
+    const controller = new AbortController(); operation.current = controller;
     setBusy(true); setError(''); setNotice(''); setReplay(null); ensureAudio();
     const ids = plan.map(s => s.id);
     const previousOf = (s: Shot) => order[order.findIndex(x => x.id === s.id) - 1];
@@ -270,31 +379,39 @@ export default function Studio() {
       setActiveShot(plan[0].id); setSelected(plan[0].id); setPhase(saveSequence ? `Generating “${plan[0].title}”` : plan[0].connected ? `Generating what happens next: “${plan[0].title}”` : `Generating the next shot: “${plan[0].title}”`);
       note(saveSequence ? 'Sequence started: the model plays each shot as soon as it is built' : `Continuing the story: “${plan[0].prompt.slice(0, 60)}”`);
       // Producer: queue every shot; a linked shot waits only for its predecessor's clip id.
-      const producer = (async () => { for (const x of plan) { const prev = previousOf(x); if (x.connected && prev) await waitForClip(prev.id); await enqueue(x, prev); } })().catch(e => sequence.current?.cancel(errorText(e)));
+      const producer = (async () => { for (const x of plan) { controller.signal.throwIfAborted(); const prev = previousOf(x); if (x.connected && prev) await waitForClip(prev.id); await enqueue(x, prev, controller.signal); } })().catch(e => sequence.current?.cancel(errorText(e)));
       await done; await producer;
       setLive(true); setTimeout(() => nextInput.current?.focus(), 50);
       setNotice(saveSequence ? 'Sequence saved. The picture is holding on the last frame: tell it what happens next.' : 'Added to the storyboard. What happens next?');
       return true;
     } catch (e) { setError(errorText(e)); note(`Sequence stopped: ${errorText(e)}`, 'error'); setTakes(t => Object.fromEntries(Object.entries(t).map(([id, take]) => [id, take.status === 'queued' ? { ...take, status: 'failed' } : take]))); return false; }
-    finally { sequence.current = null; void command('set_autoplay', { enabled: false }).catch(e => note(`set_autoplay refused: ${errorText(e)}`, 'error')); setBusy(false); setPhase(''); setActiveShot(''); setPlaying(''); }
+    finally { if (operation.current === controller) operation.current = null; sequence.current = null; void command('set_autoplay', { enabled: false }).catch(e => note(`set_autoplay refused: ${errorText(e)}`, 'error')); setBusy(false); setPhase(''); setActiveShot(''); setPlaying(''); }
   }
   // "What happens next?": append a linked shot and play it from the held frame.
-  async function continueStory() {
-    const text = nextPrompt.trim(); if (!text) return;
+  async function continueStory(queued = false) {
+    if (busy) return;
+    const cues = [...directionQueue.current];
+    const text = queued ? cues.map(e => e.direction).join('\n') : nextPrompt.trim(); if (!text) return;
+    const controller = new AbortController(); operation.current = controller;
     const candidates = [lastPlayed.current, ...board.shots.map(x => x.id).reverse()];
     const sourceId = candidates.find(id => id && readyClips.current.has(id));
     const last = board.shots.find(x => x.id === sourceId);
     if (!last) { setError('Nothing to continue from yet. Generate a shot first.'); note('Continue refused: no generated clip in this session', 'error'); return; }
     ensureAudio();
-    // Expand the beat into full direction with the director model; fall back to the raw beat if it is unavailable.
     let direction = text;
     setBusy(true); setPhase('Writing the direction…');
     try {
-      const pictureNames = last.refs.map(id => assets.find(a => a.id === id)?.name.replace(/\.[^.]+$/, '') ?? 'picture');
-      const res = await fetch('/api/direct', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ beat: text, mode: nextMode, story: { title: board.title, shots: timelineShots.map(x => ({ title: x.title, prompt: x.prompt })) }, source: { title: last.title, prompt: last.prompt }, pictures: pictureNames }) });
-      const data = await res.json() as { prompt?: string; error?: string };
-      if (res.ok && data.prompt) { direction = data.prompt; } else note(`Director unavailable, using the beat as written: ${data.error || res.status}`, 'error');
-    } catch (e) { note(`Director unavailable, using the beat as written: ${errorText(e)}`, 'error'); }
+      const requestedBeat = queued ? text : [text, ...cues.map(e => e.direction)].join('\n');
+      direction = await writeDirection(requestedBeat, last, undefined, nextMode, controller.signal);
+      if (cues.some(e => !directionQueue.current.some(q => q.id === e.id))) { setBusy(false); setPhase(''); return; }
+      directionQueue.current = directionQueue.current.filter(e => !cues.some(c => c.id === e.id));
+      setPendingDirection(directionQueue.current.map(e => e.direction).join('\n'));
+    } catch (e) {
+      if (controller.signal.aborted) { setBusy(false); setPhase(''); return; }
+      if (cues.length || liveSettings.current.brief.trim()) { setError(errorText(e)); setBusy(false); setPhase(''); return; }
+      note(`Director unavailable, using the beat as written: ${errorText(e)}`, 'error');
+    }
+    controller.signal.throwIfAborted();
     setPhase(`Generating what happens next: “${text}”`);
     // The model's recipe for a continuation: same pictures in the same order, the same bindings, then the new action and what carries over.
     const bindings = last.prompt.split('\n').filter(l => /^<(Subject|Picture) \d+> is /.test(l));
@@ -309,38 +426,27 @@ export default function Studio() {
     note(`Continue from “${last.title}”`);
     const order = [last, s];
     setBoard(b => ({ ...b, shots: [...b.shots, s] }));
-    const ok = await runSequence([s], order, false);
+    const ok = monitorEnabled ? await runReactiveSequence([s], order, false) : await runSequence([s], order, false);
     if (ok) { setNextPrompt(''); setTimeout(() => nextInput.current?.focus(), 50); }
   }
   async function generate(all = false) {
-    if (all) return runSequence();
-    setBusy(true); setError(''); setNotice(''); setReplay(null);
-    try {
-      recordingMime(); const plan = all ? board.shots : [shot];
-      const previousOf = (s: Shot) => board.shots[board.shots.findIndex(x => x.id === s.id) - 1];
-      // Producer: queue every shot up front. A linked shot waits only for its predecessor's clip id, not for playback.
-      let producerError: Error | null = null;
-      const producer = (async () => { for (const s of plan) { const prev = previousOf(s); if (s.connected && prev) await waitForClip(prev.id); await enqueue(s, prev); } })().catch(e => { producerError = e instanceof Error ? e : new Error(String(e)); });
-      // Consumer: play each shot the moment it is built, while later shots keep generating.
-      for (const s of plan) {
-        if (producerError) throw producerError;
-        setActiveShot(s.id); setSelected(s.id);
-        if (!readyClips.current.has(s.id)) setPhase(`Generating “${s.title}”`);
-        const clipId = await waitForClip(s.id);
-        setPhase('');
-        await captureShot(s, clipId);
-      }
-      await producer; if (producerError) throw producerError;
-      setNotice(all ? 'Sequence saved. Play it back in order, with or without the model connected.' : 'Take saved. Replay it anytime, even after disconnecting.');
-    }
-    catch (e) { setError(errorText(e)); note(`Generation stopped: ${errorText(e)}`, 'error'); setTakes(t => Object.fromEntries(Object.entries(t).map(([id, take]) => [id, take.status === 'queued' ? { ...take, status: 'failed' } : take]))); } finally { setBusy(false); setPhase(''); setActiveShot(''); }
+    if (busy || !shot) return;
+    if (all && !monitorEnabled && !directionQueue.current.length) return runSequence();
+    return runReactiveSequence(all ? timelineShots : [shot]);
   }
   async function playShot() { if (recordings[shot.id]) { setLive(false); setReplay({ ids: [shot.id], position: 0 }); return; } if (!take) return; setBusy(true); setError(''); try { await captureShot(shot, take.clipId); } catch (e) { setError(errorText(e)); } finally { setBusy(false); } }
-  const sequenceTake = recordings['sequence'] && recordings['sequence'].shots && timelineShots.slice(0, recordings['sequence'].shots.length).map(s => s.id).join() === recordings['sequence'].shots.join() ? recordings['sequence'] : undefined;
+  const sequenceTake = recordings['sequence'] && recordings['sequence'].shots && !recordings['sequence'].shots.some(id => (recordings[id]?.createdAt ?? 0) > recordings['sequence'].createdAt) && timelineShots.slice(0, recordings['sequence'].shots.length).map(s => s.id).join() === recordings['sequence'].shots.join() ? recordings['sequence'] : undefined;
   const replayPlan = (): string[] | string => { const covered = sequenceTake?.shots?.length ?? 0; const rest = timelineShots.slice(covered); const missing = rest.filter(s => !recordings[s.id]); if (missing.length) return `Generate ${missing.length} remaining shot${missing.length === 1 ? '' : 's'} before playing the whole sequence.`; return [...(sequenceTake ? ['sequence'] : []), ...rest.map(s => s.id)]; };
   function playSequence() { setLive(false); const plan = replayPlan(); if (typeof plan === 'string') { setError(plan); return; } setError(''); setSelected(board.shots[0].id); setReplay({ ids: plan, position: 0 }); }
   function nextReplay() { if (!replay) return; const position = replay.position + 1; if (position >= replay.ids.length) { setReplay(null); return; } if (replay.ids[position] !== 'sequence') setSelected(replay.ids[position]); setReplay({ ...replay, position }); }
-  function stopPlayback() { if (replay) { setReplay(null); return; } setLive(false); void command('stop').catch(e => setError(errorText(e))); }
+  function stopPlayback() {
+    operation.current?.abort(); playback.current = null; setMonitorEnabled(false); clearDirections();
+    capture.current?.cancel('Playback stopped.'); sequence.current?.cancel('Playback stopped.');
+    pending.current.forEach(p => { clearTimeout(p.timer); p.reject(new Error('Playback stopped.')); }); pending.current.clear();
+    if (replay) { slotA.current?.pause(); slotB.current?.pause(); setReplay(null); return; }
+    setLive(false); setPlaying('');
+    if (client.current) void command('set_autoplay', { enabled: false }).then(() => command('stop')).catch(e => setError(errorText(e)));
+  }
   function downloadTake() { const saved = recordings[shot.id]; if (!saved) return; const a = document.createElement('a'); a.href = saved.url; a.download = `${shot.title.replace(/[^a-z0-9]/gi, '-')}.${saved.blob.type.includes('mp4') ? 'mp4' : 'webm'}`; a.click(); }
   function togglePresent() { if (present) { setPresent(false); if (document.fullscreenElement) void document.exitFullscreen().catch(() => {}); return; } setPresent(true); void document.documentElement.requestFullscreen?.().catch(() => {}); }
   const preferredReference = shot?.image?.startsWith('/references/') ? `desert-${shot.image.split('/').pop()?.split('.')[0]}` : undefined;
@@ -366,10 +472,10 @@ export default function Studio() {
     <main className="workspace"><aside className="sidebar"><div className="side-tabs"><button className={tab === 'shots' ? 'active' : ''} onClick={() => setTab('shots')}><Clapperboard size={15}/> Shots <span>{board.shots.length}</span></button><button className={tab === 'references' ? 'active' : ''} onClick={() => setTab('references')}><Layers size={15}/> References</button></div>
       {tab === 'shots' ? <><div className="side-heading"><span>Shot list</span><span className="side-actions">{addedCount > 0 && <button onClick={clearAdded} disabled={busy}><X size={11}/> Clear {addedCount} added</button>}<button onClick={resetBoard} disabled={busy}><RotateCcw size={11}/> Reset script</button></span></div><div className="shot-list">{timelineShots.map((s, i) => <div key={s.id} className={`shot-card ${s.id === shot?.id ? 'selected' : ''}`} draggable={!busy} onDragStart={() => { drag.current = s.id; }} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); reorder(drag.current, s.id); }}><button className="shot-select" onClick={() => setSelected(s.id)}><div className="shot-thumb">{coverFor(s) ? <img src={coverFor(s)} alt=""/> : <Film size={22}/>}<span>{String(i + 1).padStart(2, '0')}</span></div><div className="shot-copy"><strong>{s.title}</strong><small>{durationLabel(s.seconds)} <span>•</span> {buildFor(s.id) !== undefined ? `built in ${fmt(buildFor(s.id)!)}` : recordings[s.id] ? 'Saved take' : takes[s.id]?.status || 'Draft'}{s.added ? ' • Added live' : s.connected ? ' • Linked' : ''}</small></div></button><div className="reorder"><button aria-label={`Move ${s.title} up`} disabled={i === 0 || busy} onClick={() => reorder(s.id, board.shots[i - 1].id)}><ArrowUp size={12}/></button><button aria-label={`Move ${s.title} down`} disabled={i === board.shots.length - 1 || busy} onClick={() => reorder(s.id, board.shots[i + 1].id)}><ArrowDown size={12}/></button></div></div>)}</div><button className="add-shot" onClick={addShot}><Plus size={16}/> Add shot</button>{addedShots.length > 0 && <><div className="side-heading added-heading"><span>Added live</span><span>{addedShots.length}</span></div><div className="shot-list">{addedShots.map((s, i) => <div key={s.id} className={`shot-card added ${s.id === shot?.id ? 'selected' : ''}`}><button className="shot-select" onClick={() => setSelected(s.id)}><div className="shot-thumb">{coverFor(s) ? <img src={coverFor(s)} alt=""/> : <Film size={22}/>}<span>+{i + 1}</span></div><div className="shot-copy"><strong>{s.title}</strong><small>{durationLabel(s.seconds)} <span>•</span> {recordings[s.id] ? 'Saved take' : takes[s.id]?.status || 'Draft'}{s.connected ? ` • Continues (${s.continueMode ?? 'latent'})` : ' • Cut'}</small></div></button></div>)}</div></>}<div className="sidebar-foot"><span>{timelineShots.length} shots</span><span>{fmt(filmSeconds)} of film</span></div></> : <><div className="side-heading"><span>Shared by every shot</span></div><label className="upload-area"><ImagePlus size={24}/><strong>Add a picture</strong><small>Actor, location, or prop · JPEG, PNG, WebP</small><input type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={e => { void upload(e.target.files); e.target.value = ''; }}/></label><p className="reference-help">Every shot names its pictures as &lt;Picture 1&gt;, &lt;Picture 2&gt;… in the order they are selected. The same face, place, and prop stay consistent across the whole sequence.</p><div className="asset-list">{storyAssets.map(a => <div className="asset" key={a.id}><img src={a.url} alt={a.name}/><span>{a.name}<small>{a.name.toLowerCase().startsWith('character') ? 'cast' : a.name.toLowerCase().startsWith('location') ? 'location' : a.name.toLowerCase().startsWith('prop') ? 'prop' : 'picture'}</small></span><button aria-label={`Remove ${a.name}`} onClick={() => void removeAsset(a)}><X size={14}/></button></div>)}</div></>}
     </aside>
-    <section className="canvas-column"><div className="canvas-heading"><span><Film size={16}/> Shot {String(index + 1).padStart(2, '0')} <span className="muted">/ {String(board.shots.length).padStart(2, '0')}</span></span><span className="draft-label">{playing || replay ? 'PROGRAM' : 'SOURCE'} <span className="monitor-mode">{replay ? 'Sequence playback' : playing ? (sequence.current ? 'Live sequence from H3 Omni' : 'Live from H3 Omni') : live ? 'Holding on the last frame' : 'Storyboard panel'}</span></span></div><div className="viewer" aria-busy={!!overlayPhase}><video ref={video} autoPlay playsInline muted controls={!!playing} className={playing || live ? 'live-video visible' : 'live-video'}/><audio ref={audio} autoPlay muted={!sound || !!replay}/>{replay && [slotA, slotB].map((ref, i) => { const isCurrent = i === currentSlot; const take = isCurrent ? replayTake : replayNext; return <video key={i} ref={ref} className={isCurrent ? 'replay-video' : 'replay-video standby'} src={take?.url} preload="auto" playsInline controls={isCurrent} muted={!isCurrent || !sound} onEnded={isCurrent ? nextReplay : undefined} onError={isCurrent ? () => setError('This saved take could not be played. Download it or generate another take.') : undefined}/>; })} {overlayPhase && !playing && !live && !replay && <GenerationOverlay phase={overlayPhase} image={generationImage} title={generationShot?.title}/>} {!playing && !live && !replay && <div className="concept">{referenceCover || shot?.image ? <img className="concept-image" src={referenceCover?.url || shot?.image} alt={referenceCover ? 'Selected reference' : 'Storyboard reference'}/> : <div className="blank-frame"><Clapperboard size={46}/></div>}<div className="frame-shade"/><span className="frame-tag">Storyboard panel</span><div className="frame-title"><span>SC {String(index + 1).padStart(3, '0')} <span className="monitor-separator">/</span> {board.title}</span><h1>{shot?.title}</h1><p>{shotBuild !== undefined ? `${durationLabel(shot.seconds)} of film, generated in ${fmt(shotBuild)}` : recordings[shot?.id] ? 'Saved take available' : take?.status === 'ready' ? 'Ready to play' : 'Not generated yet'}</p></div><div className="frame-corners"/></div>}{replay && <div className="replay-badge">{replay.ids[0] === 'sequence' ? `Full sequence · ${board.shots.length} shots` : `Shot ${String(replay.position + 1).padStart(2, '0')} / ${String(replay.ids.length).padStart(2, '0')} · ${board.shots.find(s => s.id === replay.ids[replay.position])?.title ?? ''}`}</div>}{!replay && (!!playing || generatingNow > 0) && <div className="player-pills">{!!playing && <span className="pill live"><i/>Live</span>}{generatingNow > 0 && <span className="pill generating"><i/>Generating in real time</span>}</div>}{(!!playing || live) && phase && (phase.startsWith('Generating what') || phase.startsWith('Generating the next') || phase.startsWith('Writing') ? <div className="next-overlay"><GenerationOverlay phase={phase.startsWith('Writing') ? 'Writing the direction' : 'Generating what happens next'} title={phase.replace(/^[^“]*/, '').replace(/[“”]/g, '') || undefined}/></div> : <div className="replay-badge live-badge"><LoaderCircle className="spin" size={12}/> {phase}</div>)}{(() => { const canContinue = ready && live && !replay; return <form className={canContinue ? 'next-bar show' : 'next-bar'} aria-hidden={!canContinue} onSubmit={e => { e.preventDefault(); void continueStory(); }}><div className="next-row"><Sparkles size={15}/><input ref={nextInput} value={nextPrompt} disabled={busy || !canContinue} onChange={e => setNextPrompt(e.target.value)} placeholder={!canContinue ? 'Generate the storyboard first, then tell it what happens next…' : nextMode === 'continue' ? 'What happens next? The next clip starts from this exact frame…' : 'Describe the next shot. The model cuts to it with the same cast and location…'}/><div className="next-mode" role="radiogroup" aria-label="How to continue"><button type="button" className={nextMode === 'continue' ? 'active' : ''} aria-pressed={nextMode === 'continue'} disabled={busy || !canContinue} onClick={() => setNextMode('continue')}>Continue</button><button type="button" className={nextMode === 'cut' ? 'active' : ''} aria-pressed={nextMode === 'cut'} disabled={busy || !canContinue} onClick={() => setNextMode('cut')}>Cut</button></div><button className="primary" type="submit" disabled={busy || !canContinue || !nextPrompt.trim()}>{busy ? <LoaderCircle className="spin" size={14}/> : <Play size={14}/>} Play it</button></div><div className="next-chips">{['She hears a faint reply through the static and slowly turns toward the dunes.', 'Lights rise beyond the far dunes and she starts walking toward them.', 'She lowers the receiver and whispers: I am coming.'].map(c => <button key={c} type="button" disabled={busy || !canContinue} onClick={() => setNextPrompt(c)}>{c}</button>)}</div></form>; })()}</div><div className="transport"><div><span className={`status-dot ${ready ? 'online' : ''}`}/><span>{ready ? (preloading ? 'Model connected · uploading pictures' : picturesReady ? `Model connected · ${picturesReady} pictures ready` : 'Model connected') : status === 'disconnected' ? 'Model offline' : status}</span></div><div className="transport-actions"><button onClick={() => { setSound(!sound); if (audio.current) { audio.current.muted = sound; void audio.current.play().catch(() => {}); } }}><Volume2 size={15}/>{sound ? 'Mute' : 'Enable sound'}</button><button disabled={busy || !!playing || (!recordings[shot?.id] && take?.status !== 'ready')} onClick={() => void playShot()}><Play size={15}/> {recordings[shot?.id] ? 'Replay shot' : 'Play shot'}</button><button disabled={!recordings[shot?.id]} aria-label="Download take" onClick={downloadTake}><Download size={14}/></button><button disabled={!playing && !replay} aria-label="Stop playback" onClick={stopPlayback}><Square size={13}/></button>{present && <><button disabled={busy || !!playing || typeof replayPlan() === 'string'} onClick={playSequence}><Play size={15}/> Play sequence</button><button className="primary" disabled={!ready || busy || !board.shots.length} onClick={() => void generate(true)}>{busy ? <LoaderCircle className="spin" size={15}/> : <Clapperboard size={15}/>} Generate storyboard</button></>}<button onClick={togglePresent} aria-label={present ? 'Exit presentation' : 'Present'}>{present ? <Minimize2 size={14}/> : <Maximize2 size={14}/>} {present ? 'Exit' : 'Present'}</button></div><span>{shot ? durationLabel(shot.seconds) : ''}{shotBuild !== undefined ? ` · built in ${fmt(shotBuild)}` : ''} · 24 fps</span></div>
+    <section className="canvas-column"><div className="canvas-heading"><span><Film size={16}/> Shot {String(index + 1).padStart(2, '0')} <span className="muted">/ {String(board.shots.length).padStart(2, '0')}</span></span><span className="draft-label">{playing || replay ? 'PROGRAM' : 'SOURCE'} <span className="monitor-mode">{replay ? 'Sequence playback' : playing ? (sequence.current ? 'Live sequence from H3 Omni' : 'Live from H3 Omni') : live ? 'Holding on the last frame' : 'Storyboard panel'}</span></span></div><div className="viewer" aria-busy={!!overlayPhase}><video ref={video} autoPlay playsInline muted controls={!!playing} className={playing || live ? 'live-video visible' : 'live-video'}/><audio ref={audio} autoPlay muted={!sound || !!replay}/>{replay && [slotA, slotB].map((ref, i) => { const isCurrent = i === currentSlot; const take = isCurrent ? replayTake : replayNext; return <video key={i} ref={ref} className={isCurrent ? 'replay-video' : 'replay-video standby'} src={take?.url} preload="auto" playsInline controls={isCurrent} muted={!isCurrent || !sound} onEnded={isCurrent ? nextReplay : undefined} onError={isCurrent ? () => setError('This saved take could not be played. Download it or generate another take.') : undefined}/>; })} {overlayPhase && !playing && !live && !replay && <GenerationOverlay phase={overlayPhase} image={generationImage} title={generationShot?.title}/>} {!playing && !live && !replay && <div className="concept">{referenceCover || shot?.image ? <img className="concept-image" src={referenceCover?.url || shot?.image} alt={referenceCover ? 'Selected reference' : 'Storyboard reference'}/> : <div className="blank-frame"><Clapperboard size={46}/></div>}<div className="frame-shade"/><span className="frame-tag">Storyboard panel</span><div className="frame-title"><span>SC {String(index + 1).padStart(3, '0')} <span className="monitor-separator">/</span> {board.title}</span><h1>{shot?.title}</h1><p>{shotBuild !== undefined ? `${durationLabel(shot.seconds)} of film, generated in ${fmt(shotBuild)}` : recordings[shot?.id] ? 'Saved take available' : take?.status === 'ready' ? 'Ready to play' : 'Not generated yet'}</p></div><div className="frame-corners"/></div>}{replay && <div className="replay-badge">{replay.ids[0] === 'sequence' ? `Full sequence · ${board.shots.length} shots` : `Shot ${String(replay.position + 1).padStart(2, '0')} / ${String(replay.ids.length).padStart(2, '0')} · ${board.shots.find(s => s.id === replay.ids[replay.position])?.title ?? ''}`}</div>}{!replay && (!!playing || generatingNow > 0) && <div className="player-pills">{!!playing && <span className="pill live"><i/>Live</span>}{generatingNow > 0 && <span className="pill generating"><i/>Generating in real time</span>}</div>}{(!!playing || live) && phase && (phase.startsWith('Generating what') || phase.startsWith('Generating the next') || phase.startsWith('Writing') ? <div className="next-overlay"><GenerationOverlay phase={phase.startsWith('Writing') ? 'Writing the direction' : 'Generating what happens next'} title={phase.replace(/^[^“]*/, '').replace(/[“”]/g, '') || undefined}/></div> : <div className="replay-badge live-badge"><LoaderCircle className="spin" size={12}/> {phase}</div>)}{(() => { const canContinue = ready && live && !replay; return <form className={canContinue ? 'next-bar show' : 'next-bar'} aria-hidden={!canContinue} onSubmit={e => { e.preventDefault(); void continueStory(); }}><div className="next-row"><Sparkles size={15}/><input ref={nextInput} value={nextPrompt} disabled={busy || !canContinue} onChange={e => setNextPrompt(e.target.value)} placeholder={!canContinue ? 'Generate the storyboard first, then tell it what happens next…' : nextMode === 'continue' ? 'What happens next? The next clip starts from this exact frame…' : 'Describe the next shot. The model cuts to it with the same cast and location…'}/><div className="next-mode" role="radiogroup" aria-label="How to continue"><button type="button" className={nextMode === 'continue' ? 'active' : ''} aria-pressed={nextMode === 'continue'} disabled={busy || !canContinue} onClick={() => setNextMode('continue')}>Continue</button><button type="button" className={nextMode === 'cut' ? 'active' : ''} aria-pressed={nextMode === 'cut'} disabled={busy || !canContinue} onClick={() => setNextMode('cut')}>Cut</button></div><button className="primary" type="submit" disabled={busy || !canContinue || !nextPrompt.trim()}>{busy ? <LoaderCircle className="spin" size={14}/> : <Play size={14}/>} Play it</button></div><div className="next-chips">{['She hears a faint reply through the static and slowly turns toward the dunes.', 'Lights rise beyond the far dunes and she starts walking toward them.', 'She lowers the receiver and whispers: I am coming.'].map(c => <button key={c} type="button" disabled={busy || !canContinue} onClick={() => setNextPrompt(c)}>{c}</button>)}</div></form>; })()}</div><div className="transport"><div><span className={`status-dot ${ready ? 'online' : ''}`}/><span>{ready ? (preloading ? 'Model connected · uploading pictures' : picturesReady ? `Model connected · ${picturesReady} pictures ready` : 'Model connected') : status === 'disconnected' ? 'Model offline' : status}</span></div><div className="transport-actions"><button onClick={() => { setSound(!sound); if (audio.current) { audio.current.muted = sound; void audio.current.play().catch(() => {}); } }}><Volume2 size={15}/>{sound ? 'Mute' : 'Enable sound'}</button><button disabled={busy || !!playing || (!recordings[shot?.id] && take?.status !== 'ready')} onClick={() => void playShot()}><Play size={15}/> {recordings[shot?.id] ? 'Replay shot' : 'Play shot'}</button><button disabled={!recordings[shot?.id]} aria-label="Download take" onClick={downloadTake}><Download size={14}/></button><button disabled={!playing && !replay && !busy} aria-label="Stop playback" onClick={stopPlayback}><Square size={13}/></button>{present && <><button disabled={busy || !!playing || typeof replayPlan() === 'string'} onClick={playSequence}><Play size={15}/> Play sequence</button><button className="primary" disabled={!ready || busy || !board.shots.length} onClick={() => void generate(true)}>{busy ? <LoaderCircle className="spin" size={15}/> : <Clapperboard size={15}/>} Generate storyboard</button></>}<button onClick={togglePresent} aria-label={present ? 'Exit presentation' : 'Present'}>{present ? <Minimize2 size={14}/> : <Maximize2 size={14}/>} {present ? 'Exit' : 'Present'}</button></div><span>{shot ? durationLabel(shot.seconds) : ''}{shotBuild !== undefined ? ` · built in ${fmt(shotBuild)}` : ''} · 24 fps</span></div>
     <div className="sequence-heading"><div><h2>Sequence 01</h2><p>{timelineShots.length} shots <span className="monitor-separator">/</span> {fmt(filmSeconds)}</p></div><span className="speed-stat">{builtShots.length ? <>{fmt(builtShots.reduce((n, s) => n + s.seconds, 0))} of film generated in <strong>{fmt(buildTotal)}</strong>{builtShots.length < timelineShots.length ? ` · ${builtShots.length} of ${timelineShots.length} shots` : ''}</> : 'Faster than realtime · video and sound from one prompt'}</span></div><div className="timeline-ruler" aria-hidden="true">{[0, 1, 2, 3, 4].map(n => <span key={n}>{Math.floor(filmSeconds * n / 4).toString().padStart(2, '0')}:00</span>)}</div><div className="timeline-track"><span className="track-label" aria-hidden="true">V1</span><div className="filmstrip">{timelineShots.map((s, i) => <button key={s.id} className={`filmstrip-shot ${s.id === shot?.id ? 'selected' : ''} ${recordings[s.id] ? 'has-take' : ''}`} onClick={() => setSelected(s.id)}><div>{coverFor(s) ? <img src={coverFor(s)} alt=""/> : <Film/>}<span>{String(i + 1).padStart(2, '0')}</span><small>{durationLabel(s.seconds)}</small></div><strong>{s.title}</strong></button>)}</div></div>
     <div className={showLog ? 'log-panel open' : 'log-panel'}><button className="log-toggle" onClick={() => setShowLog(v => !v)}><Terminal size={12}/> Session log <span>{log.length}</span></button>{showLog && <><button className="log-clear" onClick={() => setLog([])}>Clear</button><ol className="log-lines">{[...log].reverse().map((l, i) => <li key={log.length - i} className={l.kind}><time>{new Date(l.t).toLocaleTimeString([], { hour12: false })}</time>{l.text}</li>)}{!log.length && <li className="empty">Connect the model to start logging.</li>}</ol></>}</div>
     </section>
-    <aside className="inspector">{shot && <><div className="inspector-heading"><h2>Shot {String(index + 1).padStart(2, '0')}</h2><div><button aria-label="Delete shot" disabled={board.shots.length < 2 || busy || !!playing} onClick={() => { setBoard(b => ({ ...b, shots: b.shots.filter(s => s.id !== shot.id) })); setSelected(board.shots[index === 0 ? 1 : 0].id); }}><Trash2 size={15}/></button></div></div><div className="inspector-body"><label className="field">Shot name<input value={shot.title} onChange={e => update({ title: e.target.value })}/></label><label className="field prompt-field">Direction<textarea value={shot.prompt} onChange={e => update({ prompt: e.target.value })} placeholder="Describe the subject, camera move, light, any spoken line, and the sound…"/></label><p className="hint">Camera, light, dialogue, and sound all come from this one description. Name pictures as &lt;Picture 1&gt;, &lt;Picture 2&gt;…</p><label className="field">Length<select value={shot.seconds} onChange={e => update({ seconds: Number(e.target.value) })}>{durations.map(d => <option key={d} value={d}>{Math.round(d)} seconds</option>)}</select></label><div className="reference-heading"><h3>Pictures in this shot <span>{shot.refs.length}</span></h3><button onClick={() => setTab('references')} aria-label="Add a picture"><Plus size={15}/></button></div>{storyAssets.length ? <div className="reference-picker">{storyAssets.map(a => <button key={a.id} className={shot.refs.includes(a.id) ? 'chosen' : ''} aria-pressed={shot.refs.includes(a.id)} onClick={() => update({ refs: shot.refs.includes(a.id) ? shot.refs.filter(id => id !== a.id) : [...shot.refs, a.id] })}><img src={a.url} alt=""/><span>{a.name}</span>{shot.refs.includes(a.id) && <small>Picture {shot.refs.indexOf(a.id) + 1}</small>}</button>)}</div> : <button className="empty-references" onClick={() => setTab('references')}><ImagePlus size={21}/><span>Add a picture<small>An actor, a location, or a prop</small></span></button>}<label className="continuation"><input type="checkbox" checked={shot.connected} disabled={index === 0} onChange={e => update({ connected: e.target.checked })}/><span>Continue previous shot<small>Carry motion, camera, and sound forward</small></span></label></div><div className="generate-panel"><button className="primary generate" disabled={!ready || busy || !!playing || !shot.prompt.trim() || take?.status === 'queued'} onClick={() => void generate()}>{busy ? <LoaderCircle className="spin" size={17}/> : <Clapperboard size={17}/>} {recordings[shot.id] || take ? 'New take' : 'Generate shot'}</button><p>{busy ? 'Generating and saving a replayable take.' : recordings[shot.id] ? 'Saved on this device. Replay it with or without the model.' : !ready ? 'Connect the model to start generating.' : 'Every take is saved for sequence playback.'}</p></div></>}</aside></main>
+    <aside className="inspector"><div className="inspector-tabs" role="tablist" aria-label="Inspector"><button role="tab" aria-selected={inspectorTab === 'shot'} onClick={() => setInspectorTab('shot')}>Shot</button><button role="tab" aria-selected={inspectorTab === 'rules'} onClick={() => setInspectorTab('rules')}>Live rules{monitorEnabled && <i/>}</button></div><div className="shot-inspector" hidden={inspectorTab !== 'shot'}>{shot && <><div className="inspector-heading"><h2>Shot {String(index + 1).padStart(2, '0')}</h2><div><button aria-label="Delete shot" disabled={board.shots.length < 2 || busy || !!playing} onClick={() => { setBoard(b => ({ ...b, shots: b.shots.filter(s => s.id !== shot.id) })); setSelected(board.shots[index === 0 ? 1 : 0].id); }}><Trash2 size={15}/></button></div></div><div className="inspector-body"><label className="field">Shot name<input value={shot.title} onChange={e => update({ title: e.target.value })}/></label><label className="field prompt-field">Direction<textarea value={shot.prompt} onChange={e => update({ prompt: e.target.value })} placeholder="Describe the subject, camera move, light, any spoken line, and the sound…"/></label><p className="hint">Camera, light, dialogue, and sound all come from this one description. Name pictures as &lt;Picture 1&gt;, &lt;Picture 2&gt;…</p><label className="field">Length<select value={shot.seconds} onChange={e => update({ seconds: Number(e.target.value) })}>{durations.map(d => <option key={d} value={d}>{Math.round(d)} seconds</option>)}</select></label><div className="reference-heading"><h3>Pictures in this shot <span>{shot.refs.length}</span></h3><button onClick={() => setTab('references')} aria-label="Add a picture"><Plus size={15}/></button></div>{storyAssets.length ? <div className="reference-picker">{storyAssets.map(a => <button key={a.id} className={shot.refs.includes(a.id) ? 'chosen' : ''} aria-pressed={shot.refs.includes(a.id)} onClick={() => update({ refs: shot.refs.includes(a.id) ? shot.refs.filter(id => id !== a.id) : [...shot.refs, a.id] })}><img src={a.url} alt=""/><span>{a.name}</span>{shot.refs.includes(a.id) && <small>Picture {shot.refs.indexOf(a.id) + 1}</small>}</button>)}</div> : <button className="empty-references" onClick={() => setTab('references')}><ImagePlus size={21}/><span>Add a picture<small>An actor, a location, or a prop</small></span></button>}<label className="continuation"><input type="checkbox" checked={shot.connected} disabled={index === 0} onChange={e => update({ connected: e.target.checked })}/><span>Continue previous shot<small>Carry motion, camera, and sound forward</small></span></label></div><div className="generate-panel"><button className="primary generate" disabled={!ready || busy || !!playing || !shot.prompt.trim() || take?.status === 'queued'} onClick={() => void generate()}>{busy ? <LoaderCircle className="spin" size={17}/> : <Clapperboard size={17}/>} {recordings[shot.id] || take ? 'New take' : 'Generate shot'}</button><p>{busy ? 'Generating and saving a replayable take.' : recordings[shot.id] ? 'Saved on this device. Replay it with or without the model.' : !ready ? 'Connect the model to start generating.' : 'Every take is saved for sequence playback.'}</p></div></>}</div><div className="rules-inspector" hidden={inspectorTab !== 'rules'}><LiveMonitor key={board.story ?? 'desert'} enabled={monitorEnabled} onEnabled={setMonitorEnabled} getScene={getScene} sceneKey={replay ? `replay:${replay.ids[replay.position]}` : playing || 'idle'} shotPrompt={replay?.ids[replay.position] === 'sequence' ? 'Full sequence playback. Judge only the visible requirement.' : board.shots.find(s => s.id === (replay?.ids[replay.position] || playing))?.prompt ?? ''} onEvent={receiveEvent} pendingDirection={pendingDirection} onClearDirection={clearDirections} onApplyDirection={() => void continueStory(true)} canApply={ready && !busy && !replay && !!lastPlayed.current} brief={brief} onBrief={setBrief}/></div></aside></main>
   </div>;
 }
