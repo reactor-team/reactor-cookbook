@@ -1,6 +1,6 @@
+import { isAllowedOrigin } from '@/lib/request-origin';
 export async function POST(request: Request) {
-  const origin = request.headers.get('origin');
-  if (origin && origin !== new URL(request.url).origin) return Response.json({ error: 'Origin not allowed' }, { status: 403 });
+  if (!isAllowedOrigin(request, process.env.PREVIS_PUBLIC_ORIGIN)) return Response.json({ error: 'Origin not allowed.' }, { status: 403 });
   const key = process.env.REACTOR_API_KEY;
   if (!key) return Response.json({ error: 'Set REACTOR_API_KEY on the server to connect.' }, { status: 503 });
   try {

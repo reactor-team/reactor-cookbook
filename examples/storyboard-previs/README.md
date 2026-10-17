@@ -42,7 +42,7 @@ story back to its original shots.
 
 ### Environment
 
-`.env.local` is read by the two route handlers in `app/api/` and nothing else.
+`.env.local` is read by the server route handlers in `app/api/` and nothing else.
 
 ```
 REACTOR_API_KEY     required. Swapped for a session JWT in app/api/token/route.ts.
@@ -50,11 +50,113 @@ REACTOR_API_KEY     required. Swapped for a session JWT in app/api/token/route.t
 ANTHROPIC_API_KEY   optional. Turns the beat you type into full shot direction
                     (app/api/direct/route.ts). Without it the beat is sent as typed.
 DIRECTOR_MODEL      optional. Defaults to claude-haiku-5-5.
+OPENAI_API_KEY      enables live monitoring through OpenAI Decisions with gpt-6-luna.
+```
+
+## Opening Previs from a phone over Tailscale
+
+Connect both devices to the same tailnet. Set `PREVIS_PUBLIC_ORIGIN` in `.env.local`
+to the exact HTTPS address shown by Tailscale Serve. This allows API requests from
+that configured address while retaining the origin checks. Build and start Previs
+on IPv4 loopback, then enable the private proxy:
+
+```bash
+npm run build
+npm run start -- --hostname 127.0.0.1 --port 3006
+# In another terminal (use the app's full CLI path on macOS if needed):
+tailscale serve --bg --https=443 http://127.0.0.1:3006
+```
+
+With Tailscale connected on the phone, open the printed `https://….ts.net` URL in
+Safari or Chrome. HTTPS permits browser camera access. Serve is private to your
+tailnet and obeys its access rules. The Mac and the Previs process must remain
+running. Disable this proxy with `tailscale serve --https=443 off`.
+
+## Live rules
+
+Open the **Live rules** tab in the right inspector. Add a condition in plain
+language, select an action, then start monitoring. Conditions can watch the
+playing scene, an explicitly enabled webcam, or text from an external feed.
+Rules are also editable as JSON and saved locally. No JavaScript is evaluated.
+
+For the Desert signal demo, try:
+
+```json
+[
+  {
+    "id": "radio-reply",
+    "source": "scene",
+    "condition": "A person is holding the shortwave radio receiver in their hands.",
+    "action": "direct",
+    "direction": "A faint reply comes through the radio. She turns toward the distant antenna.",
+    "enabled": true
+  }
+]
+```
+
+Actions are `mark` (timestamp and evidence), `chime` (audible cue), `stop`
+(stop playback and the local generation sequence), and `direct` (queue a
+user-written direction for the next shot). Each needs two distinct observations
+with model probability at least 0.85, then fires once until **Rearm rule**.
+Editing a rule rearms it. These are model judgments, not verified facts.
+The event log shows the captured frame, timestamp, and returned probability.
+
+**Reactive generation.** Start monitoring *before* clicking **Generate storyboard**.
+The app then generates and plays one shot at a time, applying queued directions
+before preparing the next shot. This intentionally adds a generation gap between
+shots, and saves individual takes for **Play sequence**. Existing generated video
+cannot be edited in place. Starting monitoring during an ordinary, already queued
+sequence can still mark, cue, and stop it; director cues wait for a future
+generation. At the end, **Generate next beat** applies remaining cues as a new
+clip, or **Cancel** clears them. The app does not append shots indefinitely.
+
+**Director and judging.** Set `ANTHROPIC_API_KEY` for director actions. The creative
+brief persists locally; the last 12 detections are passed with the script to the
+director as uncertain observations. **Judge the output** checks a concrete visual
+requirement such as “The main subject remains clearly visible.” After two clear
+violations, it records the issue, or queues a correction if that option is on.
+A quality correction can fire once per played clip. A missing or failing director
+leaves the cue pending and reports the error instead of claiming an adjustment.
+
+**External input.** Enable the webcam explicitly, then add a `webcam` rule such as
+“A person has a raised hand.” Webcam audio is never acquired. Frames are sent only
+when monitoring an active webcam rule. Stopping monitoring releases the camera.
+For audience comments or headlines, add a `feed` rule and paste text, or connect a
+public HTTPS JSON URL with CORS enabled. Accepted shapes are `{ "text": "…" }` or
+`{ "items": [{ "title": "…", "text": "…" }] }`. The browser polls every 10 seconds,
+without credentials; a private/social API needs your own feed adapter. Failed
+refreshes clear stale feed text. Feed contents are evidence, not executable code.
+
+**Timing and cancellation.** Select a 0.5, 1, or 2 second target interval. A single
+request loop shares time across active sources; provider latency and multiple
+sources reduce each source's actual rate. Only actual playing frames are sampled,
+not storyboard reference images or the held final frame. A paused/hidden tab does
+not submit scene checks. Rule edits, shot changes, and stopping monitoring discard
+in-flight results. Three consecutive provider errors turn monitoring off. **Stop
+playback** also cancels local generation work, clears queued directions, and stops
+autoplay. Work already submitted to the model may finish on the server.
+
+Live monitoring sends 640 × 360 JPEG frames (current and, when available, previous)
+or bounded feed text through `/api/observe` to OpenAI Decisions only, using
+`gpt-6-luna` and typed predicate questions. There is no alternate monitoring
+provider or fallback. Raw keys stay on the server. See the
+[OpenAI Decisions guide](https://developers.openai.com/api/docs/guides/decisions).
+Model accuracy and end-to-end latency need evaluation on your actual scenes. The routes follow this example's
+existing local-demo auth setup; gate access before exposing provider-backed routes
+on a public deployment.
+
+Each trigger also dispatches a browser event for custom integrations:
+
+```js
+window.addEventListener('previs:trigger', ({ detail }) => {
+  console.log(detail.ruleId, detail.shotId, detail.seconds, detail.probability);
+  // Call your own cue, overlay, or scene-control code here.
+});
 ```
 
 ## How it works
 
-Everything is in `app/page.tsx`; the pieces worth knowing about:
+The studio is in `app/page.tsx`; the pieces worth knowing about:
 
 **Pictures.** `lib/reference-kit.ts` lists each story's pictures. On `ready`
 the app shrinks each one to 768px, calls `uploadFile`, and caches the
@@ -96,7 +198,14 @@ assembled prompt.
 ```
 app/page.tsx                the studio
 app/api/token/route.ts      API key -> session JWT
-app/api/direct/route.ts     optional beat -> direction via Claude
+app/api/direct/route.ts     optional beat + brief + observations -> direction via Claude
+app/api/observe/route.ts    server-side OpenAI Decisions adapter
+components/live-monitor.tsx  rule editor, sampling, webcam and feed inputs
+lib/live-rules.ts           rule validation, trigger latch, and event memory
+lib/decisions.ts            OpenAI predicate requests and response normalization
+lib/director.ts             bounded director context and prompt
+lib/reactive.ts             generation/playback feedback boundary
+tests/*.test.mjs           trigger, cancellation, provider and route tests
 components/generation-overlay.tsx
 lib/storyboard.ts           the two scripts
 lib/reference-kit.ts        pictures per story
@@ -117,7 +226,7 @@ Cast: drop JPEGs in `public/references/`, add them to `referenceKit` with the
 story id, reference them from shots. The existing image prompts show how much
 wardrobe and face detail it takes to keep someone consistent.
 
-Director: the system prompt in `app/api/direct/route.ts`.
+Director: the system prompt in `lib/director.ts`.
 
 ## Problems
 
@@ -130,3 +239,34 @@ Director: the system prompt in `app/api/direct/route.ts`.
   latent on its own; if that fails too, use Cut.
 - Title text garbled: video models are bad at text. The title shots are
   short; take another.
+
+## Checking changes
+
+```bash
+npm run typecheck
+npm test            # Node 22.18+ or 24; built-in TypeScript stripping, no extra test runner
+npm run build
+```
+
+The automated tests use synthetic evidence and mocked provider responses. They
+cover thresholds, duplicate suppression, invalid/refused decisions, API limits,
+director context, and cancellation at every reactive generation boundary. They
+do not measure live provider accuracy or GPU generation latency.
+
+An optional browser check uses an isolated profile, a labelled synthetic recording,
+a fake webcam, and intercepted provider responses. Start the production app on
+port 3006, install Playwright separately if needed, and run:
+
+```bash
+npm install --no-save --package-lock=false playwright
+npx playwright install chromium
+npm run start -- --hostname localhost --port 3006
+# In another terminal:
+npm run test:browser
+```
+
+`PREVIS_TEST_URL` changes the local test address. `PLAYWRIGHT_MODULE` and
+`PLAYWRIGHT_EXECUTABLE_PATH` can point to an existing Playwright installation and
+Chromium binary. The test checks replay pixels, one-shot triggers, cancellation,
+text input, webcam release, output corrections, and the stop action. Screenshots
+are saved under `/tmp/previs-live-rules*.png`.
