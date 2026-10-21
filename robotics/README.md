@@ -9,3 +9,10 @@ Quickstarts and integrations for Reactor-hosted robot policies.
 Each example documents its policy contract, setup, and validation steps. Simulator
 integrations also explain how to connect the simulator. Hosted model access is
 required even when the client code is public.
+
+## Action-conditioned simulation
+
+[Cosmos3 Nano Sim Bimanual](./simulation/cosmos-bimanual) takes an AgiBot scene
+image and controller poses/gripper values, and returns generated scene video.
+Run the hosted rollout example to initialize, change controls, and reset a world.
+This complements policy inference: you supply the actions rather than receive them.
