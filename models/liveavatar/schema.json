@@ -1,0 +1,594 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "liveavatar",
+    "version": "v0.0.0",
+    "description": ""
+  },
+  "x-reactor": {
+    "tracks": [
+      {
+        "name": "main_video",
+        "kind": "video",
+        "direction": "out"
+      },
+      {
+        "name": "main_audio",
+        "kind": "audio",
+        "direction": "out"
+      }
+    ]
+  },
+  "paths": {
+    "/events/set_avatar_image": {
+      "post": {
+        "operationId": "set_avatar_image",
+        "summary": "Select the reference image for the next avatar take while idle. Requires an active session and a completed upload. Returns `input_accepted` and broadcasts `state_update`; generation begins after a separate `start`. Rejects invalid images with `invalid_image` and changes during a take with `take_running` through `command_error`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "image": {
+                    "$ref": "#/components/schemas/ReactorUploadReference",
+                    "description": "Uploaded reference image, such as PNG, JPEG or WebP; nonempty, at most 25 MiB and 40 million pixels. Converted to RGB and fitted to the output aspect ratio. Required alongside `set_audio` before `start`; replaces the selected image for the next take and is cleared by `reset`.",
+                    "x-reactor-moderate": true
+                  }
+                },
+                "required": [
+                  "image"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "InputAccepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InputAccepted"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events/set_audio": {
+      "post": {
+        "operationId": "set_audio",
+        "summary": "Select the speech audio for the next avatar take while idle. Requires an active session and a completed upload. Returns `input_accepted` and broadcasts `state_update`; `start` also requires an accepted reference image. Rejects empty, oversized or unreadable audio with `invalid_audio`, audio shorter than 1.92 seconds with `audio_too_short`, and changes during a take with `take_running` through `command_error`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "audio": {
+                    "$ref": "#/components/schemas/ReactorUploadReference",
+                    "description": "Uploaded speech audio, such as WAV, FLAC or MP3; nonempty, at most 100 MiB and at least 1.92 seconds long after decoding. Drives lip and body motion from the next `start` and is played as mono 48 kHz on `main_audio`. Audio duration and `max_chunks` limit the take; `reset` clears this selection.",
+                    "x-reactor-moderate": true
+                  }
+                },
+                "required": [
+                  "audio"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "InputAccepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InputAccepted"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events/set_pose_video": {
+      "post": {
+        "operationId": "set_pose_video",
+        "summary": "Select or clear optional pose guidance for the next take while idle. Requires an active session. Returns `input_accepted` and broadcasts `state_update`; reference image and speech audio remain required before `start`. Rejects empty, oversized or unreadable video with `invalid_pose` and changes during a take with `take_running` through `command_error`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pose_video": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/ReactorUploadReference"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Uploaded MP4 containing a prepared pose sequence for motion guidance; nonempty, at most 100 MiB and containing a readable video track. Applies at the next `start`. Omit or pass null to clear the selection and use audio-driven motion. Prepare the pose sequence before upload; this command selects the supplied sequence.",
+                    "x-reactor-moderate": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "InputAccepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InputAccepted"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events/set_prompt": {
+      "post": {
+        "operationId": "set_prompt",
+        "summary": "Set the optional appearance, scene and performance description for the next take while idle. Returns `input_accepted` and broadcasts `state_update`; invalid field values or an active take return `command_error`. Applies at the next `start`, with speech supplied through `set_audio`. `negative_prompt` is retained as compatibility text and has no effect on video in this serving profile.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Scene, appearance and performance description, up to 4096 characters. Read at the next `start`; an empty string clears additional scene text. Speech content comes from `set_audio`. Retained by `stop` and cleared by `reset`.",
+                    "maxLength": 4096,
+                    "x-reactor-moderate": true
+                  },
+                  "negative_prompt": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Compatibility text, up to 4096 characters, retained for the next `start`. This serving profile applies no negative conditioning, so changing this value has no effect on video. Empty selects the model's default text; `reset` clears the stored value.",
+                    "maxLength": 4096,
+                    "x-reactor-moderate": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "InputAccepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InputAccepted"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events/set_generation_options": {
+      "post": {
+        "operationId": "set_generation_options",
+        "summary": "Select the sampling seed and clip limit for the next take while idle. Returns `input_accepted` and broadcasts `state_update`; invalid field values or an active take return `command_error`. Both values apply at the next explicit `start`; omitted fields take their declared defaults.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "seed": {
+                    "type": "integer",
+                    "default": 420,
+                    "description": "Non-negative sampling seed from 0 through 2147483647, default 420. Read at the next `start` and retained by `stop`; `reset` restores 420. Selecting a seed leaves the take idle until `start`.",
+                    "minimum": 0,
+                    "maximum": 2147483647,
+                    "x-reactor-moderate": false
+                  },
+                  "max_chunks": {
+                    "type": "integer",
+                    "default": 10000,
+                    "description": "Maximum generated clips per take, from 1 through 10000, default 10000. Read at the next `start`; audio duration can finish the take earlier. The first clip has 45 frames and later clips have 48 at 25 FPS. Retained by `stop`; `reset` restores 10000.",
+                    "minimum": 1,
+                    "maximum": 10000,
+                    "x-reactor-moderate": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "InputAccepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InputAccepted"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events/start": {
+      "post": {
+        "operationId": "start",
+        "summary": "Begin an avatar take from the selected image, speech audio and optional conditions. Valid while idle after `set_avatar_image` and `set_audio` succeed. Returns `take_changed` and broadcasts `state_update`, resetting progress and the generation error. Rejects missing inputs with `inputs_required` and an active take with `take_running` through `command_error`. Configure every desired input before calling this parameter-free command.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "TakeChanged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakeChanged"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events/stop": {
+      "post": {
+        "operationId": "stop",
+        "summary": "End the take and clear queued playback while retaining selected inputs, options and progress for inspection or another `start`. Valid while idle or generating in an active session. Returns `take_changed` and broadcasts `state_update`. Handled between inference turns, so an in-flight clip can delay the reply. Explicit stopping is reported by this reply; `generation_ended` reports automatic completion or failure.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "TakeChanged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakeChanged"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events/reset": {
+      "post": {
+        "operationId": "reset",
+        "summary": "End the take, clear queued playback and selected inputs, and restore the session defaults. Valid while idle or generating in an active session; an in-flight clip can delay the reply. Returns `take_changed` and broadcasts `state_update` with cleared image, audio, pose, text, progress and error, seed 420 and clip limit 10000. Select image and audio again before `start`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "TakeChanged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakeChanged"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {
+    "state_update": {
+      "post": {
+        "operationId": "state_update",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StateUpdate"
+              }
+            }
+          }
+        },
+        "summary": "Emitted on connection, accepted changes, generated clips and automatic take completion or failure."
+      }
+    },
+    "input_accepted": {
+      "post": {
+        "operationId": "input_accepted",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InputAccepted"
+              }
+            }
+          }
+        },
+        "summary": "Emitted as the reply when an uploaded input, prompt, or generation options are accepted."
+      }
+    },
+    "take_changed": {
+      "post": {
+        "operationId": "take_changed",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TakeChanged"
+              }
+            }
+          }
+        },
+        "summary": "Emitted as the command-correlated reply when `start`, `stop` or `reset` succeeds."
+      }
+    },
+    "chunk_complete": {
+      "post": {
+        "operationId": "chunk_complete",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChunkComplete"
+              }
+            }
+          }
+        },
+        "summary": "Emitted once per generated clip for `main_video` and `main_audio`, alongside `state_update`."
+      }
+    },
+    "generation_ended": {
+      "post": {
+        "operationId": "generation_ended",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerationEnded"
+              }
+            }
+          }
+        },
+        "summary": "Emitted on automatic take completion or generation failure, alongside `state_update`."
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ReactorUploadReference": {
+        "type": "object",
+        "format": "reactor-upload-reference",
+        "description": "Reference to a file uploaded via the Reactor upload protocol.",
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "upload_id",
+          "name",
+          "mime_type",
+          "size"
+        ]
+      },
+      "StateUpdate": {
+        "type": "object",
+        "properties": {
+          "image_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Filename selected by `set_avatar_image` for the next `start`, or null until selected. Retained by `stop` and cleared by `reset`."
+          },
+          "audio_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Speech filename selected by `set_audio` for the next `start`, or null until selected. Retained by `stop` and cleared by `reset`."
+          },
+          "pose_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Prepared pose filename selected for the next `start`, or null for audio-driven motion. Cleared by `set_pose_video` with null or by `reset`; retained by `stop`."
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Selected scene and performance description, used from the next `start`; null means empty text. Retained through `stop` and automatic completion, and cleared by `reset`."
+          },
+          "negative_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Stored compatibility text, or null for the model's default text. This serving profile applies no negative conditioning. Retained by `stop` and cleared by `reset`."
+          },
+          "seed": {
+            "type": "integer",
+            "description": "Selected sampling seed from 0 through 2147483647, read at `start`. Retained by `stop` and restored to 420 by `reset`."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True when an image and speech audio are selected. Describes input readiness even during a take; enable `start` only when this is true and `running` is false. `reset` clears readiness."
+          },
+          "running": {
+            "type": "boolean",
+            "description": "True from accepted `start` until automatic completion, failure, `stop` or `reset`. While true, input and generation-option changes are rejected."
+          },
+          "completed_chunks": {
+            "type": "integer",
+            "description": "Number of clips generated in the current or most recent take, starting at zero. Updated with each `chunk_complete`, retained by `stop`, and cleared by `start` or `reset`."
+          },
+          "frames": {
+            "type": "integer",
+            "description": "Cumulative generated video frames in the current or most recent take, played at 25 FPS. Updated with each clip, retained by `stop`, and cleared by `start` or `reset`. Client playback can lag this count."
+          },
+          "max_chunks": {
+            "type": "integer",
+            "description": "Selected per-take clip limit from 1 through 10000, read at `start`; audio duration can finish a take earlier. Retained by `stop`; `reset` restores 10000."
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Most recent generation failure in this session, or null when clear. Set with a failed `generation_ended`, retained by `stop`, and cleared by `start` or `reset`. Rejected input commands leave this value unchanged."
+          }
+        },
+        "required": [
+          "image_name",
+          "audio_name",
+          "pose_name",
+          "prompt",
+          "negative_prompt",
+          "seed",
+          "ready",
+          "running",
+          "completed_chunks",
+          "frames",
+          "max_chunks",
+          "error"
+        ]
+      },
+      "InputAccepted": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "Condition selected by the successful command: `avatar_image`, `audio`, `pose_video`, `prompt`, or `generation_options`. The accompanying `state_update` contains the complete selection; generation waits for `start`."
+          }
+        },
+        "required": [
+          "field"
+        ]
+      },
+      "TakeChanged": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "Accepted command wire name: `start`, `stop`, or `reset`. An accompanying `state_update` describes the resulting inputs and progress; clients should not assume the reply arrives before that snapshot."
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "ChunkComplete": {
+        "type": "object",
+        "properties": {
+          "chunk": {
+            "type": "integer",
+            "description": "One-based generated clip number within the take; the first clip after each `start` is 1. Reports generation progress independently of client playback."
+          },
+          "frames": {
+            "type": "integer",
+            "description": "Video frames in this clip: 45 for clip 1, then 48 per clip, played at 25 FPS. This count contributes to the cumulative `state_update.frames`."
+          }
+        },
+        "required": [
+          "chunk",
+          "frames"
+        ]
+      },
+      "GenerationEnded": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "`complete` when the audio or selected clip limit ends the take; otherwise the generation error text also reported in `state_update.error`. Explicit `stop` and `reset` are acknowledged through `take_changed`."
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      }
+    }
+  }
+}
