@@ -33,6 +33,10 @@ The client checks the local video, uploads it, waits for fresh model readiness,
 sends `generate`, and saves `preview.png` plus `report.json`. `done` reports the
 number of frames queued by the model; the video preview can drop/repeat frames.
 The snapshot is a sample, not a complete lossless render or training artifact.
+Successful output and `report.json` are saved before cleanup. If the final reset
+fails, the report includes `cleanup_warning` and the client still attempts session
+closure. A rendering failure remains an error; a cleanup warning is not proof
+that a session has closed.
 
 ### Choose the representation you already have
 
@@ -66,6 +70,45 @@ lighting/materials. Run the script with a separate output directory for each
 caption. This illustrates appearance exploration for synthetic-data workflows;
 it is a session-based render, not a durable batch-job API. For dataset export,
 use the reliable PNG path below and validate task-relevant content yourself.
+
+## Prepare depth from your simulator
+
+Export camera-space depth in **meters** as one floating-point `[height, width]`
+NumPy `.npy` array per frame. Use zero-padded filenames in time order, such as
+`000000.npy`. Convert millimeters to meters first. Nonlinear depth-buffer values
+must be linearized using your simulator's camera projection; they are not meters.
+
+Try the complete conversion with the generated synthetic metric fixture:
+
+```bash
+uv run prepare_depth.py --input-dir inputs/metric-depth --near 0.2 --far 2.0 \
+  --output inputs/prepared
+uv run render.py --control inputs/prepared/depth.mp4 --kind depth \
+  --prompt inputs/prompt.txt --output output/prepared
+uv run step.py --depth-dir inputs/prepared/depth --prompt inputs/prompt.txt \
+  --frames 121 --output output/prepared-steps
+```
+
+Replace `inputs/metric-depth` with your exported arrays. The recipe maps
+`near` to white and `far` to black, clips outside those bounds, and repeats the
+8-bit intensity across RGB. Zero, negative, NaN, and infinite values become black
+(the far/background value). Invalid foreground holes should be repaired upstream.
+Choose bounds for your workspace and keep them fixed across an episode; per-frame
+min/max normalization makes unchanged geometry change brightness. The fixture's
+0.2–2.0m bounds are an example, not a required model setting.
+
+Render at the selected output canvas (default **832×480**), keeping camera pose,
+field of view, and projection consistent with your observations. The converter
+rejects other sizes rather than silently distorting geometry. If resizing upstream,
+update camera intrinsics and labels with the same transform; PNG episode inputs
+must exactly match the canvas. It writes RGB8 PNGs and a 30 FPS MP4; choose the
+matching `--aspect-ratio` when using other supported canvases. The MP4 is a lossy
+encoding of the prepared controls; PNGs preserve the 8-bit inputs exactly.
+
+This is one explicit preparation recipe, not a claim that every simulator or
+normalization matches the checkpoint's training distribution. Inspect generated
+geometry and validate task-relevant behavior. The metric fixture is synthetic,
+not a sensor capture or a physical simulator.
 
 ## Advance depth rendering step by step
 

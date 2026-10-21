@@ -17,6 +17,7 @@ def main():
         p.error("--frames must be between 1 and 600")
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "depth").mkdir(exist_ok=True)
+    (args.output / "metric-depth").mkdir(exist_ok=True)
     for control in ("depth", "edge", "blur", "seg"):
         with av.open(str(args.output / f"{control}.mp4"), "w") as output:
             stream = output.add_stream("libx264", rate=30)
@@ -47,6 +48,9 @@ def main():
                 )
                 if control == "depth":
                     image.save(args.output / "depth" / f"{index:06d}.png")
+                    # Synthetic metric fixture using the README's fixed 0.2–2m bounds.
+                    depth_m = 2.0 - np.asarray(image)[..., 0].astype(np.float32) / 255 * 1.8
+                    np.save(args.output / "metric-depth" / f"{index:06d}.npy", depth_m)
                 elif control == "edge":
                     image = (
                         image.convert("L").filter(ImageFilter.FIND_EDGES).convert("RGB")

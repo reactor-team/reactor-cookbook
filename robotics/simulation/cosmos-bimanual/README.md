@@ -11,15 +11,22 @@ Requires Python3.11+, uv, and a Reactor API key with access to
 `reactor/cosmos3-nano-sim-bimanual`. No local GPU or model download is needed.
 The Python SDK uses the unqualified model name in `session.py`.
 
-Supply a PNG/JPEG head-camera image of a supported AgiBot scene that you have
-permission to use. Start with a scene matching the public NVIDIA checkpoint's
-examples. This repository does not redistribute robot captures.
+Use NVIDIA's public AgiBot example for your first run. The command below downloads
+only the starting image from a pinned checkpoint revision, not model weights.
+See the [source checkpoint](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Bimanual)
+and its [declared license](https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Bimanual/blob/441c3ef075c8beee8bf4d04fb5cb423d982f75bc/README.md).
+The image remains hosted by NVIDIA and is not redistributed in this cookbook.
+Later, substitute your own compatible AgiBot head-camera PNG/JPEG.
 
 ```bash
 cd robotics/simulation/cosmos-bimanual
 export REACTOR_API_KEY='your-key'
 uv sync --locked
-uv run rollout.py --image /path/to/agibot.png \
+mkdir -p inputs
+curl --fail --location \
+  'https://huggingface.co/nvidia/Cosmos3-Nano-Sim-Bimanual/resolve/441c3ef075c8beee8bf4d04fb5cb423d982f75bc/assets/sim_bimanual/agibot/images/agibot_original_long60_019_initial.png' \
+  --output inputs/agibot.png
+uv run rollout.py --image inputs/agibot.png \
   --prompt 'Move both robot arms carefully over the table.'
 ```
 
@@ -59,7 +66,7 @@ This verifies API integration, not physical accuracy or manipulation success.
 ## Try your own controller inputs
 
 ```bash
-uv run interactive.py --image /path/to/agibot.png \
+uv run interactive.py --image inputs/agibot.png \
   --prompt 'Move both robot arms carefully over the table.'
 ```
 

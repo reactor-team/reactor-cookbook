@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -116,17 +117,29 @@ async def run(args):
         Image.frombytes("RGBA", (width, height), pixels, "raw", "BGRA").convert(
             "RGB"
         ).save(args.output / "preview.png")
-        await client.send_command("reset", {})
-    report = {
-        "generated_frames": args.frames,
-        "received_preview_frames": received,
-        "first_preview_seconds": first_frame,
-        "done_seconds": elapsed,
-        "control": args.kind,
-        "aspect_ratio": args.aspect_ratio,
-    }
-    (args.output / "report.json").write_text(json.dumps(report, indent=2))
+        report = {
+            "generated_frames": args.frames,
+            "received_preview_frames": received,
+            "first_preview_seconds": first_frame,
+            "done_seconds": elapsed,
+            "control": args.kind,
+            "aspect_ratio": args.aspect_ratio,
+        }
+        await save_report_and_reset(client, args.output, report)
     print(json.dumps(report))
+
+
+async def save_report_and_reset(client, output, report):
+    report_path = output / "report.json"
+    report_path.write_text(json.dumps(report, indent=2))
+    try:
+        await asyncio.wait_for(client.send_command("reset", {}), 10)
+    except Exception as exc:
+        # Rendering succeeded; a cleanup failure must not erase that evidence.
+        report["cleanup_warning"] = f"{type(exc).__name__}: {exc}"
+        report_path.write_text(json.dumps(report, indent=2))
+        print(f"Saved render; cleanup reset failed: {exc}", file=sys.stderr)
+
 
 
 if __name__ == "__main__":
