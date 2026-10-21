@@ -16,3 +16,7 @@ required even when the client code is public.
 image and controller poses/gripper values, and returns generated scene video.
 Run the hosted rollout example to initialize, change controls, and reset a world.
 This complements policy inference: you supply the actions rather than receive them.
+
+[Cosmos3 Nano Sim Transfer](./simulation/cosmos-transfer) renders prepared
+simulator controls as RGB observations. Try recorded-video rendering and reliable
+incremental depth results, with synthetic input fixtures you can generate locally.

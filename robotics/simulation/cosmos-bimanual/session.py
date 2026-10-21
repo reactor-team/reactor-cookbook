@@ -67,7 +67,9 @@ class Simulation:
         if self.latest is None:
             raise RuntimeError("No video frame received")
         data, width, height = self.latest
-        # SDK raw frames are RGBA. Reject unexpected layouts explicitly.
+        # SDK raw frames are BGRA. Reject unexpected layouts explicitly.
         if len(data) != width * height * 4:
             raise ValueError(f"Unexpected raw frame size: {len(data)}")
-        Image.frombytes("RGBA", (width, height), data).convert("RGB").save(Path(path))
+        Image.frombytes("RGBA", (width, height), data, "raw", "BGRA").convert(
+            "RGB"
+        ).save(Path(path))
