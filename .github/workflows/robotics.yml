@@ -16,6 +16,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - path: robotics/simulation/cosmos-transfer
+            python: '3.12'
+            check: python -m unittest test_preparation -v
           - path: robotics/sim/notebooks
             python: '3.12'
             check: python -m unittest discover -s tests -v

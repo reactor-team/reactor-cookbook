@@ -163,3 +163,9 @@ Run the notebook tests, gateway unit/transport tests, and `check_wiring.py` for
 changed adapters. Full simulator rollouts are separate validation.
 The public documentation's first-action examples use synthetic inputs and must
 not acquire a dependency on recorded robot captures or private repositories.
+
+The Cosmos simulation clients live in `robotics/simulation/`. Transfer's
+`test_preparation.py` runs in the robotics CI matrix without credentials or GPUs;
+it checks depth normalization and preserving render reports on cleanup failure.
+Hosted inference validation is separate. Bimanual's README links a pinned upstream
+sample image without redistributing it.
