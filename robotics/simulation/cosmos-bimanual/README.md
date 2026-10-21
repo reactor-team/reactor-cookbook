@@ -55,3 +55,27 @@ the active deployment, so later releases may change generated behavior.
 Production verification (2026-10-20): the script received184 preview frames,
 saved all three RGB snapshots, and observed a fresh step-zero status after reset.
 This verifies API integration, not physical accuracy or manipulation success.
+
+## Try your own controller inputs
+
+```bash
+uv run interactive.py --image /path/to/agibot.png \
+  --prompt 'Move both robot arms carefully over the table.'
+```
+
+Enter `left` or `right` to select an arm. `x+`, `x-`, `y+`, `y-`, `z+`, and
+`z-` adjust the selected controller position by1cm; this example clamps offsets
+to±10cm. `open` and `close` set its gripper. `reset` starts a new world from the
+current pose, `snap` saves the latest preview, and `quit` disconnects.
+Each motion/gripper command waits for20 received preview frames and saves a PNG.
+Open those files to inspect the scene. This is a terminal integration example,
+not a live graphical viewer. Preview buffering means a saved frame is not a
+correlated observation for a particular command.
+
+The model continues simulating between inputs: not typing holds the latest
+controller sample; it does not pause time. This example controls a learned
+simulated scene only, not a physical robot. No policy-evaluation claim is made.
+
+Interactive production verification (2026-10-20): selected both arms, changed
+X/Y positions, closed/opened grippers, reset, saved six snapshots, and exited
+cleanly after185 received preview frames.
