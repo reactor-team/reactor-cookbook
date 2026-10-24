@@ -1,0 +1,44 @@
+$schema: reactor/v2
+
+model:
+  name: inworld
+  version: v0.1.1
+  description: Generate continuous audio-video stories with Murea-Fast, ordered references and segment-boundary prompts.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 4
+    cpu:
+      request: "8"
+      limit: "16"
+    memory:
+      request: 64Gi
+      limit: 192Gi
+
+runtime:
+  import: inworld:InWorld
+  config: inworld.yaml
+  weights_path: ~/.cache/reactor_registry/inworld
+
+build:
+  runtime_version: "3.8.3"
+  python_version: "3.12"
+  cuda_version: "13.0.2"
+  python_requirements: requirements.txt
+  build_env:
+    UV_INDEX_STRATEGY: unsafe-best-match
+  system_packages:
+    - git
+    - ffmpeg
+    - build-essential
+    - libgl1
+    - libglib2.0-0
+  run:
+    # Quack pins CUTLASS 4.6.2; the tested 4.8.1 above supports Runtime's Protobuf 7.
+    # Only its Python helpers are used by the vendored FlashAttention 4 kernels.
+    - pip install --no-deps quack-kernels==0.6.4
+    - git clone https://github.com/Murea-Labs/InWorld.git upstream && git -C upstream checkout 4f57b6fd56b3d12624aebe95a1e3c747c8074908
+    - SGLANG_BUILD_RUST_EXTS=none SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SGLANG=0.5.18.dev634 pip install --no-deps -e ./upstream/inference/vendor/sglang/python -e ./upstream/inference
+  runtime_env:
+    TOKENIZERS_PARALLELISM: "false"
+    OMP_NUM_THREADS: "16"
