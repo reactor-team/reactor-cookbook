@@ -102,7 +102,7 @@ class DreamZeroClient:
     def __init__(
         self,
         *,
-        model: str = "dreamzero",
+        model: str = "reactor/dreamzero",
         session: ReactorSession | None = None,
         fps: int = 15,
         settle_s: float | None = None,

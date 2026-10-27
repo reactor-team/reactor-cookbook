@@ -83,6 +83,26 @@ move with it in one change.
 - `examples/` — complete applications built on hosted Reactor models.
 - `robotics/` — Python SDK integrations that drive already-served models.
 
+## Clients name the model as `owner/name`
+
+Every client in this repository names its model as `owner/name`: the owning
+account's slug, then the model's name. This applies to apps in `examples/`,
+demos and clients under `models/`, and the `robotics/` integrations. It covers
+every place the name appears: the SDK constructor or provider, a token's
+`models.match` list, a default, a placeholder, and a README command.
+
+- A model Reactor serves is `reactor/<name>`, for example `reactor/xwam`.
+- A model the reader deploys is under the reader's account. Read the name from
+  the environment, and show `your-org/<name>` as the placeholder. A hosted
+  client that gets a name without an owner stops with a message that asks for
+  `owner/name`. It does not fall back to the bare name.
+- A client that only connects to a local runtime (`local=True`, or `local` on
+  the provider) can use any name. Use `owner/name` there too if the same code
+  can also connect to the Reactor API.
+
+The Reactor API refuses a name without the owner, such as `xwam`, when a
+session starts or a token is minted.
+
 ## `examples/`
 
 Complete applications built on models Reactor already serves. The per-model

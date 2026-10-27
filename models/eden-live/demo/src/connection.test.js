@@ -32,7 +32,15 @@ test("storage that throws does not break the page", () => {
   const broken = { getItem() { throw Error("blocked"); }, setItem() { throw Error("blocked"); }, removeItem() { throw Error("blocked"); } };
   saveKey("dev", "rk_a", true, broken, broken);
   assert.deepEqual(loadKey("dev", broken, broken), { key: "", remember: false });
-  assert.deepEqual(loadSettings({ target: "dev", localUrl: "http://x:8080" }, broken), { target: "dev", localUrl: "http://x:8080", model: "eden-live" });
+  assert.deepEqual(loadSettings({ target: "dev", localUrl: "http://x:8080" }, broken), { target: "dev", localUrl: "http://x:8080", model: "reactor/eden-live" });
+});
+
+test("a saved model without its owner gives way to the default", () => {
+  const local = memory();
+  local.setItem("edenlive.connection", JSON.stringify({ target: "prod", model: "eden-live" }));
+  assert.equal(loadSettings({ target: "dev", localUrl: "http://x:8080" }, local).model, "reactor/eden-live");
+  local.setItem("edenlive.connection", JSON.stringify({ target: "prod", model: "my-org/eden-live" }));
+  assert.equal(loadSettings({ target: "dev", localUrl: "http://x:8080" }, local).model, "my-org/eden-live");
 });
 
 test("mintToken sends the key only as a header to the chosen endpoint, scoped to the model", async () => {
@@ -41,26 +49,26 @@ test("mintToken sends the key only as a header to the chosen endpoint, scoped to
     seen = { url, init };
     return reply(200, { jwt: "j", expires_at: 2_000_000_000 })();
   };
-  const t = await mintToken({ target: "dev", apiKey: " rk_x ", model: "eden-live", fetchImpl });
+  const t = await mintToken({ target: "dev", apiKey: " rk_x ", model: "reactor/eden-live", fetchImpl });
   assert.equal(seen.url, "https://api.rea.live/tokens");
   assert.equal(seen.init.headers["Reactor-API-Key"], "rk_x");
   assert.ok(!seen.url.includes("rk_x") && !seen.init.body.includes("rk_x"));
-  assert.deepEqual(JSON.parse(seen.init.body).authorization_details[0].resources, { models: { match: ["eden-live"] } });
+  assert.deepEqual(JSON.parse(seen.init.body).authorization_details[0].resources, { models: { match: ["reactor/eden-live"] } });
   assert.deepEqual(t, { jwt: "j", expiresAt: 2_000_000_000_000 });
 });
 
 test("mintToken explains a bad key, an unavailable model and a missing key", async () => {
-  await assert.rejects(mintToken({ target: "dev", apiKey: "rk_bad", model: "eden-live", fetchImpl: reply(401, { error: "Invalid API key" }) }), (e) => e instanceof ConnectionError && /DEV rejected this API key/.test(e.message) && !e.message.includes("rk_bad"));
+  await assert.rejects(mintToken({ target: "dev", apiKey: "rk_bad", model: "reactor/eden-live", fetchImpl: reply(401, { error: "Invalid API key" }) }), (e) => e instanceof ConnectionError && /DEV rejected this API key/.test(e.message) && !e.message.includes("rk_bad"));
   await assert.rejects(mintToken({ target: "prod", apiKey: "rk_x", model: "nope", fetchImpl: reply(403, { error: "requested model is not available to this API key" }) }), /nope is not available to this API key on PROD/);
-  await assert.rejects(mintToken({ target: "dev", apiKey: "  ", model: "eden-live", fetchImpl: assert.fail }), /Enter your DEV API key/);
-  await assert.rejects(mintToken({ target: "dev", apiKey: "rk_x", model: "eden-live", fetchImpl: async () => { throw TypeError("Failed to fetch"); } }), /Could not reach DEV/);
+  await assert.rejects(mintToken({ target: "dev", apiKey: "  ", model: "reactor/eden-live", fetchImpl: assert.fail }), /Enter your DEV API key/);
+  await assert.rejects(mintToken({ target: "dev", apiKey: "rk_x", model: "reactor/eden-live", fetchImpl: async () => { throw TypeError("Failed to fetch"); } }), /Could not reach DEV/);
 });
 
 test("the resolver refreshes near expiry with a token bound to the running session", async () => {
   let t = 0;
   const calls = [];
   const mint = async (args) => (calls.push(args), { jwt: "second", expiresAt: t + 3_600_000 });
-  const jwt = tokenResolver({ jwt: "first", expiresAt: 600_000 }, { target: "dev", apiKey: "k", model: "eden-live", sessionId: () => "s1", mint, now: () => t });
+  const jwt = tokenResolver({ jwt: "first", expiresAt: 600_000 }, { target: "dev", apiKey: "k", model: "reactor/eden-live", sessionId: () => "s1", mint, now: () => t });
   assert.equal(await jwt(), "first");
   t = 590_000;
   assert.equal(await jwt(), "second");
@@ -69,12 +77,12 @@ test("the resolver refreshes near expiry with a token bound to the running sessi
 
 test("SDK errors become sentences that name the platform", () => {
   const e = (code, message) => Object.assign(Error(message), { code });
-  assert.match(describeError(e("RATE_LIMITED", "no available capacity: no available servers"), { target: "dev", model: "eden-live" }), /^No capacity: DEV has no free eden-live instance/);
+  assert.match(describeError(e("RATE_LIMITED", "no available capacity: no available servers"), { target: "dev", model: "reactor/eden-live" }), /^No capacity: DEV has no free reactor\/eden-live instance/);
   assert.equal(
-    describeError(e("RATE_LIMITED", 'unexpected HTTP status 429 from create session: {"error":"no available capacity: x"}\n'), { target: "dev", model: "eden-live" }),
-    "No capacity: DEV has no free eden-live instance right now. It may not be deployed on DEV, or every instance is busy; try again later. (no available capacity: x)",
+    describeError(e("RATE_LIMITED", 'unexpected HTTP status 429 from create session: {"error":"no available capacity: x"}\n'), { target: "dev", model: "reactor/eden-live" }),
+    "No capacity: DEV has no free reactor/eden-live instance right now. It may not be deployed on DEV, or every instance is busy; try again later. (no available capacity: x)",
   );
-  assert.match(describeError(e("NOT_FOUND", "x"), { target: "prod", model: "eden-live" }), /not found on PROD/);
+  assert.match(describeError(e("NOT_FOUND", "x"), { target: "prod", model: "reactor/eden-live" }), /not found on PROD/);
   assert.equal(describeError(undefined, { target: "dev" }), "");
 });
 

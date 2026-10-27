@@ -222,7 +222,7 @@ class GrootN17Client:
     def __init__(
         self,
         *,
-        model: str = "groot-n17",
+        model: str = "reactor/groot-n17",
         session: ReactorSession | None = None,
         fps: int = CONTROL_HZ,
         settle_frames: int = 5,

@@ -41,7 +41,7 @@ from .tracks import CameraTrack
 
 log = logging.getLogger("cosmos_droid.bridge")
 
-DEFAULT_MODEL = "cosmos-nano-policy-droid"
+DEFAULT_MODEL = "reactor/cosmos-nano-policy-droid"
 # cosmos-nano-policy-droid serves from the production API. The wrong host
 # answers with an opaque 429, which reads as missing capacity, so check the
 # URL before anything else.

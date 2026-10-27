@@ -81,7 +81,7 @@ class ReactorSession:
 
     Usage::
 
-        session = ReactorSession("xwam")
+        session = ReactorSession("reactor/xwam")
         await session.connect(["head_view", "left_wrist_view"])
         session.track("head_view").set_frame(rgb_uint8)
         await session.send("set_state_json", {"state_json": "..."})

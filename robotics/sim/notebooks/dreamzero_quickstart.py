@@ -26,7 +26,7 @@ async def main():
     #     TensorRT engine and torch.compile warmup), hence the long default;
     #   - a busy cluster returns HTTP 429 "no available capacity" on session
     #     creation. Wait and retry in about a minute, or ask Reactor for more capacity.
-    client = DreamZeroClient()          # model="dreamzero", 15 fps tracks
+    client = DreamZeroClient()          # model="reactor/dreamzero", 15 fps tracks
     await client.connect()
 
     print("status transitions :", " -> ".join(client.session.status_log))

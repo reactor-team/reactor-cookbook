@@ -42,7 +42,7 @@ shared, order-sensitive connection lifecycle: register handlers, await
 [shared lifecycle notes](./README.md#session-lifecycle) for the failure modes.
 
 ```python
-client = DreamZeroClient()          # model="dreamzero", 15 fps tracks
+client = DreamZeroClient()          # model="reactor/dreamzero", 15 fps tracks
 await client.connect()
 ```
 

@@ -233,7 +233,7 @@ class Xr1Robocasa365Client:
     def __init__(
         self,
         *,
-        model: str = "xr1-robocasa365",
+        model: str = "reactor/xr1-robocasa365",
         session: ReactorSession | None = None,
         fps: int = 15,
         frame_size: tuple[int, int] = FRAME_SIZE,

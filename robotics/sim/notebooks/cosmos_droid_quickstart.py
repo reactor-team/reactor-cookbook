@@ -28,7 +28,7 @@ async def main():
     # Capacity: one B200 serves one session. A busy cluster returns HTTP 429
     # "no available capacity" on session creation. Wait and retry, or ask
     # Reactor for more capacity.
-    client = CosmosDroidClient()      # model="cosmos-nano-policy-droid", 15 fps
+    client = CosmosDroidClient()      # model="reactor/cosmos-nano-policy-droid", 15 fps
 
     CONNECT_ATTEMPTS, CONNECT_WAIT_S = 4, 30.0
     for attempt in range(1, CONNECT_ATTEMPTS + 1):

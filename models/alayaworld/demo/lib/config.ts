@@ -33,6 +33,11 @@ export function readConfig(): DemoConfig {
   const modelName = process.env.REACTOR_MODEL_NAME?.trim() || DEFAULT_MODEL_NAME;
 
   if (process.env.REACTOR_API_KEY?.trim()) {
+    if (!modelName.includes("/")) {
+      throw new Error(
+        `Set REACTOR_MODEL_NAME to the model you deployed, as owner/name (for example your-org/alaya-world). The Reactor API refuses "${modelName}".`,
+      );
+    }
     return {
       mode: "hosted",
       modelName,

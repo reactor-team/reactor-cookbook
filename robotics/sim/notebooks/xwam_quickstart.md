@@ -45,7 +45,7 @@ shared, order-sensitive connection lifecycle: register handlers, await
 [shared lifecycle notes](./README.md#session-lifecycle) for the failure modes.
 
 ```python
-client = XwamClient()          # model="xwam", 15 fps tracks
+client = XwamClient()          # model="reactor/xwam", 15 fps tracks
 await client.connect()         # handlers -> connect -> await READY -> tracks -> ping
 ```
 

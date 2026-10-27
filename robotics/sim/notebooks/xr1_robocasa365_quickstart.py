@@ -30,7 +30,7 @@ async def main():
     # returns HTTP 429
     # "no available capacity" on session creation. Wait and retry, or ask
     # Reactor for more capacity.
-    client = Xr1Robocasa365Client()   # model="xr1-robocasa365", 15 fps, 256x256
+    client = Xr1Robocasa365Client()   # model="reactor/xr1-robocasa365", 15 fps, 256x256
 
     CONNECT_ATTEMPTS, CONNECT_WAIT_S = 4, 30.0
     for attempt in range(1, CONNECT_ATTEMPTS + 1):

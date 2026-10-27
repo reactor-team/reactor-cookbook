@@ -68,7 +68,7 @@ class ReactorEvalClient:
     def __init__(
         self,
         api_url: str,
-        model: str = "xr1-robocasa365",
+        model: str = "reactor/xr1-robocasa365",
         settle_s: float = 0.05,  # receipt gate on the model side owns sync now
         chunk_timeout_s: float = 120.0,
     ) -> None:

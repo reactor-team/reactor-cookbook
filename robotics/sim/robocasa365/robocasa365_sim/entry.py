@@ -55,7 +55,7 @@ def parse_args(entry, argv=None):
     )
     parser.add_argument("--vendor-dir", default=os.environ.get("XR1_VENDOR_DIR"))
     parser.add_argument("--api-url", required=True)
-    parser.add_argument("--model", default="xr1-robocasa365")
+    parser.add_argument("--model", default="reactor/xr1-robocasa365")
     parser.add_argument(
         "--settle-s",
         type=float,

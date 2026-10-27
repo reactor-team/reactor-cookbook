@@ -27,7 +27,7 @@ async def main():
     # Capacity: one B200 serves one session. A busy cluster returns HTTP 429
     # "no available capacity" on session creation. Wait and retry, or ask
     # Reactor for more capacity.
-    client = LingbotVaClient()      # model="lingbot-va", 20 fps tracks, 128x128
+    client = LingbotVaClient()      # model="reactor/lingbot-va", 20 fps tracks, 128x128
     await client.connect()          # handlers -> connect -> await READY -> tracks -> ping
 
     print("status transitions :", " -> ".join(client.session.status_log))
