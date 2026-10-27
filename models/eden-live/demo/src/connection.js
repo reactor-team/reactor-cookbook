@@ -14,7 +14,7 @@ export const TARGETS = {
   prod: { label: "PROD", url: "https://api.reactor.inc" },
   local: { label: "Local" },
 };
-export const DEFAULT_MODEL = "eden-live";
+export const DEFAULT_MODEL = "reactor/eden-live";
 
 const SETTINGS = "edenlive.connection";
 const keySlot = (target) => `edenlive.apiKey.${target}`;
@@ -48,7 +48,7 @@ export function loadSettings(defaults, local = globalThis.localStorage) {
   return {
     target,
     localUrl: typeof saved.localUrl === "string" && saved.localUrl ? saved.localUrl : defaults.localUrl,
-    model: typeof saved.model === "string" && saved.model ? saved.model : DEFAULT_MODEL,
+    model: typeof saved.model === "string" && saved.model.includes("/") ? saved.model : DEFAULT_MODEL,
   };
 }
 export function saveSettings({ target, localUrl, model }, local = globalThis.localStorage) {

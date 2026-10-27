@@ -45,7 +45,7 @@ from .tracks import RepeatingFrameTrack
 
 log = logging.getLogger("robotwin_sim.bridge")
 
-DEFAULT_MODEL = "xwam"
+DEFAULT_MODEL = "reactor/xwam"
 #: PROD, where xwam is served. Overridable for a different deployment.
 DEFAULT_API_URL = "https://api.reactor.inc"
 

@@ -66,7 +66,7 @@ from .tracks import QueueVideoTrack
 
 log = logging.getLogger("dreamzero_sim.bridge")
 
-DEFAULT_MODEL = "dreamzero"
+DEFAULT_MODEL = "reactor/dreamzero"
 #: PROD, where dreamzero is served. Overridable for a different deployment.
 DEFAULT_API_URL = "https://api.reactor.inc"
 #: A cold session for this model has to schedule TWO GPUs, stage ~60 GB of

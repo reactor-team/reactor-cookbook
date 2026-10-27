@@ -38,7 +38,7 @@ makes Local the default.
 1. Picks **DEV** (`https://api.rea.live`) or **PROD** (`https://api.reactor.inc`) in the
    header and types their own Reactor API key for that platform (`rk_…`). DEV and PROD keys
    are separate.
-2. Leaves the model as `eden-live`. The platform serves its deployed release; the version
+2. Leaves the model as `reactor/eden-live`. The platform serves its deployed release; the version
    it served appears next to the status once connected.
 3. Clicks **Connect**, then plays as usual.
 
@@ -64,6 +64,6 @@ run the demo locally with `npm run dev`.
 | Situation | Message |
 | --- | --- |
 | Wrong key, or a DEV key on PROD | `DEV rejected this API key (Invalid API key)…` |
-| Model not visible to the key | `eden-live is not available to this API key on DEV…` |
-| Model not deployed, or every instance busy | `No capacity: DEV has no free eden-live instance right now…` |
+| Model not visible to the key | `reactor/eden-live is not available to this API key on DEV…` |
+| Model not deployed, or every instance busy | `No capacity: DEV has no free reactor/eden-live instance right now…` |
 | Platform unreachable | `Could not reach DEV (https://api.rea.live)…` |

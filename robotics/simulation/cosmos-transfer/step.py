@@ -141,7 +141,7 @@ def main():
     )
     parser.add_argument("--local", action="store_true")
     parser.add_argument("--url", default="https://api.reactor.inc")
-    parser.add_argument("--model", default="cosmos3-nano-sim-transfer")
+    parser.add_argument("--model", default="reactor/cosmos3-nano-sim-transfer")
     parser.add_argument("--timeout", type=float, default=180)
     asyncio.run(run(parser.parse_args()))
 

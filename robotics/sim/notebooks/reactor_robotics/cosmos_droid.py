@@ -210,7 +210,7 @@ class CosmosDroidClient:
     def __init__(
         self,
         *,
-        model: str = "cosmos-nano-policy-droid",
+        model: str = "reactor/cosmos-nano-policy-droid",
         session: ReactorSession | None = None,
         fps: int = 15,
         frame_size: tuple[int, int] = (180, 320),

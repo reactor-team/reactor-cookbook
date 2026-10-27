@@ -50,7 +50,7 @@ Set the following values on the Next.js server:
 
 ```dotenv
 REACTOR_API_KEY=replace_with_your_reactor_api_key
-REACTOR_MODEL_NAME=fasth3
+REACTOR_MODEL_NAME=your-org/fasth3
 REACTOR_API_URL=https://api.reactor.inc
 ```
 

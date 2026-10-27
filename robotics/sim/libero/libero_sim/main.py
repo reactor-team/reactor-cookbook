@@ -72,7 +72,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--echo-delay", type=float, default=0.1,
                    help="settle window before echoing, so post-execution frames land first")
     p.add_argument("--model", default=DEFAULT_MODEL,
-                   help="Reactor model name; try the unqualified name if connect fails")
+                   help="Reactor model name, as owner/name")
     # lingbot-va serves from api.reactor.inc. The wrong host answers with a
     # 429 that reads as missing capacity, which has cost debugging time more
     # than once.

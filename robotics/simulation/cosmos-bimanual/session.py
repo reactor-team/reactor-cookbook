@@ -10,7 +10,7 @@ from reactor_sdk import Reactor
 class Simulation:
     def __init__(self):
         self.client = Reactor(
-            model_name="cosmos3-nano-sim-bimanual",
+            model_name="reactor/cosmos3-nano-sim-bimanual",
             api_key=os.environ["REACTOR_API_KEY"],
             api_url="https://api.reactor.inc",
             max_session_duration_seconds=300,

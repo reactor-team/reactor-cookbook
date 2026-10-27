@@ -213,7 +213,7 @@ class LingbotVaClient:
     def __init__(
         self,
         *,
-        model: str = "lingbot-va",
+        model: str = "reactor/lingbot-va",
         session: ReactorSession | None = None,
         fps: int = CONTROL_HZ,
         settle_frames: int = 4,

@@ -5,7 +5,7 @@
 head. The client publishes three camera views and robot state; the model returns
 16-step action chunks over the data channel. It does not generate video.
 
-This client connects to the published `rldx-1` model on Reactor. It also shows
+This client connects to the published `reactor/rldx-1` model on Reactor. It also shows
 how to solve three common robot-policy transport problems:
 
 - keeping independently delivered camera views aligned; and
@@ -193,13 +193,13 @@ Replace `<account-slug>` with the account slug printed by Reactor when the
 model is published. In a new terminal, return to `models/rldx-1/client` and run
 `source .venv/bin/activate` again before using `python main.py`.
 
-To use the hosted RLDX-1 model from Reactor, pass `--model rldx-1`.
+To use the hosted RLDX-1 model from Reactor, pass `--model reactor/rldx-1`.
 
 Optionally provide a task:
 
 ```bash
 python main.py \
-  --model rldx-1 \
+  --model reactor/rldx-1 \
   --task "put the cup on the tray"
 ```
 

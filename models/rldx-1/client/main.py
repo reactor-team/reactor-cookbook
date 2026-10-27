@@ -624,7 +624,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--api-url",
                    default=os.environ.get("REACTOR_API_URL", "https://api.reactor.inc"),
                    help="Reactor API base URL")
-    p.add_argument("--model", default="rldx-1", help="Model name (default: rldx-1)")
+    p.add_argument("--model", default="reactor/rldx-1", help="Model name, as owner/name (default: reactor/rldx-1)")
     p.add_argument("--task", default="", help="Task description to condition the policy")
     p.add_argument("--duration", type=float, default=60.0, help="Seconds to stream")
     p.add_argument("--connect-timeout", type=float, default=300.0,

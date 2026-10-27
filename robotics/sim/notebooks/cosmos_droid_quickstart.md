@@ -48,7 +48,7 @@ shared, order-sensitive connection lifecycle: register handlers, await
 [shared lifecycle notes](./README.md#session-lifecycle) for the failure modes.
 
 ```python
-client = CosmosDroidClient()      # model="cosmos-nano-policy-droid", 15 fps
+client = CosmosDroidClient()      # model="reactor/cosmos-nano-policy-droid", 15 fps
 await client.connect()
 ```
 

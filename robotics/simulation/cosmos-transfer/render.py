@@ -50,7 +50,7 @@ async def run(args):
         raise ValueError("Prompt must not be empty")
     args.output.mkdir(parents=True, exist_ok=True)
     client = Reactor(
-        model_name="cosmos3-nano-sim-transfer",
+        model_name="reactor/cosmos3-nano-sim-transfer",
         api_key=os.environ["REACTOR_API_KEY"],
         max_session_duration_seconds=300,
     )

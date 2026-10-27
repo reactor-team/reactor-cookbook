@@ -41,7 +41,7 @@ shared, order-sensitive connection lifecycle: register handlers, await
 [shared lifecycle notes](./README.md#session-lifecycle) for the failure modes.
 
 ```python
-client = GrootN17Client()      # model="groot-n17", 15 fps tracks
+client = GrootN17Client()      # model="reactor/groot-n17", 15 fps tracks
 await client.connect()         # handlers -> connect -> await READY -> tracks -> ping
 ```
 

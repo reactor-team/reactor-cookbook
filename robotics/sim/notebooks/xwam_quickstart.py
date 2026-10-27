@@ -22,7 +22,7 @@ async def main():
 
     from reactor_robotics.xwam import VIEWS, XwamClient
 
-    client = XwamClient()          # model="xwam", 15 fps tracks
+    client = XwamClient()          # model="reactor/xwam", 15 fps tracks
     await client.connect()         # handlers -> connect -> await READY -> tracks
 
     print("status transitions :", " -> ".join(client.session.status_log))
