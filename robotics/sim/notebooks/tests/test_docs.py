@@ -45,13 +45,22 @@ FIXTURE_ACTIONS = {
 
 class DocumentationConsistencyTest(unittest.TestCase):
     def test_every_model_has_a_guide_and_script(self) -> None:
-        readme = (ROOT / "README.md").read_text()
         for model, (guide, script) in MODELS.items():
             with self.subTest(model=model):
                 self.assertTrue((ROOT / guide).is_file())
                 self.assertTrue((ROOT / script).is_file())
+
+    def test_launched_first_actions_are_documented(self) -> None:
+        readme = (ROOT / "README.md").read_text()
+        for model, script in {
+            "reactor/cosmos-nano-policy-droid": "first_cosmos_actions.py",
+            "reactor/dreamzero": "first_dreamzero_droid_actions.py",
+            "reactor/flux3-action-droid": "first_flux_actions.py",
+        }.items():
+            with self.subTest(model=model):
+                self.assertTrue((ROOT / script).is_file())
                 self.assertIn(model, readme)
-                self.assertIn(guide, readme)
+                self.assertIn(script, readme)
 
     def test_all_relative_markdown_links_resolve(self) -> None:
         link_pattern = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")

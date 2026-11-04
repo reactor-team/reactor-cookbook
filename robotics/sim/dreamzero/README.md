@@ -41,17 +41,16 @@ The obvious implementation is wrong:
 push_frames(obs); chunk = await next_chunk()      # WRONG
 ```
 
-The chunk that arrives next was **already in flight** when you pushed, and was
-computed from the *previous* observation. It has the right shape, finite values
-and a plausible trajectory; nothing about it looks wrong. Every action RoboLab
-executes would lag one observation behind, and the only symptom would be a
-mediocre success rate.
+The next chunk may already be in flight when you push frames. Shape and finite
+values alone cannot establish that it used your latest observation.
 
-So the bridge keys everything on `obs_seq`, the field naming the observations
-a chunk was computed from: note the highest `obs_seq` seen, push, then discard
-arriving chunks until one carries a strictly larger `obs_seq`. Because the model
-waits for *every* camera to deliver a fresh frame before inferring, the first
-chunk past that mark necessarily saw the pushed frames on all three cameras.
+The bridge records the highest `obs_seq` seen, pushes observations, then discards
+chunks until one carries a strictly larger counter. This filters already-seen
+model observation batches. `obs_seq` is a model-side counter, not a client
+observation identifier: it does not prove that the accepted chunk contains every
+frame from a particular simulator request. Camera delivery and state commands
+are asynchronous. The gateway publishes new samples without repeating held
+frames, but this is not an atomic observation/request protocol.
 
 A chunk that arrives without `obs_seq` is refused outright rather than guessed
 at.

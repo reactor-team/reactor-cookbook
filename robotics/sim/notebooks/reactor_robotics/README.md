@@ -66,16 +66,12 @@ interchangeable by changing a slug. Read the matching implementation and guide.
 
 | Helper | Guide |
 | --- | --- |
-| [`XwamClient`](xwam.py) | [X-WAM](../xwam_quickstart.md) |
-| [`CosmosDroidClient`](cosmos_droid.py) | [Cosmos](../cosmos_droid_quickstart.md) |
-| [`LingbotVaClient`](lingbot_va.py) | [LingBot-VA](../lingbot_va_quickstart.md) |
-| [`DreamZeroClient`](dreamzero.py) | [DreamZero](../dreamzero_quickstart.md) |
-| [`Xr1Robocasa365Client`](xr1_robocasa365.py) | [XR-1 RoboCasa365](../xr1_robocasa365_quickstart.md) |
-| [`GrootN17Client`](groot_n17.py) | [GR00T example](../groot_n17_quickstart.md) |
+| [`CosmosDroidClient`](cosmos_droid.py) | [Cosmos DROID](../cosmos_droid_quickstart.md) |
+| [`DreamZeroClient`](dreamzero.py) | [DreamZero DROID](../dreamzero_quickstart.md) |
 
-For example, `XwamClient.predict(...)` returns an `XwamPrediction` containing
-NumPy `actions` and `proprios`, the request's `step`, and timing information.
-Other helpers have their own result types. Generic `ReactorSession` does not
+The [FLUX Action first-action example](../first_flux_actions.py) uses
+`ReactorSession` directly and implements that model's request/reply protocol.
+Model helpers have their own result types. Generic `ReactorSession` does not
 normalize actions or execute them.
 
 ## Maintenance
