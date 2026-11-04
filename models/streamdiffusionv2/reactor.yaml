@@ -1,0 +1,48 @@
+$schema: reactor/v2
+
+model:
+  name: streamdiffusionv2
+  version: v0.1.0
+  description: |
+    StreamDiffusionV2 1.3B: restyle a live video from a text prompt in real time. Send video on
+    `video_in`, set a prompt, a seed and a starting noise strength, and start; every step rewrites
+    the next 4 frames at 480x832. The prompt can change while it plays.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    cpu:
+      request: "4"
+      limit: "16"
+    memory:
+      request: 32Gi
+      limit: 96Gi
+
+runtime:
+  import: streamdiffusionv2:StreamDiffusionV2
+  config: streamdiffusionv2.yaml
+  weights_path: ~/.cache/reactor_registry/streamdiffusionv2
+  recording:
+    enabled: true
+    chunk_seconds: 4
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
+
+build:
+  runtime_version: "3.11.2"
+  python_requirements: requirements.txt
+  python_version: "3.12"
+  cuda_version: "12.8.1"
+  build_env:
+    UV_INDEX_STRATEGY: unsafe-best-match
+  system_packages:
+    - ffmpeg
+    - git
+  runtime_env:
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+    TOKENIZERS_PARALLELISM: "false"
