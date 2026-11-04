@@ -1,0 +1,30 @@
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
+torch==2.10.0+cu128
+torchvision==0.25.0+cu128
+torchaudio==2.10.0+cu128
+transformers==4.57.0
+accelerate==1.12.0
+diffusers==0.36.0
+safetensors==0.7.0
+tokenizers==0.22.2
+huggingface-hub==0.36.0
+einops==0.8.2
+omegaconf==2.3.0
+numpy==2.2.6
+opencv-python-headless==4.13.0.90
+pillow==11.3.0
+av==18.0.0
+decord==0.6.0
+ftfy==6.3.1
+regex==2026.1.15
+tqdm==4.67.2
+pandas==2.3.3
+scipy==1.15.3
+pyyaml
+# Not imported by the model: they let `pip install --no-build-isolation
+# flash-attn` in reactor.yaml's `build.run` compile when no wheel matches.
+ninja
+packaging
+psutil
+wheel

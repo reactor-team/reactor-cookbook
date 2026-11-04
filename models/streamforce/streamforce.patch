@@ -1,0 +1,829 @@
+diff --git a/pipeline/force_conditions.py b/pipeline/force_conditions.py
+new file mode 100644
+index 0000000..7863d5a
+--- /dev/null
++++ b/pipeline/force_conditions.py
+@@ -0,0 +1,98 @@
++"""Force conditions for one block, built from the force that is current when the block starts.
++
++The offline scripts build the conditioning signal for a whole clip through the sample datasets
++(`utils/forceprompt_data/controlnet_datasets.py`) and slice it per window. A stream only knows the
++current force, so this module builds the same signal for ONE frame and repeats it over a block
++(the signal is constant in time while the force is), with the datasets' own functions and steps:
++
++  * wind: drawn straight at the target size (ForcePromptingDataset_WindForce*),
++    mask channel = ones;
++  * point: blob mask + force channels drawn on the 480x720 training canvas, then
++    `resize_for_crop` + `center_crop` to the target (ForcePromptingDataset_PointForce*);
++  * then the inference scripts' `prepare_hint`: threshold the frame-0 blob, mask the force
++    channels with it, and mask the first frame with it (`masked_latent`).
++
++Units are the datasets': strength 0..1, angle in degrees counter-clockwise from +x.
++Point positions: the datasets take (x_pos, y_pos) on the canvas with y measured UP from the
++bottom; a client gives (x, y) over the OUTPUT frame, origin top-left, which is where the blob
++lands after the canvas is resized and cropped. `frame_to_canvas` / `canvas_to_frame` convert.
++"""
++from typing import Tuple
++
++import numpy as np
++import torch
++import torchvision.transforms as transforms
++
++from utils.forceprompt_data.controlnet_datasets import (
++    _BLOB_CANVAS_H, _BLOB_CANVAS_W, load_controlnet_signal_wind_force, load_point_force_mask,
++    resize_for_crop,
++)
++from utils.misc import compress_time
++
++
++def fit_image(rgb: np.ndarray, height: int, width: int) -> torch.Tensor:
++    """uint8 HxWx3 -> uint8 [1, 3, height, width], as the datasets fit a still (resize to cover, centre crop)."""
++    x = torch.from_numpy(np.ascontiguousarray(rgb)).permute(2, 0, 1).contiguous().unsqueeze(0)
++    x = resize_for_crop(x, height, width)
++    return transforms.functional.center_crop(x, (height, width))
++
++
++def _canvas_geometry(height: int, width: int):
++    # resize_for_crop of the canvas to cover (height, width), then centre crop
++    coef = max(height / _BLOB_CANVAS_H, width / _BLOB_CANVAS_W)
++    out_h, out_w = max(int(_BLOB_CANVAS_H * coef), height), max(int(_BLOB_CANVAS_W * coef), width)
++    top = int(round((out_h - height) / 2.0))
++    left = int(round((out_w - width) / 2.0))
++    return out_h / _BLOB_CANVAS_H, out_w / _BLOB_CANVAS_W, top, left
++
++
++def canvas_to_frame(x_pos: float, y_pos: float, height: int, width: int) -> Tuple[float, float]:
++    """Dataset (x_pos, y_pos up from bottom) -> where the blob centre lands, (x, y) in 0..1 over the output, top-left origin."""
++    sy, sx, top, left = _canvas_geometry(height, width)
++    cx, cy = x_pos * _BLOB_CANVAS_W, (1 - y_pos) * _BLOB_CANVAS_H
++    return ((cx + 0.5) * sx - 0.5 - left) / width, ((cy + 0.5) * sy - 0.5 - top) / height
++
++
++def frame_to_canvas(x: float, y: float, height: int, width: int) -> Tuple[float, float]:
++    """Inverse of canvas_to_frame."""
++    sy, sx, top, left = _canvas_geometry(height, width)
++    cx = (x * width + left + 0.5) / sx - 0.5
++    cy = (y * height + top + 0.5) / sy - 0.5
++    return cx / _BLOB_CANVAS_W, 1 - cy / _BLOB_CANVAS_H
++
++
++def frame_signal(mode: str, strength: float, angle: float, x_pos: float, y_pos: float,
++                 height: int, width: int) -> torch.Tensor:
++    """The 4-channel signal [1, 4, height, width] (mask, magnitude, cos, sin) for one frame, float32 CPU."""
++    if mode == "wind":
++        sig = load_controlnet_signal_wind_force(strength, angle, num_frames=1, height=height, width=width,
++                                                min_force=0.0, max_force=1.0)
++        return torch.cat([torch.ones_like(sig[:, :1]), sig], dim=1)
++    if mode == "point":
++        sig = torch.cat([load_point_force_mask(x_pos, y_pos, num_frames=1),
++                         load_controlnet_signal_wind_force(strength, angle, num_frames=1,
++                                                           min_force=0.0, max_force=1.0)], dim=1)
++        sig = resize_for_crop(sig, height, width)
++        return transforms.functional.center_crop(sig, (height, width))
++    raise ValueError(f"unknown force mode {mode!r}")
++
++
++def block_conditions(signal: torch.Tensor, image: torch.Tensor, device, block: int = 3):
++    """(hint [1, block, 3, H, W] bf16, masked_latent [1, 1, 3, H, W] bf16) from a frame signal and the fitted first frame (uint8 [1, 3, H, W])."""
++    hint = signal.unsqueeze(0).float().to(device=device, dtype=torch.bfloat16)     # [B, T=1, 4, H, W]
++    img = image.float().unsqueeze(1)                                                # [B, T=1, 3, H, W]
++    # --- prepare_hint of inference_causal_rolling_forcing.py, verbatim ---
++    img = img.to(device=hint.device)
++    img = img.permute(0, 2, 1, 3, 4)
++    img = img / 255.0
++    img = img * 2.0 - 1.0
++    gaussian_blob = hint[:, 0:1, 0:1]
++    hint = hint[:, :, 1:] * (gaussian_blob > 1e-1)
++    masked_image = (img + 1.0) / 2.0 * gaussian_blob.permute(0, 2, 1, 3, 4)
++    masked_image = masked_image * 2.0 - 1.0
++    masked_image = masked_image.permute(0, 2, 1, 3, 4)
++    masked_latent = compress_time(masked_image, 81, method="subsample")
++    # ---
++    hint = hint.to(device=device, dtype=torch.bfloat16)
++    masked_latent = masked_latent.to(device=device, dtype=torch.bfloat16)
++    return hint.expand(-1, block, -1, -1, -1).contiguous(), masked_latent
+diff --git a/pipeline/rolling_forcing_inference.py b/pipeline/rolling_forcing_inference.py
+index f03b1c4..39cf2b1 100644
+--- a/pipeline/rolling_forcing_inference.py
++++ b/pipeline/rolling_forcing_inference.py
+@@ -3,6 +3,7 @@ from typing import List, Optional
+ import torch
+ 
+ from utils.wan_wrapper import CausalWanControlNetWrapper, WanTextEncoder, WanVAEWrapper
++from pipeline.rolling_forcing_step import BlockDecoder, RollingForcingStream
+ 
+ 
+ class ControlRollingForcingInferencePipeline(torch.nn.Module):
+@@ -67,7 +68,11 @@ class ControlRollingForcingInferencePipeline(torch.nn.Module):
+         masked_latent: Optional[torch.Tensor] = None,
+         long_generation: bool = False,
+     ) -> torch.Tensor:
++        """A whole clip, as a loop over `RollingForcingStream.window()` (one rolling window per
++        call; see pipeline/rolling_forcing_step.py). Kept as the offline entry point and as the
++        regression check for the per-window code."""
+         del long_generation  # Not used in rolling-forcing mode.
++        del profile  # per-window timing lives in the caller now
+ 
+         image = image.to(self.generator.model.device, dtype=torch.bfloat16)
+         image = image.permute(0, 2, 1, 3, 4)
+@@ -76,20 +81,8 @@ class ControlRollingForcingInferencePipeline(torch.nn.Module):
+         initial_latent = self.vae.encode_to_latent(image).to(
+             device=self.generator.model.device, dtype=torch.bfloat16
+         )
++        batch_size, _, num_channels, height, width = initial_latent.shape
+ 
+-        noise = torch.randn(
+-            [
+-                image.shape[0],
+-                num_frames,
+-                initial_latent.shape[2],
+-                initial_latent.shape[3],
+-                initial_latent.shape[4],
+-            ],
+-            device=self.generator.model.device,
+-            dtype=torch.bfloat16,
+-        )
+-
+-        batch_size, num_frames, num_channels, height, width = noise.shape
+         if not self.independent_first_frame or (
+             self.independent_first_frame and initial_latent is not None
+         ):
+@@ -99,290 +92,35 @@ class ControlRollingForcingInferencePipeline(torch.nn.Module):
+             assert (num_frames - 1) % self.num_frame_per_block == 0
+             num_blocks = (num_frames - 1) // self.num_frame_per_block
+ 
+-        num_output_frames = num_frames
+         conditional_dict = self.text_encoder(text_prompts=text_prompts)
+ 
+         output = torch.zeros(
+-            [batch_size, num_output_frames, num_channels, height, width],
+-            device=noise.device,
+-            dtype=noise.dtype,
+-        )
+-
+-        if profile:
+-            init_start = torch.cuda.Event(enable_timing=True)
+-            init_end = torch.cuda.Event(enable_timing=True)
+-            diffusion_start = torch.cuda.Event(enable_timing=True)
+-            diffusion_end = torch.cuda.Event(enable_timing=True)
+-            vae_start = torch.cuda.Event(enable_timing=True)
+-            vae_end = torch.cuda.Event(enable_timing=True)
+-            block_times = []
+-            block_start = torch.cuda.Event(enable_timing=True)
+-            block_end = torch.cuda.Event(enable_timing=True)
+-            init_start.record()
+-
+-        if self.kv_cache1 is None:
+-            self._initialize_kv_cache(batch_size=batch_size, dtype=noise.dtype, device=noise.device)
+-            self._initialize_crossattn_cache(batch_size=batch_size, dtype=noise.dtype, device=noise.device)
+-            self._initialize_kv_cache2(batch_size=batch_size, dtype=noise.dtype, device=noise.device)
+-            self._initialize_crossattn_cache2(batch_size=batch_size, dtype=noise.dtype, device=noise.device)
+-        else:
+-            for block_index in range(self.num_transformer_blocks):
+-                self.crossattn_cache[block_index]["is_init"] = False
+-                self.crossattn_cache2[block_index]["is_init"] = False
+-            for block_index in range(len(self.kv_cache1)):
+-                self.kv_cache1[block_index]["global_end_index"] = torch.tensor(
+-                    [0], dtype=torch.long, device=noise.device
+-                )
+-                self.kv_cache1[block_index]["local_end_index"] = torch.tensor(
+-                    [0], dtype=torch.long, device=noise.device
+-                )
+-                self.kv_cache2[block_index]["global_end_index"] = torch.tensor(
+-                    [0], dtype=torch.long, device=noise.device
+-                )
+-                self.kv_cache2[block_index]["local_end_index"] = torch.tensor(
+-                    [0], dtype=torch.long, device=noise.device
+-                )
+-
+-        if self.initial_latent_to_cahce:
+-            timestep = torch.zeros([batch_size, 1], device=noise.device, dtype=torch.int64)
+-            self.generator(
+-                noisy_image_or_video=initial_latent[:, :1],
+-                conditional_dict=conditional_dict,
+-                timestep=timestep,
+-                kv_cache=self.kv_cache1,
+-                crossattn_cache=self.crossattn_cache,
+-                kv_cache2=self.kv_cache2,
+-                crossattn_cache2=self.crossattn_cache2,
+-                current_start=0,
+-                hint=hint[:, :1] if self.first_frame_control and hint is not None else None,
+-                masked_latent=masked_latent[:, :1]
+-                if self.first_frame_control and masked_latent is not None
+-                else None,
+-            )
+-
+-        if profile:
+-            init_end.record()
+-            torch.cuda.synchronize()
+-            diffusion_start.record()
+-
+-        num_denoising_steps = len(self.denoising_step_list)
+-        rolling_window_length_blocks = num_denoising_steps
+-
+-        window_start_blocks = []
+-        window_end_blocks = []
+-        window_num = num_blocks + rolling_window_length_blocks - 1
+-        for window_index in range(window_num):
+-            start_block = max(0, window_index - rolling_window_length_blocks + 1)
+-            end_block = min(num_blocks - 1, window_index)
+-            window_start_blocks.append(start_block)
+-            window_end_blocks.append(end_block)
+-
+-        noisy_cache = torch.zeros_like(output)
+-
+-        shared_timestep = torch.ones(
+-            [batch_size, rolling_window_length_blocks * self.num_frame_per_block],
+-            device=noise.device,
+-            dtype=torch.float32,
++            [batch_size, num_frames, num_channels, height, width],
++            device=initial_latent.device,
++            dtype=torch.bfloat16,
+         )
+-        for index, current_timestep in enumerate(reversed(self.denoising_step_list)):
+-            start = index * self.num_frame_per_block
+-            end = (index + 1) * self.num_frame_per_block
+-            shared_timestep[:, start:end] *= current_timestep
+ 
++        stream = RollingForcingStream(self)
++        stream.begin(initial_latent, conditional_dict)
++        decoder = BlockDecoder(self.vae)
++        frames = []
++        blk = self.num_frame_per_block
++        window_num = num_blocks + len(self.denoising_step_list) - 1
+         for window_index in range(window_num):
+-            if profile:
+-                block_start.record()
+-
+             print("window_index:", window_index)
+-            start_block = window_start_blocks[window_index]
+-            end_block = window_end_blocks[window_index]
++            start_block, end_block = stream.next_window_blocks(num_blocks)
+             print(f"start_block: {start_block}, end_block: {end_block}")
+-
+-            current_start_frame = start_block * self.num_frame_per_block
+-            current_end_frame = (end_block + 1) * self.num_frame_per_block
+-            current_num_frames = current_end_frame - current_start_frame
+-
+-            if (
+-                current_num_frames
+-                == rolling_window_length_blocks * self.num_frame_per_block
+-                or current_start_frame == 0
+-            ):  # full window or still in the first window
+-                noisy_input = torch.cat(
+-                    [
+-                        noisy_cache[
+-                            :,
+-                            current_start_frame : current_end_frame
+-                            - self.num_frame_per_block,
+-                        ],  # put the cached noisy frames into the window to take up the blocks before the new block enters
+-                        noise[
+-                            :,
+-                            current_end_frame
+-                            - self.num_frame_per_block : current_end_frame,
+-                        ],  # attach pure noise for the new block entering the window
+-                    ],
+-                    dim=1,
+-                )
+-            else:
+-                noisy_input = noisy_cache[:, current_start_frame:current_end_frame] # only at the end of the process, where the window is not full again
+-
+-            if current_num_frames == rolling_window_length_blocks * self.num_frame_per_block:
+-                current_timestep = shared_timestep.clone()
+-            elif current_start_frame == 0:
+-                current_timestep = shared_timestep[:, -current_num_frames:].clone()
+-            elif current_end_frame == num_frames:
+-                current_timestep = shared_timestep[:, :current_num_frames].clone()
+-            else:
+-                raise ValueError(
+-                    "current_num_frames should be full window, first window, or last window"
+-                )
+-
+-            if current_start_frame == 0:
+-                noisy_input[:, :1] = initial_latent[:, :1]
+-                current_timestep[:, :1] = 0
+-
+-            hint_input = None
+-            if hint is not None:
+-                hint_input = hint[:, current_start_frame:current_end_frame]
+-
+-            masked_latent_input = masked_latent if masked_latent is not None else None
+-
+-            _, denoised_pred = self.generator(
+-                noisy_image_or_video=noisy_input,
+-                conditional_dict=conditional_dict,
+-                timestep=current_timestep,
+-                kv_cache=self.kv_cache1,
+-                crossattn_cache=self.crossattn_cache,
+-                kv_cache2=self.kv_cache2,
+-                crossattn_cache2=self.crossattn_cache2,
+-                current_start=current_start_frame * self.frame_seq_length,
+-                hint=hint_input,
+-                masked_latent=masked_latent_input,
+-            )
+-
+-            output[:, current_start_frame:current_end_frame] = denoised_pred
+-
+-            with torch.no_grad():
+-                for block_idx in range(start_block, end_block + 1):
+-                    local_start = (block_idx - start_block) * self.num_frame_per_block
+-                    local_end = local_start + self.num_frame_per_block
+-
+-                    block_timestep_values = current_timestep[:, local_start:local_end].reshape(-1).float()
+-                    # I2V first block can be [0, t, t]; map block timestep using non-zero value.
+-                    non_zero_values = block_timestep_values[block_timestep_values > 0]
+-                    if non_zero_values.numel() > 0:
+-                        block_timestep = non_zero_values.float().mean().item()
+-                    else:
+-                        block_timestep = block_timestep_values.float().mean().item()
+-                    matches = torch.abs(self.denoising_step_list.float() - block_timestep) < 1e-4
+-                    matched_indices = torch.nonzero(matches, as_tuple=True)[0]
+-                    if matched_indices.numel() == 0:
+-                        nearest_idx = torch.argmin(
+-                            torch.abs(self.denoising_step_list.float() - block_timestep)
+-                        ).item()
+-                        nearest_step = self.denoising_step_list[nearest_idx].item()
+-                        if abs(float(nearest_step) - float(block_timestep)) < 1e-2:
+-                            matched_indices = torch.tensor([nearest_idx], device=noise.device)
+-                        else:
+-                            block_timestep_values_list = [
+-                                float(v) for v in block_timestep_values.detach().cpu().tolist()
+-                            ]
+-                            raise RuntimeError(
+-                                "Cannot map block timestep "
+-                                f"{block_timestep} to denoising_step_list "
+-                                f"{self.denoising_step_list.detach().cpu().tolist()} "
+-                                f"(block timestep values: {block_timestep_values_list})"
+-                            )
+-
+-                    if matched_indices.numel() == 0:
+-                        raise RuntimeError(f"Cannot map block timestep {block_timestep} to denoising_step_list")
+-
+-                    block_timestep_index = int(matched_indices[0].item())
+-                    if block_timestep_index == len(self.denoising_step_list) - 1:
+-                        continue
+-
+-                    next_timestep = self.denoising_step_list[block_timestep_index + 1].to(noise.device)
+-
+-                    updated_noisy = self.scheduler.add_noise(
+-                        denoised_pred.flatten(0, 1),
+-                        torch.randn_like(denoised_pred.flatten(0, 1)),
+-                        next_timestep
+-                        * torch.ones(
+-                            [batch_size * current_num_frames],
+-                            device=noise.device,
+-                            dtype=torch.long,
+-                        ),
+-                    ).unflatten(0, denoised_pred.shape[:2])
+-
+-                    noisy_cache[
+-                        :,
+-                        block_idx * self.num_frame_per_block : (block_idx + 1) * self.num_frame_per_block,
+-                    ] = updated_noisy[:, local_start:local_end]
+-
+-            with torch.no_grad():
+-                context_denoised_pred = denoised_pred[:, : self.num_frame_per_block].clone()
+-                context_timestep = (
+-                    torch.ones_like(current_timestep[:, : self.num_frame_per_block])
+-                    * self.args.context_noise
+-                )
+-
+-                if current_start_frame == 0:
+-                    context_denoised_pred[:, :1] = initial_latent[:, :1]
+-
+-                context_hint = None
+-                if hint_input is not None:
+-                    context_hint = hint_input[:, : self.num_frame_per_block]
+-
+-                self.generator(
+-                    noisy_image_or_video=context_denoised_pred,
+-                    conditional_dict=conditional_dict,
+-                    timestep=context_timestep,
+-                    kv_cache=self.kv_cache1,
+-                    crossattn_cache=self.crossattn_cache,
+-                    kv_cache2=self.kv_cache2,
+-                    crossattn_cache2=self.crossattn_cache2,
+-                    current_start=current_start_frame * self.frame_seq_length,
+-                    hint=context_hint,
+-                    masked_latent=masked_latent_input,
+-                    updating_cache=True,
+-                )
+-
+-            if profile:
+-                block_end.record()
+-                torch.cuda.synchronize()
+-                block_times.append(block_start.elapsed_time(block_end))
+-
+-        if profile:
+-            diffusion_end.record()
+-            torch.cuda.synchronize()
+-            diffusion_time = diffusion_start.elapsed_time(diffusion_end)
+-            init_time = init_start.elapsed_time(init_end)
+-            vae_start.record()
+-
+-        video = self.vae.decode_to_pixel(output, use_cache=False)
+-        video = (video * 0.5 + 0.5).clamp(0, 1)
+-
+-        if profile:
+-            vae_end.record()
+-            torch.cuda.synchronize()
+-            vae_time = vae_start.elapsed_time(vae_end)
+-            total_time = init_time + diffusion_time + vae_time
+-
+-            print("Profiling results:")
+-            print(
+-                f"  - Initialization/caching time: {init_time:.2f} ms "
+-                f"({100 * init_time / total_time:.2f}%)"
+-            )
+-            print(
+-                f"  - Diffusion generation time: {diffusion_time:.2f} ms "
+-                f"({100 * diffusion_time / total_time:.2f}%)"
+-            )
+-            for i, block_time in enumerate(block_times):
+-                print(
+-                    f"    - Window {i} generation time: {block_time:.2f} ms "
+-                    f"({100 * block_time / diffusion_time:.2f}% of diffusion)"
+-                )
+-            print(f"  - VAE decoding time: {vae_time:.2f} ms ({100 * vae_time / total_time:.2f}%)")
+-            print(f"  - Total time: {total_time:.2f} ms")
++            new_hint = None
++            if hint is not None and window_index < num_blocks:
++                new_hint = hint[:, end_block * blk:(end_block + 1) * blk]
++            clean = stream.window(new_hint, masked_latent, total_blocks=num_blocks)
++            if clean is not None:
++                b, latents = clean
++                output[:, b * blk:(b + 1) * blk] = latents
++                frames.append(decoder.decode(latents))  # decode each block as it leaves
++
++        video = torch.cat(frames, dim=1)
++        decoder.reset()
+ 
+         if return_latents:
+             return video, output
+diff --git a/pipeline/rolling_forcing_step.py b/pipeline/rolling_forcing_step.py
+new file mode 100644
+index 0000000..d41d754
+--- /dev/null
++++ b/pipeline/rolling_forcing_step.py
+@@ -0,0 +1,274 @@
++"""Rolling forcing, one window per call.
++
++`ControlRollingForcingInferencePipeline.inference_rolling_forcing` plans a whole clip: it sizes
++`output` and `noisy_cache` to the clip and loops over every window. This module is the same loop
++body, called once per window, holding only bounded state between calls:
++
++  * the noisy latents of the (at most 3) blocks still being denoised,
++  * the per-block conditions (force hint) of the blocks in the window,
++  * the KV / cross-attention caches the pipeline already owns (fixed size, rolling),
++  * the first frame's latent (the anchor) and the text conditioning.
++
++Window w denoises blocks max(0, w-3) .. w at the four noise levels of `denoising_step_list`;
++block w enters as fresh noise and block w-3 leaves clean, so from w = 3 on every call returns one
++clean block (3 latent frames). With `total_blocks` set (a finite clip) the last windows shrink
++the way the source's do (no new block enters); without it the stream is endless up to the
++position limit of the RoPE table (`max_blocks`).
++
++Every tensor operation below is the source loop's, in the source's order, so a clip generated
++through this class is bit-identical to `inference_rolling_forcing` on the same inputs.
++"""
++from typing import Dict, List, Optional
++
++import torch
++
++
++class PositionLimitReached(Exception):
++    """The next window would place latents past the temporal RoPE table."""
++
++
++class RollingForcingStream:
++    def __init__(self, pipe):
++        self.pipe = pipe
++        self.block = pipe.num_frame_per_block
++        self.window_blocks = len(pipe.denoising_step_list)  # rolling window = denoising steps
++        # The causal model indexes its temporal RoPE table by absolute latent frame; past its
++        # length the slice comes back short and the forward fails. The table is the hard limit.
++        freqs = pipe.generator.model.freqs
++        self.rope_frames = int(freqs.shape[0])
++        self.max_blocks = self.rope_frames // self.block
++        self.started = False
++
++    # ---------------------------------------------------------------- session ---
++    def begin(self, initial_latent: torch.Tensor, conditional_dict: Dict[str, torch.Tensor]):
++        """Start a stream from the first frame's latent [B, 1, C, h, w] and the text conditioning."""
++        pipe = self.pipe
++        self.initial_latent = initial_latent
++        self.conditional_dict = conditional_dict
++        batch_size, _, num_channels, height, width = initial_latent.shape
++        self.shape = (batch_size, num_channels, height, width)
++        self.device, self.dtype = initial_latent.device, torch.bfloat16
++
++        if pipe.kv_cache1 is None:
++            pipe._initialize_kv_cache(batch_size=batch_size, dtype=self.dtype, device=self.device)
++            pipe._initialize_crossattn_cache(batch_size=batch_size, dtype=self.dtype, device=self.device)
++            pipe._initialize_kv_cache2(batch_size=batch_size, dtype=self.dtype, device=self.device)
++            pipe._initialize_crossattn_cache2(batch_size=batch_size, dtype=self.dtype, device=self.device)
++        else:
++            for block_index in range(pipe.num_transformer_blocks):
++                pipe.crossattn_cache[block_index]["is_init"] = False
++                pipe.crossattn_cache2[block_index]["is_init"] = False
++            for block_index in range(len(pipe.kv_cache1)):
++                pipe.kv_cache1[block_index]["global_end_index"] = torch.tensor([0], dtype=torch.long, device=self.device)
++                pipe.kv_cache1[block_index]["local_end_index"] = torch.tensor([0], dtype=torch.long, device=self.device)
++                pipe.kv_cache2[block_index]["global_end_index"] = torch.tensor([0], dtype=torch.long, device=self.device)
++                pipe.kv_cache2[block_index]["local_end_index"] = torch.tensor([0], dtype=torch.long, device=self.device)
++
++        if pipe.initial_latent_to_cahce:
++            raise NotImplementedError("initial_latent_to_cahce is off in every shipped config")
++
++        self.shared_timestep = torch.ones(
++            [batch_size, self.window_blocks * self.block], device=self.device, dtype=torch.float32
++        )
++        for index, current_timestep in enumerate(reversed(pipe.denoising_step_list)):
++            self.shared_timestep[:, index * self.block:(index + 1) * self.block] *= current_timestep
++
++        self.window_index = 0
++        self.noisy: Dict[int, torch.Tensor] = {}   # block -> noisy latents for its next step
++        self.hints: Dict[int, torch.Tensor] = {}   # block -> hint [B, 3, c, H, W]
++        self.started = True
++
++    def set_text(self, conditional_dict: Dict[str, torch.Tensor]):
++        """New text conditioning from the next window on; the cross-attention caches re-project it."""
++        pipe = self.pipe
++        self.conditional_dict = conditional_dict
++        for block_index in range(pipe.num_transformer_blocks):
++            pipe.crossattn_cache[block_index]["is_init"] = False
++            pipe.crossattn_cache2[block_index]["is_init"] = False
++
++    def next_window_blocks(self, total_blocks: Optional[int] = None):
++        w = self.window_index
++        start_block = max(0, w - self.window_blocks + 1)
++        end_block = w if total_blocks is None else min(total_blocks - 1, w)
++        return start_block, end_block
++
++    # ----------------------------------------------------------------- window ---
++    def window(self, new_block_hint: Optional[torch.Tensor], masked_latent: Optional[torch.Tensor],
++               total_blocks: Optional[int] = None):
++        """Run one rolling window.
++
++        new_block_hint: the hint for the block entering the window [B, 3, c, H, W] (ignored when
++        no block enters, i.e. in a finite clip's closing windows). Returns (block_index, latents
++        [B, 3, C, h, w]) for the block that left the window clean, or None.
++        """
++        pipe = self.pipe
++        block = self.block
++        batch_size, num_channels, height, width = self.shape
++        start_block, end_block = self.next_window_blocks(total_blocks)
++        if end_block >= self.max_blocks:
++            raise PositionLimitReached(
++                f"the temporal RoPE table has {self.rope_frames} latent slots; block {end_block} "
++                f"would need latents up to {(end_block + 1) * block - 1}")
++
++        current_start_frame = start_block * block
++        current_end_frame = (end_block + 1) * block
++        current_num_frames = current_end_frame - current_start_frame
++        full = self.window_blocks * block
++        entering = total_blocks is None or self.window_index < total_blocks
++
++        if current_num_frames == full or current_start_frame == 0:
++            parts = [self.noisy[b] for b in range(start_block, end_block)]
++            parts.append(torch.randn([batch_size, block, num_channels, height, width],
++                                     device=self.device, dtype=self.dtype))
++            noisy_input = torch.cat(parts, dim=1)
++        else:
++            noisy_input = torch.cat([self.noisy[b] for b in range(start_block, end_block + 1)], dim=1)
++
++        if current_num_frames == full:
++            current_timestep = self.shared_timestep.clone()
++        elif current_start_frame == 0:
++            current_timestep = self.shared_timestep[:, -current_num_frames:].clone()
++        elif total_blocks is not None and current_end_frame == total_blocks * block:
++            current_timestep = self.shared_timestep[:, :current_num_frames].clone()
++        else:
++            raise ValueError("current_num_frames should be full window, first window, or last window")
++
++        if current_start_frame == 0:
++            noisy_input[:, :1] = self.initial_latent[:, :1]
++            current_timestep[:, :1] = 0
++
++        if entering and new_block_hint is not None:
++            self.hints[end_block] = new_block_hint
++        hint_input = None
++        if self.hints:
++            hint_input = torch.cat([self.hints[b] for b in range(start_block, end_block + 1)], dim=1)
++
++        _, denoised_pred = pipe.generator(
++            noisy_image_or_video=noisy_input,
++            conditional_dict=self.conditional_dict,
++            timestep=current_timestep,
++            kv_cache=pipe.kv_cache1,
++            crossattn_cache=pipe.crossattn_cache,
++            kv_cache2=pipe.kv_cache2,
++            crossattn_cache2=pipe.crossattn_cache2,
++            current_start=current_start_frame * pipe.frame_seq_length,
++            hint=hint_input,
++            masked_latent=masked_latent,
++        )
++
++        clean = None
++        with torch.no_grad():
++            for block_idx in range(start_block, end_block + 1):
++                local_start = (block_idx - start_block) * block
++                local_end = local_start + block
++                block_timestep_values = current_timestep[:, local_start:local_end].reshape(-1).float()
++                non_zero_values = block_timestep_values[block_timestep_values > 0]
++                if non_zero_values.numel() > 0:
++                    block_timestep = non_zero_values.float().mean().item()
++                else:
++                    block_timestep = block_timestep_values.float().mean().item()
++                matches = torch.abs(pipe.denoising_step_list.float() - block_timestep) < 1e-4
++                matched_indices = torch.nonzero(matches, as_tuple=True)[0]
++                if matched_indices.numel() == 0:
++                    nearest_idx = torch.argmin(torch.abs(pipe.denoising_step_list.float() - block_timestep)).item()
++                    nearest_step = pipe.denoising_step_list[nearest_idx].item()
++                    if abs(float(nearest_step) - float(block_timestep)) < 1e-2:
++                        matched_indices = torch.tensor([nearest_idx], device=self.device)
++                    else:
++                        raise RuntimeError(f"Cannot map block timestep {block_timestep} to denoising_step_list")
++                block_timestep_index = int(matched_indices[0].item())
++                if block_timestep_index == len(pipe.denoising_step_list) - 1:
++                    # this block leaves the window clean
++                    clean = (block_idx, denoised_pred[:, local_start:local_end])
++                    self.noisy.pop(block_idx, None)
++                    continue
++                next_timestep = pipe.denoising_step_list[block_timestep_index + 1].to(self.device)
++                updated_noisy = pipe.scheduler.add_noise(
++                    denoised_pred.flatten(0, 1),
++                    torch.randn_like(denoised_pred.flatten(0, 1)),
++                    next_timestep * torch.ones([batch_size * current_num_frames], device=self.device, dtype=torch.long),
++                ).unflatten(0, denoised_pred.shape[:2])
++                self.noisy[block_idx] = updated_noisy[:, local_start:local_end]
++
++        with torch.no_grad():
++            context_denoised_pred = denoised_pred[:, :block].clone()
++            context_timestep = torch.ones_like(current_timestep[:, :block]) * pipe.args.context_noise
++            if current_start_frame == 0:
++                context_denoised_pred[:, :1] = self.initial_latent[:, :1]
++            context_hint = None
++            if hint_input is not None:
++                context_hint = hint_input[:, :block]
++            pipe.generator(
++                noisy_image_or_video=context_denoised_pred,
++                conditional_dict=self.conditional_dict,
++                timestep=context_timestep,
++                kv_cache=pipe.kv_cache1,
++                crossattn_cache=pipe.crossattn_cache,
++                kv_cache2=pipe.kv_cache2,
++                crossattn_cache2=pipe.crossattn_cache2,
++                current_start=current_start_frame * pipe.frame_seq_length,
++                hint=context_hint,
++                masked_latent=masked_latent,
++                updating_cache=True,
++            )
++
++        self.window_index += 1
++        # keep only what the next window reads: bounded to the window's blocks
++        next_start = max(0, self.window_index - self.window_blocks + 1)
++        for b in [b for b in self.hints if b < next_start]:
++            self.hints.pop(b)
++        return clean
++
++
++class BlockDecoder:
++    """Wan2.2 VAE decode, one clean block at a time.
++
++    `WanVAE_.decode` already walks the latent frames one by one with a causal feature cache; this
++    is that loop, kept alive across calls instead of clearing the cache per clip. The arithmetic
++    (scale with `1.0 / std.to(dtype)`, conv2, the per-frame decoder, unpatchify, clamp) is the
++    same as `WanVAEWrapper.decode_to_pixel(..., use_cache=False)`.
++    """
++
++    def __init__(self, vae_wrapper):
++        self.vae = vae_wrapper
++        self.model = vae_wrapper.model
++        self.reset()
++
++    def reset(self):
++        self.model.clear_cache()
++        self.first = True
++
++    def decode(self, latents: torch.Tensor) -> torch.Tensor:
++        """latents [1, t, C, h, w] -> frames [1, T, 3, H, W] in [0, 1] (T = 1 + 4(t-1) on the first call, 4t after)."""
++        from wan.modules.vae2_2 import unpatchify
++        if latents.shape[0] != 1:
++            raise ValueError("BlockDecoder decodes batch size 1")
++        model = self.model
++        z = latents.permute(0, 2, 1, 3, 4)
++        device, dtype = z.device, z.dtype
++        mean = self.vae.mean.to(device=device, dtype=dtype)
++        inv = 1.0 / self.vae.std.to(device=device, dtype=dtype)
++        z = z / inv.view(1, model.z_dim, 1, 1, 1) + mean.view(1, model.z_dim, 1, 1, 1)
++        x = model.conv2(z)
++        outs = []
++        for i in range(x.shape[2]):
++            model._conv_idx = [0]
++            if self.first:
++                outs.append(model.decoder(x[:, :, i:i + 1], feat_cache=model._feat_map,
++                                          feat_idx=model._conv_idx, first_chunk=True))
++                self.first = False
++            else:
++                outs.append(model.decoder(x[:, :, i:i + 1], feat_cache=model._feat_map,
++                                          feat_idx=model._conv_idx))
++        out = unpatchify(torch.cat(outs, 2), patch_size=2).float().clamp_(-1, 1)
++        video = out.permute(0, 2, 1, 3, 4)
++        return (video * 0.5 + 0.5).clamp(0, 1)
++
++
++def encode_first_frame(pipe, image: torch.Tensor) -> torch.Tensor:
++    """First frame [B, 1, 3, H, W] (0..255) -> its latent [B, 1, C, h, w] bf16, as inference_rolling_forcing does."""
++    image = image.to(pipe.generator.model.device, dtype=torch.bfloat16)
++    image = image.permute(0, 2, 1, 3, 4)
++    image = image / 255.0
++    image = image * 2.0 - 1.0
++    return pipe.vae.encode_to_latent(image).to(device=pipe.generator.model.device, dtype=torch.bfloat16)
+diff --git a/utils/wan_wrapper.py b/utils/wan_wrapper.py
+index 8c02284..13a3f82 100644
+--- a/utils/wan_wrapper.py
++++ b/utils/wan_wrapper.py
+@@ -35,6 +35,11 @@ def filter_kwargs_for_ctor(cls, kwargs):
+     allowed = set(p.name for p in sig.parameters.values() if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY))
+     return {k: v for k, v in kwargs.items() if k in allowed}
+ 
++
++# Directory holding the Wan2.2 base weights (Wan2.2-TI2V-5B/). The scripts run from the repo root
++# and keep the default; a served model sets it to its weights root at load.
++WAN_MODELS_ROOT = "wan_models"
++
+ class WanTextEncoder(torch.nn.Module):
+     def __init__(self) -> None:
+         super().__init__()
+@@ -46,12 +51,12 @@ class WanTextEncoder(torch.nn.Module):
+             device=torch.device('cpu')
+         ).eval().requires_grad_(False)
+         self.text_encoder.load_state_dict(
+-            torch.load("wan_models/Wan2.2-TI2V-5B/models_t5_umt5-xxl-enc-bf16.pth",
++            torch.load(f"{WAN_MODELS_ROOT}/Wan2.2-TI2V-5B/models_t5_umt5-xxl-enc-bf16.pth",
+                        map_location='cpu', weights_only=False)
+         )
+ 
+         self.tokenizer = HuggingfaceTokenizer(
+-            name="wan_models/Wan2.2-TI2V-5B/google/umt5-xxl/", seq_len=512, clean='whitespace')
++            name=f"{WAN_MODELS_ROOT}/Wan2.2-TI2V-5B/google/umt5-xxl/", seq_len=512, clean='whitespace')
+ 
+     @property
+     def device(self):
+@@ -188,7 +193,7 @@ class WanVAEWrapper(torch.nn.Module):
+ 
+         # init model
+         self.model = _video_vae(
+-            pretrained_path="wan_models/Wan2.2-TI2V-5B/Wan2.2_VAE.pth",
++            pretrained_path=f"{WAN_MODELS_ROOT}/Wan2.2-TI2V-5B/Wan2.2_VAE.pth",
+             z_dim=48,
+             temperal_downsample=[False, True, True],
+         ).eval().requires_grad_(False)
+@@ -353,10 +358,10 @@ class WanControlNetWrapper(WanDiffusionWrapper):
+             sink_size=sink_size,
+         )
+         self.model = ControlledWanModel.from_pretrained(
+-                f"wan_models/{model_name}/", local_attn_size=local_attn_size, sink_size=sink_size)
++                f"{WAN_MODELS_ROOT}/{model_name}/", local_attn_size=local_attn_size, sink_size=sink_size)
+ 
+         self.control_model = ControlNet.from_pretrained(
+-                f"wan_models/{model_name}/", ignore_mismatched_sizes=True, local_attn_size=local_attn_size, sink_size=sink_size, strict=False, low_cpu_mem_usage=False, device_map=None, dropout=dropout, controlnet_layers=controlnet_layers)
++                f"{WAN_MODELS_ROOT}/{model_name}/", ignore_mismatched_sizes=True, local_attn_size=local_attn_size, sink_size=sink_size, strict=False, low_cpu_mem_usage=False, device_map=None, dropout=dropout, controlnet_layers=controlnet_layers)
+         self.control_weight = control_weight
+         self._init_zeros()
+ 
+@@ -550,13 +555,13 @@ class CausalWanControlNetWrapper(WanDiffusionWrapper):
+ 
+             # Build on 'meta' so we don't allocate memory yet
+             with init_empty_weights():
+-                base_cfg = CausalControlledWanModel.load_config(f"wan_models/{model_name}")
++                base_cfg = CausalControlledWanModel.load_config(f"{WAN_MODELS_ROOT}/{model_name}")
+                 cfg = load_cfg_as_dict(base_cfg)
+                 cfg.update(filter_kwargs_for_ctor(CausalControlledWanModel, extra_kwargs))
+                 self.model = CausalControlledWanModel.from_config(cfg)
+ 
+             with init_empty_weights():
+-                base_cfg = CausalControlNet.load_config(f"wan_models/{model_name}")
++                base_cfg = CausalControlNet.load_config(f"{WAN_MODELS_ROOT}/{model_name}")
+                 cfg = load_cfg_as_dict(base_cfg)
+                 # controlnet-specific extras you want passed to __init__
+                 control_extras = dict(
+@@ -574,7 +579,7 @@ class CausalWanControlNetWrapper(WanDiffusionWrapper):
+             self.control_weight = control_weight
+         else:
+             self.model = CausalControlledWanModel.from_pretrained(
+-                    f"wan_models/{model_name}/",
++                    f"{WAN_MODELS_ROOT}/{model_name}/",
+                     local_attn_size=local_attn_size,
+                     sink_size=sink_size,
+                     rolling_forcing_attention=rolling_forcing_attention,
+@@ -583,7 +588,7 @@ class CausalWanControlNetWrapper(WanDiffusionWrapper):
+             )
+ 
+             self.control_model = CausalControlNet.from_pretrained(
+-                    f"wan_models/{model_name}/", ignore_mismatched_sizes=True, local_attn_size=local_attn_size, sink_size=sink_size, rolling_forcing_attention=rolling_forcing_attention, rolling_forcing_block_frames=rolling_forcing_block_frames, rolling_forcing_max_frames=rolling_forcing_max_frames, strict=False, low_cpu_mem_usage=False, device_map=None, dropout=dropout, controlnet_layers=controlnet_layers)
++                    f"{WAN_MODELS_ROOT}/{model_name}/", ignore_mismatched_sizes=True, local_attn_size=local_attn_size, sink_size=sink_size, rolling_forcing_attention=rolling_forcing_attention, rolling_forcing_block_frames=rolling_forcing_block_frames, rolling_forcing_max_frames=rolling_forcing_max_frames, strict=False, low_cpu_mem_usage=False, device_map=None, dropout=dropout, controlnet_layers=controlnet_layers)
+             self.control_weight = control_weight
+             self._init_zeros()
+ 

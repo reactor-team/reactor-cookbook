@@ -1,0 +1,40 @@
+# Read by streamforce_assets.read_config (source, wan, checkpoint) and by
+# StreamForceModel.load (model, freeze, warmup_windows). Paths resolve under
+# runtime.weights_path.
+
+source:
+  path: StreamForce
+  url: https://github.com/neu-3dvi/StreamForce.git
+  revision: 57a15e95eca25bbbb32d6ac6322ba3e12fd45083
+
+wan:
+  # Text encoder, VAE and base DiT the student is built on; public, downloaded on first start.
+  repo_id: Wan-AI/Wan2.2-TI2V-5B
+  revision: 921dbaf3f1674a56f47e83fb80a34bac8a8f203e
+
+checkpoint:
+  # The StreamForce v1 student. The authors distribute it on Google Drive only, so it is a
+  # manual download (README); startup refuses another file.
+  path: model.pt
+  bytes: 61486967303
+  download_url: https://drive.google.com/file/d/1ZaOEVMzOxAtcadX2c8hBF6wA7BrtUTOi/view?usp=sharing
+
+model:
+  config: configs/dmd_everything.yaml  # merged over configs/default_config.yaml in the source
+  use_ema: true
+  height: 480
+  width: 832
+  control_weight: 1.0
+  rolling_forcing_block_frames: 3
+  rolling_forcing_max_frames: 21
+  rolling_forcing_cache_frames: 96
+
+# Deterministic kernels, so the same inputs and seed give the same video.
+freeze:
+  cudnn_benchmark: false
+  cudnn_deterministic: true
+  use_deterministic_algorithms: true
+  cublas_workspace_config: ":4096:8"
+
+# Windows run per force mode at load (point, then wind) at a 1280x720 image, then forgotten.
+warmup_windows: 6
