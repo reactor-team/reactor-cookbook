@@ -197,4 +197,3 @@ The upstream root and vendored MemRoPE LICENSE files declare Apache-2.0, while
 `SPDX-License-Identifier: CC-BY-NC-SA-4.0` header. The released DMD checkpoint card
 does not specify a license. These upstream ambiguities need clarification before
 redistribution or commercial use; this port does not relicense those materials.
-See [NOTICE.md](NOTICE.md) for exact source links.
