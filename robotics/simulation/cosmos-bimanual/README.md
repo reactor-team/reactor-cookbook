@@ -9,7 +9,7 @@ an image of another robot does not make that embodiment supported.
 
 Requires Python3.11+, uv, and a Reactor API key with access to
 `reactor/cosmos3-nano-sim-bimanual`. No local GPU or model download is needed.
-The Python SDK uses the unqualified model name in `session.py`.
+The client uses this fully qualified model name in `session.py`.
 
 Use NVIDIA's public AgiBot example for your first run. The command below downloads
 only the starting image from a pinned checkpoint revision, not model weights.
