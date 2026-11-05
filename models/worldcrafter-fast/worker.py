@@ -80,11 +80,11 @@ def main():
                         raise ValueError("A new world requires an anchor image")
                     up = None
                     with Image.open(args.root / "anchor.image") as source:
-                        image = ImageOps.exif_transpose(source).convert("RGB")
+                        image = native_image(ImageOps.exif_transpose(source).convert("RGB"))
                     if request["gravity_align"]:
                         from worldcrafter.calibration import calibrate_image
                         up = calibrate_image(image)["world_up"]
-                    anchor = generation_image(image, engine.pipe.video_processor)
+                    anchor = generation_image(image)
                     engine.initialize_session(anchor, request["prompt"],
                                               request["seed"], args.max_chunks, cancel)
                     world_id = request["world_id"]
@@ -92,15 +92,19 @@ def main():
                 if engine.index >= args.max_chunks:
                     raise ValueError("World chunk limit reached")
                 with np.load(args.root / "poses.npz", allow_pickle=False) as poses:
-                    local, world = poses["local"], poses["world"]
-                expected = (33 * (engine.index + 1), 3, 4)
+                    if "path" in poses:
+                        local, world = path_poses(poses["path"], up, engine.index)
+                    else:
+                        local, world = poses["local"], poses["world"]
+                frames = 33 * (engine.index + 1)
                 for value in (local, world):
-                    if value.shape != expected or value.dtype != np.float32 or not np.isfinite(value).all():
+                    if value.ndim != 3 or len(value) != frames or value.shape[1:] not in ((3, 4), (4, 4)) \
+                            or value.dtype != np.float32 or not np.isfinite(value).all():
                         raise ValueError("Invalid cumulative camera poses")
                 result = engine.next_chunk(None, poses=(local, world))
                 np.save(args.root / "frames.npy", result["frames"], allow_pickle=False)
                 reply = dict(id=identity, world_id=world_id, chunk_index=result["chunk_index"],
-                             camera_end=result["global_pose"][-1].tolist(),
+                             camera_end=result["global_pose"][-1][:3].tolist(),
                              gravity_aligned=gravity_aligned, gpu_count=size,
                              world_up=up)
                 print("REACTOR_CHUNK " + json.dumps(dict(reply,
@@ -131,7 +135,7 @@ def warm_up(engine, chunks, max_chunks, cancel):
     gradient = np.linspace(0, 255, 640, dtype=np.uint8)[None, :, None].repeat(384, 0).repeat(3, 2)
     image = Image.fromarray(gradient)
     calibrate_image(image)
-    engine.initialize_session(generation_image(image, engine.pipe.video_processor),
+    engine.initialize_session(generation_image(native_image(image)),
                               WARMUP_PROMPT, 0, max_chunks, cancel)
     planner = CameraPlanner()
     for index in range(chunks):
@@ -141,18 +145,45 @@ def warm_up(engine, chunks, max_chunks, cancel):
     print(f"WorldCrafter warmup complete: {chunks} chunks in {time.monotonic() - started:.1f} s", flush=True)
 
 
-def generation_image(image, processor):
-    """Use native resize, then pass a small lossless image to the path-based engine.
+def native_image(image):
+    """Resize an upright RGB image exactly as upstream ``inference.py`` does.
 
-    GeoCalib receives the full-resolution upright RGB image before this call.
-    The engine's preprocessing sees the same resized pixels; resizing to the
-    same dimensions again is an identity operation.
+    Upstream I2V stretches the input to 640x384 with PIL's default filter,
+    ``load_image(path).resize((640, 384))``, and calibrates gravity on that
+    same resized image (``worldcrafter/cli.py`` ``prepare_camera``).
     """
-    resized = processor.resize(image, height=384, width=640)
+    return image.resize((640, 384))
+
+
+def generation_image(image):
+    """Pass the 640x384 image losslessly to the path-based engine.
+
+    The engine's preprocessing resizes to the same dimensions, an identity.
+    """
     buffer = io.BytesIO()
-    resized.save(buffer, format="PNG")
+    image.save(buffer, format="PNG")
     buffer.seek(0)
     return buffer
+
+
+def path_poses(path, up, index):
+    """Return cumulative (local, world) poses for an uploaded camera path prefix.
+
+    Mirrors upstream ``inference.py --camera-path``: ``align_trajectory`` when
+    gravity calibration succeeded (``cli.py`` ``prepare_camera``), the aligned
+    global c2w as float32, and chunk-relative poses from ``relative_poses`` on
+    each 33-frame window (``ucpe.bridge._relative_pose_chunk``). Alignment is
+    per pose relative to pose zero, so a prefix aligns as the full path does.
+    """
+    import numpy as np
+    from worldcrafter.camera import relative_poses
+    from worldcrafter.gravity import align_trajectory
+    if path.shape != (33 * (index + 1), 4, 4) or path.dtype != np.float32 or not np.isfinite(path).all():
+        raise ValueError("Invalid cumulative camera path")
+    world = align_trajectory(path, up) if up is not None else path
+    world = np.ascontiguousarray(world, dtype=np.float32)
+    local = np.concatenate([relative_poses(world[k * 33:(k + 1) * 33]) for k in range(index + 1)])
+    return local, world
 
 
 if __name__ == "__main__":

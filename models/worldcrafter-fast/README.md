@@ -6,7 +6,7 @@ Reactor's `main_video` track and supports one GPU or eight GPUs on one host.
 The eight-GPU configuration uses WorldCrafter's context-parallel DiT, fused
 KV/RoPE path, geometry cache and eight-GPU VAE pipeline.
 
-The adapter uses Reactor Runtime **3.8.3**. WorldCrafter runs in a separate
+The adapter uses Reactor Runtime **3.10.0**. WorldCrafter runs in a separate
 Python **3.11** / NumPy **1** environment because the Runtime requires Python
 **3.12** / NumPy **2**. Communication stays on a private local Unix socket;
 frames cross as uint8 RGB NumPy arrays without pickle. An eight-GPU worker
@@ -83,7 +83,7 @@ must be arranged with Reactor; a local build does not provision a hosted model.
 ### Direct Runtime development
 
 For development without Docker, create a Python 3.12 environment on local SSD,
-install `reactor-runtime==3.8.3`, `requirements.txt` and `uv==0.11.19`, then:
+install `reactor-runtime==3.10.0`, `requirements.txt` and `uv==0.11.19`, then:
 
 ```bash
 export WORLDCRAFTER_ROOT=/local-ssd/worldcrafter-reactor
@@ -121,6 +121,7 @@ credentials in the model folder.
 | --- | --- | --- |
 | `start_world` | Uploaded image, nonempty scene prompt, seed, `gravity_align` | Starts a fresh world and emits one stationary chunk. |
 | `move` | `action`, `amount`, `chunks` | Queues one to eight camera chunks. |
+| `set_camera_path` | Uploaded JSON `trajectory` | Restarts the selected world along a finite camera path. |
 | `pause` | None | Pauses before the next chunk; the in-flight chunk may finish. |
 | `resume` | None | Continues queued motion. |
 | `reset` | None | Clears exploration history and restarts the selected image and seed. |
@@ -141,8 +142,9 @@ weights remain resident for the next session.
 Viewers share one rollout and motion queue. Disconnecting one viewer does not
 pause it or discard accepted actions. Runtime suspends generation when no
 viewers remain and owns session teardown. Upload validation runs off the event
-loop; the original encoded image crosses to the worker, where full-resolution
-EXIF-corrected RGB is calibrated before native generation preprocessing.
+loop; the original encoded image crosses to the worker, which applies EXIF
+orientation and stretches it to 640x384 with PIL's default filter, as upstream
+`inference.py` does. GeoCalib calibrates that same resized image.
 
 `process_input()` plans cumulative camera poses on the CPU. Immutable step
 inputs carry float32 local and world c2w arrays to the inference worker; the
@@ -156,6 +158,32 @@ chunk's 33 frames play over the time the chunk took to generate.
 Each model frame carries `world_id`, `chunk_index` and zero-based `frame_index`
 metadata. These identify frames across resets and distinguish repeated pacer
 frames from new model output, including completely dark frames.
+
+## Finite camera paths
+
+After `start_world`, `set_camera_path(trajectory)` accepts a JSON upload
+`{"poses": [...]}` with shape `[33 * chunks, 4, 4]`, at most `max_chunks`
+chunks and 16 MiB. Poses are global camera-to-world matrices in WorldCrafter's
+right/down/forward convention, one per output frame; pose zero is the input
+image's camera. They are kept as uploaded: these are the poses upstream
+`inference.py --camera-path` reads from `camera.npy`. With `gravity_align` on,
+the worker applies upstream's `align_trajectory` with the calibrated gravity,
+then derives each chunk's relative poses with upstream `relative_poses`.
+
+The command starts a fresh world from the selected image, prompt and seed and
+returns `camera_path_selected`. Each chunk emits 33 frames; generation stops
+at the path end. `reset` replays the path, `move` is refused with
+`camera_path_active`, and `start_world` restores camera motion commands.
+`state_update.camera_path_chunks` reports the path length.
+
+## Stepped evaluation
+
+The workspace uses the released Reactor Runtime 3.10.0. A client can select
+`generation="stepped"` and call `await client.step()` to receive each native
+33-frame chunk directly on `main_video`. The same application serves streamed
+sessions. Rebuild the image after updating the Runtime pin. WBench supplies
+its camera path through `set_camera_path`; no model-specific step command is
+required.
 
 ## Test with an actual client
 

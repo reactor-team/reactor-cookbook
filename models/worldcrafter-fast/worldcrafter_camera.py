@@ -1,4 +1,6 @@
 """CPU camera planning in WorldCrafter's right/down/forward c2w convention."""
+from dataclasses import dataclass
+import json
 import math
 
 import numpy as np
@@ -11,6 +13,56 @@ ACTIONS = TRANSLATIONS + ROTATIONS
 MAX_TRANSLATION = 5.0
 MAX_ROTATION = 45.0
 MAX_CHUNKS_PER_MOVE = 8
+MAX_CAMERA_PATH_BYTES = 16 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class CameraPath:
+    """Finite global c2w path, float32 ``(33 * chunks, 4, 4)``; pose zero is the input image.
+
+    These are the poses upstream ``inference.py --camera-path`` reads, unchanged:
+    one per output frame, unaligned to gravity. The worker applies upstream's
+    gravity alignment and chunk-relative pose derivation.
+    """
+    poses: np.ndarray
+
+    @property
+    def chunks(self) -> int:
+        return len(self.poses) // FRAMES
+
+
+def load_camera_path(data: bytes, max_chunks: int) -> CameraPath:
+    """Parse ``{"poses": [33 * chunks, 4, 4]}``; raise ValueError for an unusable path.
+
+    Rotation tolerances follow upstream ``load_camera``. Poses are kept as
+    uploaded, as upstream keeps a ``camera.npy``: the model conditions on
+    chunk-relative poses, and gravity alignment is about pose zero.
+    """
+    if len(data) > MAX_CAMERA_PATH_BYTES:
+        raise ValueError("Camera path exceeds 16 MiB")
+    try:
+        payload = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Camera path must be JSON") from exc
+    if not isinstance(payload, dict) or set(payload) != {"poses"}:
+        raise ValueError("Camera path must contain only poses")
+    try:
+        poses = np.asarray(payload["poses"], dtype=np.float64)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("poses must be numeric") from exc
+    if poses.ndim != 3 or poses.shape[1:] != (4, 4):
+        raise ValueError("poses must have shape [N, 4, 4]")
+    if not FRAMES <= len(poses) <= max_chunks * FRAMES or len(poses) % FRAMES:
+        raise ValueError(f"A path needs {FRAMES} * chunks poses, at most {max_chunks} chunks")
+    if not np.isfinite(poses).all() or not np.allclose(poses[:, 3], [0, 0, 0, 1], atol=1e-5, rtol=0):
+        raise ValueError("Camera poses must be finite homogeneous transforms")
+    rotation = poses[:, :3, :3]
+    if (not np.allclose(np.swapaxes(rotation, -1, -2) @ rotation, np.eye(3), atol=5e-3, rtol=0)
+            or not np.allclose(np.linalg.det(rotation), 1, atol=5e-3, rtol=0)):
+        raise ValueError("Camera poses require proper rotations")
+    poses = np.ascontiguousarray(poses.astype(np.float32))
+    poses.setflags(write=False)
+    return CameraPath(poses)
 
 
 def validate_motion(action: str, amount: float, chunks: int):
