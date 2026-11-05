@@ -67,12 +67,27 @@ class StateUpdate(ModelMessage):
     next_chunk: int | None = MessageField(
         description=(
             "One-based chunk that will consume the queued prompt and keys, or null before an "
-            "image is selected."
+            "image is selected or after the rollout limit."
         )
     )
     max_chunks: int = MessageField(
-        description="Chunk count that automatically starts a fresh rollout from the same image."
+        description="Configured rollout bound; generation stops at this limit. Uploaded paths stop at camera_path_chunks."
     )
+    camera_path_chunks: int = MessageField(
+        default=0,
+        description="Finite camera-path length, or zero for keyboard controls.",
+    )
+    camera_path_complete: bool = MessageField(
+        default=False,
+        description="Whether the uploaded path has finished; reset rewinds it.",
+    )
+
+
+class CameraPathSelected(ModelMessage):
+    """Acknowledges a finite uploaded camera path queued from the selected image."""
+
+    chunks: int = MessageField(description="Number of chunks in the path.")
+    frames: int = MessageField(description="Total RGB frames in the path.")
 
 
 class ImageSelected(ModelMessage):
@@ -118,13 +133,10 @@ class ActionChanged(ModelMessage):
 
 
 class RolloutResetQueued(ModelMessage):
-    """Emitted when a manual or automatic reset queues a fresh rollout."""
+    """Emitted when an explicit reset queues a fresh rollout."""
 
-    trigger: Literal["manual", "automatic_chunk_limit"] = MessageField(
-        description=(
-            'Reset source: "manual" for `reset` or "automatic_chunk_limit" after '
-            "`max_chunks` completes."
-        )
+    trigger: Literal["manual"] = MessageField(
+        description='Reset source: "manual" for `reset`.'
     )
     seed: int = MessageField(
         description="Random seed that will initialize the queued fresh rollout."

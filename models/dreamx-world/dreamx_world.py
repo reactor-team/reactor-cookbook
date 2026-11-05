@@ -6,10 +6,16 @@ import secrets
 from pathlib import Path
 
 from dreamx_assets import prepare_runtime_assets, read_config
-from dreamx_camera import FRAMES_PER_CHUNK, DreamXCameraController
+from dreamx_camera import (
+    FRAMES_PER_CHUNK,
+    CameraPath,
+    DreamXCameraController,
+    load_camera_path,
+)
 from dreamx_images import validate_uploaded_image
 from dreamx_types import (
     ActionChanged,
+    CameraPathSelected,
     ChunkGenerated,
     DreamXWorldOutput,
     DreamXWorldState,
@@ -62,6 +68,7 @@ class DreamXWorld(ReactorApp):
         self._chunk_index = 0
         self._active_prompt = ""
         self._generating = False
+        self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
         """Prepare pinned public assets and load DreamX-World once on the GPU.
@@ -85,6 +92,7 @@ class DreamXWorld(ReactorApp):
         self._clear_controls()
         self.state._applied_world_id = None
         self._selected_input = None
+        self._camera_path = None
         self._image_source = None
         self._seed = config.seed
         self._chunk_index = 0
@@ -100,6 +108,7 @@ class DreamXWorld(ReactorApp):
             self._clear_controls()
             self.state._applied_world_id = None
             self._selected_input = None
+            self._camera_path = None
             self._image_source = None
             self._chunk_index = 0
             self._active_prompt = ""
@@ -256,6 +265,10 @@ class DreamXWorld(ReactorApp):
     ) -> ActionChanged:
         """Update one held camera key and report the complete native input state."""
         self._require_selected_image()
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active", "Select an image to return to keyboard controls."
+            )
         if pressed:
             self.state._pressed_keys = self.state._pressed_keys.union((key,))
         else:
@@ -306,6 +319,30 @@ class DreamXWorld(ReactorApp):
         await self.send(self._state_update())
         return message
 
+    @event(
+        name="set_camera_path",
+        description="Queue a finite camera-to-world trajectory from the selected image. JSON poses are sampled once per output RGB frame. Reset rewinds the path; selecting an image restores keyboard controls. Emits `camera_path_selected` and `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path.",
+    )
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
+            description="JSON with poses[N,4,4], N=12*chunks-3. Finite orthonormal camera-to-world transforms; at most 2 MiB. Native camera intrinsics are retained.",
+        ),
+    ) -> CameraPathSelected:
+        self._require_selected_image()
+        try:
+            path = load_camera_path(
+                trajectory.data, self._require_config().max_chunks_per_rollout
+            )
+        except (ValueError, TypeError, OverflowError) as error:
+            raise CommandError("invalid_camera_path", str(error)) from error
+        self._camera_path = path
+        self._request_reset()
+        self._chunk_index = 0
+        await self.send(self._state_update())
+        return CameraPathSelected(chunks=len(path.chunks), frames=path.frames)
+
     async def process_input(self) -> DreamXInput:
         """Snapshot one native step after an image is selected."""
         if self._selected_input is None:
@@ -316,16 +353,33 @@ class DreamXWorld(ReactorApp):
         if self._camera is None:
             raise RuntimeError("DreamX-World was not loaded")
         new_world = self.state._world_id != self.state._applied_world_id
+        if (
+            not new_world
+            and self._chunk_index >= self._require_config().max_chunks_per_rollout
+        ):
+            raise ApplicationError("Rollout complete; reset or select an image.")
         anchor = None
         if new_world:
             self._camera.reset()
             image = self._selected_input
             anchor = DreamXAnchor(
-                image.data if isinstance(image, UploadedFile) else image, self._seed
+                image.data if isinstance(image, UploadedFile) else image,
+                self._seed,
+                len(self._camera_path.chunks)
+                if self._camera_path is not None
+                else self._require_config().max_chunks_per_rollout,
             )
-        camera = self._camera.plan_chunk(
-            self.state._pressed_keys, first_chunk=new_world
-        )
+        if self._camera_path is not None:
+            index = 0 if new_world else self._chunk_index
+            if index >= len(self._camera_path.chunks):
+                raise ApplicationError(
+                    "Camera path complete; reset or select an image."
+                )
+            camera = self._camera_path.chunks[index]
+        else:
+            camera = self._camera.plan_chunk(
+                self.state._pressed_keys, first_chunk=new_world
+            )
         snapshot = DreamXInput(
             world_id=self.state._world_id,
             anchor=anchor,
@@ -340,7 +394,7 @@ class DreamXWorld(ReactorApp):
         return self._engine.generate(input)
 
     async def process_output(self, outcome: StepOutcome) -> DreamXWorldOutput:
-        """Publish a completed chunk and queue bounded rollout resets."""
+        """Publish a completed chunk while retaining its native rollout state."""
         self._generating = False
         if outcome.error is not None:
             # Contract violations and GPU failures cannot be repaired by a silent reset.
@@ -360,17 +414,6 @@ class DreamXWorld(ReactorApp):
                 inference_seconds=round(outcome.elapsed, 3),
             )
         )
-        if result.complete:
-            self._clear_controls()
-            self.state._world_id += 1
-            await self.send(
-                RolloutResetQueued(
-                    trigger="automatic_chunk_limit",
-                    seed=self._seed,
-                    completed_chunks=self._chunk_index,
-                    applies_to_chunk=1,
-                )
-            )
         await self.send(self._state_update())
         return DreamXWorldOutput(main_video=result.frames)
 
@@ -382,6 +425,7 @@ class DreamXWorld(ReactorApp):
     ) -> None:
         """Queue one selected image and prompt as a fresh continuous rollout."""
         self._selected_input = image
+        self._camera_path = None
         self._image_source = source
         self.state.prompt = prompt
         self._request_reset()
@@ -409,6 +453,16 @@ class DreamXWorld(ReactorApp):
         config = self._config
         selected = self._selected_input
         image_name = selected.name if selected is not None else None
+        complete = bool(
+            config is not None
+            and self.state._world_id == self.state._applied_world_id
+            and self._chunk_index
+            >= (
+                len(self._camera_path.chunks)
+                if self._camera_path
+                else config.max_chunks_per_rollout
+            )
+        )
         return StateUpdate(
             image_source=self._image_source,
             image_name=image_name,
@@ -424,8 +478,16 @@ class DreamXWorld(ReactorApp):
             ),
             generating=self._generating,
             completed_chunks=self._chunk_index,
-            next_chunk=None if selected is None else self._next_chunk(),
+            next_chunk=None if selected is None or complete else self._next_chunk(),
             max_chunks=config.max_chunks_per_rollout if config is not None else 0,
+            camera_path_chunks=len(self._camera_path.chunks)
+            if self._camera_path
+            else 0,
+            camera_path_complete=bool(
+                self._camera_path
+                and self._chunk_index >= len(self._camera_path.chunks)
+                and self.state._world_id == self.state._applied_world_id
+            ),
         )
 
     def _require_config(self) -> DreamXConfig:

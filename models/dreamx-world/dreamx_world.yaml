@@ -33,5 +33,5 @@ inputs:
     stable geometry, and realistic motion.
 
 stream:
-  # Bound rollout bookkeeping while retaining automatic continuous play.
+  # Stop at the serving limit without resetting native history.
   max_chunks_per_rollout: 512

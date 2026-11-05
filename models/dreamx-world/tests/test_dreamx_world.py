@@ -107,7 +107,8 @@ def test_inference_emits_one_complete_frame_batch(monkeypatch: MonkeyPatch) -> N
             self.resets = 0
             self.prompts: list[str] = []
 
-        def reset(self, _seed: int, _image: Path) -> None:
+        def reset(self, _seed: int, _image: Path, chunks: int) -> None:
+            assert chunks == 512
             self.resets += 1
 
         def generate_chunk(
@@ -295,7 +296,7 @@ def test_model_error_is_not_acknowledged_or_counted(monkeypatch):
     assert asyncio.run(app.process_input()).anchor is not None
 
 
-def test_upload_reset_auto_reset_and_session_cleanup(monkeypatch):
+def test_upload_reset_limit_and_session_cleanup(monkeypatch):
     from dataclasses import replace
 
     app, messages = make_app(monkeypatch)
@@ -318,11 +319,14 @@ def test_upload_reset_auto_reset_and_session_cleanup(monkeypatch):
         await app.set_key_state("w", True)
         result = app.generate(input)
         await app.process_output(
-            dreamx_world.StepOutcome(result=replace(result, complete=True))
+            dreamx_world.StepOutcome(
+                result=replace(result, chunk_index=512, complete=True)
+            )
         )
-        assert isinstance(messages[-2], dreamx_types.RolloutResetQueued)
-        assert not app.state._pressed_keys
-        assert (await app.process_input()).anchor is not None
+        assert isinstance(messages[-2], dreamx_types.ChunkGenerated)
+        assert app.state._pressed_keys == {"w"}
+        with pytest.raises(dreamx_world.ApplicationError, match="Rollout complete"):
+            await app.process_input()
         app.on_session_ended()
         assert app._engine.resets == 1
         assert app._selected_input is None
@@ -347,8 +351,8 @@ def test_model_bookkeeping_guards_and_native_camera_forwarding():
             self.calls = []
             self.ends = 0
 
-        def reset(self, seed, image):
-            self.resets.append((seed, image))
+        def reset(self, seed, image, chunks):
+            self.resets.append((seed, image, chunks))
 
         def generate_chunk(self, prompt, camera):
             self.calls.append((prompt, camera))
@@ -367,18 +371,18 @@ def test_model_bookkeeping_guards_and_native_camera_forwarding():
         model.generate(input)
     from dataclasses import replace
 
-    first = model.generate(replace(input, anchor=DreamXAnchor(b"image", 42)))
+    first = model.generate(replace(input, anchor=DreamXAnchor(b"image", 42, 2)))
     second = model.generate(replace(input, prompt="Changed prompt"))
     assert first.chunk_index == 1 and not first.complete
     assert second.chunk_index == 2 and second.complete
-    assert backend.resets == [(42, b"image")]
+    assert backend.resets == [(42, b"image", 2)]
     assert backend.calls[-1][0] == "Changed prompt"
     assert backend.calls[-1][1].poses is poses
     with pytest.raises(RolloutExhausted):
         model.generate(input)
     assert (
         model.generate(
-            replace(input, world_id=2, anchor=DreamXAnchor(Path("image.png"), 77))
+            replace(input, world_id=2, anchor=DreamXAnchor(Path("image.png"), 77, 2))
         ).chunk_index
         == 1
     )

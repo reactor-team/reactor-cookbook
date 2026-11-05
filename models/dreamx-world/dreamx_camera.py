@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 
@@ -19,6 +20,47 @@ class CameraChunk:
 
     poses: np.ndarray
     reference_pose: np.ndarray | None
+
+
+@dataclass(frozen=True)
+class CameraPath:
+    """Finite RGB-sampled camera-to-world trajectory in native latent layout."""
+
+    chunks: tuple[CameraChunk, ...]
+    frames: int
+
+
+def load_camera_path(data: bytes, max_chunks: int) -> CameraPath:
+    if len(data) > 2 * 1024 * 1024:
+        raise ValueError("Camera path exceeds 2 MiB")
+    payload = json.loads(data)
+    if not isinstance(payload, dict) or set(payload) != {"poses"}:
+        raise ValueError("Expected JSON containing only poses")
+    poses = np.asarray(payload["poses"], dtype=np.float64)
+    if poses.ndim != 3 or poses.shape[1:] != (4, 4):
+        raise ValueError("poses must have shape [N,4,4]")
+    frames = len(poses)
+    if frames < 9 or (frames + 3) % 12 or (frames + 3) // 12 > max_chunks:
+        raise ValueError("Pose count must be 12*chunks-3 within the rollout limit")
+    if not np.isfinite(poses).all() or not np.allclose(
+        poses[:, 3], [0, 0, 0, 1], atol=1e-5
+    ):
+        raise ValueError("Poses must be finite homogeneous transforms")
+    rotations = poses[:, :3, :3]
+    if not np.allclose(
+        rotations @ rotations.transpose(0, 2, 1), np.eye(3), atol=1e-4
+    ) or not np.allclose(np.linalg.det(rotations), 1, atol=1e-4):
+        raise ValueError("Pose rotations must be proper orthonormal matrices")
+    indices = np.array([0] + list(range(1, frames - 3, 4)))
+    rows = np.zeros((len(indices), 19), dtype=np.float32)
+    rows[:, 0] = indices
+    rows[:, 1:5] = [0.8, 0.8, 0.5, 0.5]
+    rows[:, 7:] = np.linalg.inv(poses[indices])[:, :3].reshape(-1, 12)
+    chunks = tuple(
+        CameraChunk(rows[i : i + 3].copy(), None if i == 0 else rows[i - 1].copy())
+        for i in range(0, len(rows), 3)
+    )
+    return CameraPath(chunks, frames)
 
 
 class DreamXCameraController:
@@ -41,9 +83,7 @@ class DreamXCameraController:
         self, pressed_keys: frozenset[str], *, first_chunk: bool
     ) -> CameraChunk:
         """Return latent-aligned poses for one native three-latent-frame chunk."""
-        frame_count = (
-            _FIRST_CHUNK_PIXEL_FRAMES if first_chunk else FRAMES_PER_CHUNK
-        )
+        frame_count = _FIRST_CHUNK_PIXEL_FRAMES if first_chunk else FRAMES_PER_CHUNK
         selected_indices = (
             _FIRST_LATENT_INDICES if first_chunk else _LATER_LATENT_INDICES
         )

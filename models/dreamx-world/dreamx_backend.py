@@ -41,6 +41,7 @@ class DreamXBackend:
         self._dtype = torch.bfloat16
         self._pipeline = self._load_pipeline()
         self._initial_latent: torch.Tensor | None = None
+        self._noise: torch.Tensor | None = None
         self._conditional: dict[str, torch.Tensor] | None = None
         self._conditional_prompt = ""
         self._chunk_index = 0
@@ -52,8 +53,14 @@ class DreamXBackend:
         """Return the upstream rolling KV cache length in latent frames."""
         return int(self._pipeline.local_attn_size)
 
-    def reset(self, seed: int, image: Path | bytes) -> None:
-        """Start a fresh causal rollout from one image while retaining loaded weights."""
+    def reset(self, seed: int, image: Path | bytes, chunks: int) -> None:
+        """Start a fresh causal rollout from one image while retaining loaded weights.
+
+        Upstream draws the noise for every latent frame of a rollout in one call
+        before the first denoising step, so ``chunks`` fixes the rollout length.
+        """
+        if chunks < 1:
+            raise ValueError("DreamX-World rollouts need at least one chunk")
         set_seed = self._upstream_module("utils.misc").set_seed
         set_seed(seed)
         self._release_rollout()
@@ -63,6 +70,19 @@ class DreamXBackend:
                 device=self._device,
                 dtype=self._dtype,
             )
+            # Same draw, shape and order as inference_ar_forcing.py:295-296.
+            self._noise = torch.randn(
+                [
+                    1,
+                    chunks * _LATENT_FRAMES_PER_CHUNK,
+                    _LATENT_CHANNELS,
+                    _LATENT_HEIGHT,
+                    _LATENT_WIDTH,
+                ],
+                device=self._device,
+                dtype=self._dtype,
+            )
+            self._noise[:, 0] = self._initial_latent
         self._pipeline._initialize_kv_cache(
             1,
             self._dtype,
@@ -77,8 +97,15 @@ class DreamXBackend:
 
     def generate_chunk(self, prompt: str, camera_chunk: CameraChunk) -> np.ndarray:
         """Generate and decode exactly one native three-latent-frame chunk."""
-        if self._initial_latent is None or self._pipeline.kv_cache1 is None:
+        if (
+            self._initial_latent is None
+            or self._noise is None
+            or self._pipeline.kv_cache1 is None
+        ):
             raise RuntimeError("Reset DreamX-World with an image before generating")
+        start = self._current_start_frame
+        if start + _LATENT_FRAMES_PER_CHUNK > self._noise.shape[1]:
+            raise RuntimeError("DreamX-World rollout exceeded its reset length")
         prompt = prompt.strip()
         if not prompt:
             raise ValueError("DreamX-World requires a non-empty prompt")
@@ -87,19 +114,7 @@ class DreamXBackend:
         conditional = self._prompt_condition(prompt)
 
         with torch.inference_mode():
-            noise = torch.randn(
-                [
-                    1,
-                    _LATENT_FRAMES_PER_CHUNK,
-                    _LATENT_CHANNELS,
-                    _LATENT_HEIGHT,
-                    _LATENT_WIDTH,
-                ],
-                device=self._device,
-                dtype=self._dtype,
-            )
-            if first_chunk:
-                noise[:, 0] = self._initial_latent[:, 0]
+            noise = self._noise[:, start : start + _LATENT_FRAMES_PER_CHUNK]
             denoised = self._denoise_one_block(
                 noise,
                 conditional,
@@ -113,7 +128,8 @@ class DreamXBackend:
         frames = self._color_correct_chunk(frames)
         self._chunk_index += 1
         self._current_start_frame += _LATENT_FRAMES_PER_CHUNK
-        return np.ascontiguousarray(np.rint(frames).clip(0, 255), dtype=np.uint8)
+        # torchvision.io.write_video truncates float frames with a uint8 cast.
+        return np.ascontiguousarray(frames.clip(0, 255).astype(np.uint8))
 
     def end_session(self) -> None:
         """Release session rollout caches while keeping model weights loaded."""
@@ -276,11 +292,19 @@ class DreamXBackend:
         )
         if has_reference:
             relative_camera_to_world = relative_camera_to_world[1:]
-        viewmats = torch.as_tensor(
-            np.linalg.inv(relative_camera_to_world),
+        relative = torch.as_tensor(
+            relative_camera_to_world.astype(np.float32),
             device=self._device,
             dtype=self._dtype,
         )
+        # Native PRoPE rounds c2w to inference precision before SE(3) inversion.
+        rotation = relative[..., :3, :3].transpose(-1, -2)
+        viewmats = torch.zeros_like(relative)
+        viewmats[..., :3, :3] = rotation
+        viewmats[..., :3, 3] = -torch.einsum(
+            "...ij,...j->...i", rotation, relative[..., :3, 3]
+        )
+        viewmats[..., 3, 3] = 1.0
         viewmats = (
             viewmats.unsqueeze(1)
             .expand(-1, _TOKENS_PER_LATENT_FRAME, -1, -1)
@@ -311,7 +335,12 @@ class DreamXBackend:
         return tensor.to(device=self._device, dtype=self._dtype)
 
     def _color_correct_chunk(self, frames: np.ndarray) -> np.ndarray:
-        """Apply upstream Lab correction against the previous chunk boundary."""
+        """Apply upstream Lab correction against the previous chunk boundary.
+
+        Mirrors ``utils/postprocess.py:postprocess_video_frames``: chunk 1 uses the
+        uncorrected first frame, later chunks the corrected last frame before them,
+        with the same float64/float32 casts so stored frames match bit for bit.
+        """
         strength = self._config.color_correction_strength
         if strength <= 0.0 or len(frames) <= 1:
             if len(frames):
@@ -320,16 +349,11 @@ class DreamXBackend:
         reference = (
             frames[0] if self._color_reference is None else self._color_reference
         )
-        reference_lab = cv2.cvtColor(
-            (reference / 255.0).astype(np.float32),
-            cv2.COLOR_RGB2LAB,
-        )
-        reference_mean = reference_lab.mean(axis=(0, 1))
-        reference_std = reference_lab.std(axis=(0, 1))
+        reference_mean, reference_std = _lab_stats(reference)
         processed = frames.copy()
         for index, frame in enumerate(processed):
-            rgb = (frame / 255.0).astype(np.float32)
-            lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+            rgb = frame.astype(np.float64) / 255.0
+            lab = cv2.cvtColor(rgb.astype(np.float32), cv2.COLOR_RGB2LAB)
             mean = lab.mean(axis=(0, 1))
             std = lab.std(axis=(0, 1))
             corrected = lab.copy()
@@ -347,9 +371,10 @@ class DreamXBackend:
                 0.0,
                 1.0,
             )
-            processed[index] = (
-                (1.0 - strength) * rgb + strength * corrected_rgb
-            ) * 255.0
+            blended = (1.0 - strength) * rgb + strength * corrected_rgb.astype(
+                np.float64
+            )
+            processed[index] = (blended * 255.0).clip(0, 255).astype(np.float32)
         self._color_reference = processed[-1].copy()
         return processed
 
@@ -359,6 +384,7 @@ class DreamXBackend:
         self._pipeline.crossattn_cache = None
         self._pipeline.vae.model.clear_cache()
         self._initial_latent = None
+        self._noise = None
         self._conditional = None
         self._conditional_prompt = ""
         self._chunk_index = 0
@@ -386,8 +412,15 @@ class DreamXBackend:
         return module
 
 
+def _lab_stats(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return upstream Lab mean and standard deviation for one 0-255 RGB frame."""
+    rgb = frame.astype(np.float64) / 255.0
+    lab = cv2.cvtColor(rgb.astype(np.float32), cv2.COLOR_RGB2LAB)
+    return lab.mean(axis=(0, 1)), lab.std(axis=(0, 1))
+
+
 def _pose_world_to_camera(pose: np.ndarray) -> np.ndarray:
     """Return a homogeneous world-to-camera matrix from one 19-value pose row."""
-    matrix = np.eye(4, dtype=np.float32)
-    matrix[:3] = np.asarray(pose[7:], dtype=np.float32).reshape(3, 4)
+    matrix = np.eye(4, dtype=np.float64)
+    matrix[:3] = np.asarray(pose[7:], dtype=np.float64).reshape(3, 4)
     return matrix

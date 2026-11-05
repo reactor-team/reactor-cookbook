@@ -5,6 +5,15 @@ distilled autoregressive world model through Reactor Runtime. Start from an
 uploaded or built-in image, describe the world with a prompt, and move through
 it with DreamX's native composable keyboard camera controls.
 
+`set_camera_path(trajectory)` accepts an uploaded JSON object containing
+`poses`: camera-to-world matrices with shape `[N,4,4]`, sampled once per output
+frame. Select an image first. A path contains exactly `12 × chunks − 3` poses
+and is limited to 2 MiB and the configured rollout length. Camera intrinsics
+retain the model's native settings. The path starts a fresh rollout, emits
+`camera_path_selected`, and stops after its final chunk. `reset` rewinds it;
+selecting another image restores keyboard control. `state_update` reports
+`camera_path_chunks` and `camera_path_complete`.
+
 The adapter calls the model, scheduler, camera conditioning, denoiser, VAE, and
 rolling KV-cache implementation from a pinned upstream checkout. Model weights
 and causal state stay resident across chunks.
@@ -34,7 +43,7 @@ from chunk 1.
 
 ## Run
 
-The adapter uses Reactor Runtime 3.5's native step loop. Each step snapshots
+The adapter uses Reactor Runtime 3.10's native step loop. Each step snapshots
 the current inputs, generates one native chunk, and publishes its media and state.
 
 The `build` block in `reactor.yaml` controls the model image: Reactor Runtime
@@ -174,12 +183,17 @@ rolling visual KV window, three-latent sink, four-step denoising schedule,
 context-cache commit, chunk-relative PRoPE camera condition, and cached VAE
 decode.
 
+A fresh rollout draws its noise the way `inference_ar_forcing.py` does: one
+seeded draw for every latent frame of the rollout, before the first denoising
+step. A camera path sizes that draw to its own chunks, so a path with the same
+image, prompt and seed reproduces the upstream script's RGB frames, including
+its chunk-relative Lab color correction and truncating `uint8` conversion.
+Keyboard rollouts size it to `max_chunks_per_rollout`.
+
 Prompt changes invalidate only the prompt-specific cross-attention cache. Past
 visual tokens stay in the rolling causal cache, so a new event prompt affects
 the next chunk without replacing the current world.
 
-`stream.max_chunks_per_rollout` defaults to 512. After chunk 512 the adapter
-broadcasts `rollout_reset_queued`, releases held keys, and starts a fresh
-rollout from the selected image, active prompt, and seed without reloading model
-weights. Chunk numbering then returns to 1, bounding causal and camera state
-while keeping the Reactor session alive.
+Generation stops at the rollout limit, preserving the current world until an
+explicit `reset` or image selection. `state_update.next_chunk` is null at the
+limit. Reset starts from the selected image, active prompt and seed.
