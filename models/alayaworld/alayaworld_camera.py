@@ -2,10 +2,62 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 
 import numpy as np
+
+
+@dataclass(frozen=True)
+class CameraPath:
+    """Finite native RGB-rate trajectory with seven look-ahead camera slots."""
+
+    relative_poses: np.ndarray
+
+    @property
+    def chunks(self) -> int:
+        return (len(self.relative_poses) - 8) // 32
+
+    def window(
+        self, index: int, initial_pose: np.ndarray, frames_wanted: int
+    ) -> np.ndarray:
+        expected = 39 if index == 0 else 32
+        if frames_wanted != expected:
+            raise ValueError(
+                f"Native camera window changed: expected {expected}, got {frames_wanted}"
+            )
+        start = 1 if index == 0 else 8 + index * 32
+        if not 0 <= index < self.chunks:
+            raise ValueError("Camera path is complete")
+        return np.ascontiguousarray(
+            initial_pose @ self.relative_poses[start : start + expected],
+            dtype=np.float32,
+        )
+
+
+def load_camera_path(data: bytes, max_chunks: int) -> CameraPath:
+    """Validate absolute camera poses and anchor them to the uploaded first pose."""
+    if len(data) > 8 * 1024 * 1024:
+        raise ValueError("Camera path exceeds 8 MiB")
+    payload = json.loads(data)
+    if not isinstance(payload, dict) or set(payload) != {"poses"}:
+        raise ValueError("Camera path must contain only poses")
+    poses = np.asarray(payload["poses"], dtype=np.float32)
+    if poses.ndim != 3 or poses.shape[1:] != (4, 4):
+        raise ValueError("poses must have shape [N, 4, 4]")
+    if not 40 <= len(poses) <= max_chunks * 32 + 8 or (len(poses) - 8) % 32:
+        raise ValueError("A path needs 32 * chunks + 8 poses within rollout capacity")
+    if not np.isfinite(poses).all() or not np.allclose(
+        poses[:, 3], [0, 0, 0, 1], atol=1e-5
+    ):
+        raise ValueError("Camera poses must be finite homogeneous transforms")
+    rotations = poses[:, :3, :3]
+    if not np.allclose(
+        rotations @ rotations.transpose(0, 2, 1), np.eye(3), atol=1e-4
+    ) or not np.allclose(np.linalg.det(rotations), 1, atol=1e-4):
+        raise ValueError("Camera poses require proper rotations")
+    return CameraPath(np.ascontiguousarray(np.linalg.inv(poses[0]) @ poses))
 
 
 @dataclass(frozen=True)

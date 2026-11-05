@@ -62,7 +62,11 @@ class StateUpdate(ModelMessage):
         )
     )
     max_chunks: int = MessageField(
-        description="Chunk count that triggers an automatic fresh rollout from the same image."
+        description="Maximum chunks in a rollout; reset explicitly after this limit."
+    )
+    camera_path_chunks: int | None = MessageField(
+        default=None,
+        description="Finite uploaded path length, or null for held camera controls.",
     )
     strafe: float = MessageField(
         description="Left (-1) to right (1) velocity queued for `next_chunk`; zero is neutral."
@@ -101,6 +105,7 @@ class StateUpdate(ModelMessage):
         completed_chunks: int,
         next_chunk: int | None,
         max_chunks: int,
+        camera_path_chunks: int | None = None,
     ) -> StateUpdate:
         """Build a client snapshot from public state and rollout position."""
         return cls(
@@ -115,6 +120,7 @@ class StateUpdate(ModelMessage):
             completed_chunks=completed_chunks,
             next_chunk=next_chunk,
             max_chunks=max_chunks,
+            camera_path_chunks=camera_path_chunks,
             strafe=state.strafe,
             vertical=state.vertical,
             forward=state.forward,
@@ -122,6 +128,15 @@ class StateUpdate(ModelMessage):
             yaw=state.yaw,
             roll=state.roll,
         )
+
+
+class CameraPathSelected(ModelMessage):
+    """Emitted when a finite camera path queues a fresh world."""
+
+    chunks: int = MessageField(description="Number of 32-frame chunks in the path.")
+    frames: int = MessageField(
+        description="Total generated frames, excluding the input image."
+    )
 
 
 class ImageSelected(ModelMessage):
@@ -190,13 +205,10 @@ class CameraMotionChanged(ModelMessage):
 
 
 class RolloutResetQueued(ModelMessage):
-    """Emitted when a manual or automatic reset queues a fresh rollout."""
+    """Emitted when an explicit reset queues a fresh rollout."""
 
-    trigger: Literal["manual", "automatic_chunk_limit"] = MessageField(
-        description=(
-            'Reset source: "manual" for `reset` or "automatic_chunk_limit" after '
-            "`max_chunks` completes."
-        )
+    trigger: Literal["manual"] = MessageField(
+        description='Reset source: "manual" for the explicit `reset` command.'
     )
     seed: int = MessageField(
         description="Random seed that will initialize the queued fresh rollout."

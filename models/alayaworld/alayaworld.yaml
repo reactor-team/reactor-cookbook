@@ -43,12 +43,8 @@ inputs:
 decode:
   overlap_latents: 6
 
-memory:
-  max_spatial_frames: 320
-  recent_spatial_frames: 160
-
 stream:
-  # Rebuild the rollout before dense camera metadata can grow without bound.
+  # Stop at the serving bound; clients explicitly reset to start another rollout.
   max_chunks_per_rollout: 512
 
 motion:

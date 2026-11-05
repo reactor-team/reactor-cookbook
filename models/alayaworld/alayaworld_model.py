@@ -76,6 +76,7 @@ class AlayaWorldModel:
         self._alaya_pipeline: Any = None
         self._upstream_config: Any = None
         self._load_input_sample: Any = None
+        self._fit_image: Any = None
         self._check_input_resolution: Any = None
         self._plan_rollout: Any = None
         self._cache: Any = None
@@ -173,6 +174,7 @@ class AlayaWorldModel:
         self._alaya_pipeline = alaya_pipeline
         self._upstream_config = upstream_config
         self._load_input_sample = modules["load_input_sample"]
+        self._fit_image = modules["fit_image"]
         self._check_input_resolution = modules["check_input_resolution"]
         self._plan_rollout = modules["plan_rollout"]
         self._chunk_latents = chunk_latents
@@ -264,15 +266,19 @@ class AlayaWorldModel:
         self._cache = None
         video, metadata, needed_latents = self._prepare_scene(selected_input)
         pipeline.seed = seed
+        # The spatial bank's DA3 depths are aligned to the cameras of the frames
+        # that open the first chunk. Those poses arrive with that chunk, so the
+        # bank is built in `_generate_chunk` once they are written.
         cache = pipeline.initialize_cache(
             video,
             prompt,
-            metadata,
+            {**metadata, "has_camera": False},
             rounds=1,
             K=self._chunk_latents,
             cond_end=self._condition_latents,
             needed_latents=needed_latents,
         )
+        cache.metadata = metadata
         stride = int(pipeline.cfg.sample.temporal_stride)
         anchor_index = max(0, int(cache.target_base_start) * stride - stride)
         camera = camera_frames(metadata["cam_c2w"])
@@ -304,6 +310,7 @@ class AlayaWorldModel:
                 metadata,
                 target_hw=target_hw,
                 torch_module=self._torch,
+                fit_image=self._fit_image,
             )
         else:
             video, _caption, metadata = self._load_input_sample(
@@ -342,16 +349,18 @@ class AlayaWorldModel:
             self._active_prompt = prompt
 
         self._write_camera_trajectory(cache, trajectory)
+        if self._ar_index == 0:
+            cache.spatial_bank = engine.spatial.init_bank(
+                video_pixels=cache.video_pixels,
+                metadata=cache.metadata,
+                target_start=cache.target_base_start,
+            )
         history = cache.history
         if history is None:
             raise RuntimeError("AlayaWorld interactive decode requires history latents")
         pred = pipeline.generate(self._ar_index, cache)
         pipeline.finalize(self._ar_index, cache, pred)
-        compact_rollout_cache(
-            cache,
-            max_spatial_frames=config.max_spatial_frames,
-            recent_spatial_frames=config.recent_spatial_frames,
-        )
+        compact_rollout_cache(cache)
         frames = self._decode_new_frames(history, pred)
         if (
             frames.ndim != 4
