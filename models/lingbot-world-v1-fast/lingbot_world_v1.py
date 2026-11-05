@@ -14,25 +14,13 @@ from __future__ import annotations
 import random
 from pathlib import Path
 
-from reactor_runtime import (
-    ApplicationError,
-    ClientInfo,
-    CommandError,
-    InputField,
-    ReactorApp,
-    StepOutcome,
-    UploadedFile,
-    connected,
-    disconnected,
-    event,
-    session_ended,
-    session_started,
-)
-from reactor_runtime.distributed import DistributedRunner
-from reactor_runtime.log import get_logger
-
 from lingbot_world_v1_backend import WorkerSettings
-from lingbot_world_v1_camera import CameraMotionPlanner, MotionConfig
+from lingbot_world_v1_camera import (
+    CameraMotionPlanner,
+    CameraPath,
+    MotionConfig,
+    load_camera_path,
+)
 from lingbot_world_v1_config import (
     LingBotConfig,
     Sample,
@@ -52,6 +40,7 @@ from lingbot_world_v1_model import (
 )
 from lingbot_world_v1_types import (
     CameraMotionChanged,
+    CameraPathSelected,
     ImageSelected,
     LingBotWorldOutput,
     LingBotWorldState,
@@ -60,6 +49,22 @@ from lingbot_world_v1_types import (
     RolloutResetQueued,
     StateUpdate,
 )
+from reactor_runtime import (
+    ApplicationError,
+    ClientInfo,
+    CommandError,
+    InputField,
+    ReactorApp,
+    StepOutcome,
+    UploadedFile,
+    connected,
+    disconnected,
+    event,
+    session_ended,
+    session_started,
+)
+from reactor_runtime.distributed import DistributedRunner
+from reactor_runtime.log import get_logger
 
 logger = get_logger(__name__)
 
@@ -81,6 +86,7 @@ class LingBotWorldV1(ReactorApp):
         self._config: LingBotConfig | None = None
         self._engine: DistributedRunner | None = None
         self._planner: CameraMotionPlanner | None = None
+        self._camera_path: CameraPath | None = None
         self._selected_input: Path | UploadedFile | None = None
         self._selected_intrinsics: Path | None = None
         self._default_prompt = ""
@@ -140,6 +146,7 @@ class LingBotWorldV1(ReactorApp):
         self.state.prompt = ""
         self._selected_input = None
         self._selected_intrinsics = None
+        self._camera_path = None
         self._seed = config.seed
         self._clear_controls()
         self._planner_reset()
@@ -177,6 +184,7 @@ class LingBotWorldV1(ReactorApp):
             self._clear_controls()
             self._selected_input = None
             self._selected_intrinsics = None
+            self._camera_path = None
             self._chunk_index = 0
             self._last_chunk_seconds = None
 
@@ -217,6 +225,7 @@ class LingBotWorldV1(ReactorApp):
         if not normalized:
             raise CommandError("prompt_required", "LingBot-World requires a prompt.")
         self._selected_input = image
+        self._camera_path = None
         if self._selected_intrinsics is None:
             self._selected_intrinsics = self._require_config().samples[0].intrinsics
         self.state.prompt = normalized
@@ -468,6 +477,35 @@ class LingBotWorldV1(ReactorApp):
         await self.send(self._state_update())
         return message
 
+    @event(
+        name="set_camera_path",
+        description="Select a finite OpenCV camera trajectory for the current image and restart generation. Reset replays the path; selecting an image restores interactive axes. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path.",
+    )
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(  # noqa: B008 - schema declaration
+            moderate=True,
+            description="JSON with poses [RGB frames,4,4] and intrinsics [fx,fy,cx,cy], at most 2 MiB.",
+        ),
+    ) -> CameraPathSelected:
+        """Validate a complete trajectory before changing the selected world."""
+        if self._selected_input is None:
+            raise CommandError(
+                "image_required", "Select an image before a camera path."
+            )
+        try:
+            path = load_camera_path(
+                trajectory.data,
+                max_chunks=self._require_config().max_chunks,
+                chunk_latents=3,
+            )
+        except (ValueError, TypeError) as error:
+            raise CommandError("invalid_camera_path", str(error)) from error
+        self._camera_path = path
+        self._request_restart()
+        await self.send(self._state_update())
+        return CameraPathSelected(chunks=len(path.chunks), frames=path.output_frames)
+
     async def process_input(self) -> LingbotV1Input:
         """Refuse until a world can be generated; otherwise say what the model gets.
 
@@ -494,17 +532,29 @@ class LingBotWorldV1(ReactorApp):
             anchor = AnchorImage(
                 image=image,
                 suffix=suffix,
-                intrinsics=self._selected_intrinsics,
+                intrinsics=self._camera_path.intrinsics.copy()
+                if self._camera_path is not None
+                else self._selected_intrinsics,
                 seed=self._seed,
+                noise_chunks=len(self._camera_path.chunks)
+                if self._camera_path is not None
+                else None,
             )
-        poses = planner.plan_chunk(
-            strafe=self.state.strafe,
-            vertical=self.state.vertical,
-            forward=self.state.forward,
-            pitch=self.state.pitch,
-            yaw=self.state.yaw,
-            roll=self.state.roll,
-        )
+        if self._camera_path is not None:
+            if self._chunk_index >= len(self._camera_path.chunks):
+                raise ApplicationError(
+                    "Camera path is complete; reset or select an image."
+                )
+            poses = self._camera_path.chunks[self._chunk_index].copy()
+        else:
+            poses = planner.plan_chunk(
+                strafe=self.state.strafe,
+                vertical=self.state.vertical,
+                forward=self.state.forward,
+                pitch=self.state.pitch,
+                yaw=self.state.yaw,
+                roll=self.state.roll,
+            )
         return LingbotV1Input(
             world_id=self.state._world_id,
             anchor=anchor,
@@ -528,13 +578,18 @@ class LingBotWorldV1(ReactorApp):
         self._chunk_index = result.chunk_index
         self._last_chunk_seconds = outcome.elapsed
         config = self._require_config()
-        if self._chunk_index >= config.max_chunks:
+        limit = (
+            len(self._camera_path.chunks)
+            if self._camera_path is not None
+            else config.max_chunks
+        )
+        if self._chunk_index >= limit:
             self.state._limit_reached = True
             self._clear_controls()
             await self.send(
                 RolloutLimitReached(
                     completed_chunks=self._chunk_index,
-                    max_chunks=config.max_chunks,
+                    max_chunks=limit,
                 )
             )
         await self.send(self._state_update())
@@ -543,6 +598,11 @@ class LingBotWorldV1(ReactorApp):
     async def _set_axis(self, name: str, value: float) -> CameraMotionChanged:
         """Set one validated axis, broadcast state, and report held camera motion."""
         self._require_available_rollout()
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select an image to restore interactive camera axes.",
+            )
         setattr(self.state, name, value)
         message = self._camera_changed()
         await self.send(self._state_update())
@@ -563,6 +623,7 @@ class LingBotWorldV1(ReactorApp):
     def _select_sample(self, sample: Sample) -> None:
         """Make one public sample the active image, calibration, and prompt."""
         self._selected_input = sample.image
+        self._camera_path = None
         self._selected_intrinsics = sample.intrinsics
         self.state.prompt = sample.prompt
 
@@ -623,6 +684,8 @@ class LingBotWorldV1(ReactorApp):
         """Return a complete client-facing snapshot of shared world state."""
         config = self._config
         max_chunks = config.max_chunks if config is not None else 0
+        if self._camera_path is not None:
+            max_chunks = len(self._camera_path.chunks)
         selected = self._selected_input
         if isinstance(selected, UploadedFile):
             image_source = "uploaded"
@@ -648,6 +711,9 @@ class LingBotWorldV1(ReactorApp):
             next_chunk=next_chunk,
             next_chunk_frames=next_chunk_frames,
             max_chunks=max_chunks,
+            camera_path_chunks=len(self._camera_path.chunks)
+            if self._camera_path is not None
+            else 0,
             forward=self.state.forward,
             strafe=self.state.strafe,
             vertical=self.state.vertical,

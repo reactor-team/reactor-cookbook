@@ -1,5 +1,18 @@
 # Play LingBot-World v1 Fast through Reactor Runtime
 
+### Finite camera trajectories
+
+After selecting an image, upload a JSON file containing OpenCV camera-to-world
+`poses` shaped `[frames, 4, 4]` and `intrinsics` `[fx, fy, cx, cy]`, then send
+`set_camera_path(trajectory=uploaded_file)`. The accepted reply gives the exact
+chunk and video-frame counts. Generation stops at the end of the path;
+`reset` replays it, and selecting another image restores interactive axes.
+Camera axes are unavailable while a path is selected.
+
+This interface retains the model's continuous streaming history. Benchmarks
+that restart image-conditioned generation between turns must explicitly select
+the previous output image and a new path for each turn.
+
 Run the public [LingBot-World](https://github.com/robbyant/lingbot-world)
 camera model as an interactive Reactor backend. A client can start from a
 built-in scene or uploaded image, change the prompt, apply six-axis camera
@@ -23,7 +36,7 @@ chunk boundary.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model,
-controls its Reactor Runtime 3.5.0, CUDA 12.8.1, Python 3.12, system packages,
+controls its Reactor Runtime 3.10.0, CUDA 12.8.1, Python 3.12, system packages,
 and Python dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.

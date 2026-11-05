@@ -20,6 +20,13 @@ class LingBotWorldOutput(Output):
     main_video: Video
 
 
+class CameraPathSelected(ModelMessage):
+    """Report the finite uploaded camera trajectory selected for generation."""
+
+    chunks: int = MessageField(description="Number of output chunks in the selected path.")
+    frames: int = MessageField(description="Total output video frames in the selected path.")
+
+
 class StateUpdate(ModelMessage):
     """Report the complete shared world state after each accepted transition."""
 
@@ -78,6 +85,7 @@ class StateUpdate(ModelMessage):
     max_chunks: int = MessageField(
         description="Maximum chunks available before a fresh anchor rollout is required."
     )
+    camera_path_chunks: int = MessageField(default=0, description="Uploaded path length in chunks; zero means interactive camera control.")
     forward: float = MessageField(
         description=(
             "Active backward-to-forward translation in [-1, 1], sampled at the next chunk "
