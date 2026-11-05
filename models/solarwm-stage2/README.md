@@ -4,6 +4,16 @@ Generate an interactive video world from an uploaded image, a prompt and
 six-axis camera motion with [SolarWM](https://github.com/Junchao-cs/SolarWM).
 This recipe serves the Wan2.2 TI2V-5B Stage2 checkpoint on one B200.
 
+## Finite camera paths
+
+After `set_image`, upload JSON with `poses`, an array of OpenCV camera-to-world
+matrices, and pass the uploaded file to `set_camera_path(trajectory=...)`.
+Provide exactly `12K-3` RGB-frame poses for `K` chunks (up to 320 chunks).
+The first pose anchors the relative path; output contains 9 frames in the
+first chunk and 12 in each later chunk. Generation stops at the path end.
+`reset` replays the selected path and `set_image` clears it. Held camera-axis
+commands are unavailable while a path is selected.
+
 ## Run
 
 Requires the Reactor CLI, Docker, NVIDIA Container Toolkit, sufficient model
@@ -16,7 +26,7 @@ reactor build
 reactor run --gpus device=0 -e HF_TOKEN
 ```
 
-The build installs one pinned upstream checkout and Runtime 3.6. Startup
+The build installs one pinned upstream checkout and Runtime 3.10. Startup
 validates that checkout and downloads missing checkpoint files to the mounted
 weights directory. Use `--weights /path/to/weights` to select storage and
 `--port` to change the default HTTP port 8080.
@@ -26,7 +36,9 @@ weights directory. Use `--weights /path/to/weights` to select storage and
 Generation waits for an uploaded image; there is no default image.
 
 - `set_image(image, prompt)`: select a JPEG, PNG, WebP or BMP image up to
-  25 MiB and 100 million pixels. It is resized and center-cropped to 864×480.
+  25 MiB and 100 million pixels. It is resized and center-cropped to 864×480
+  exactly as upstream `decode_video` prepares a first frame (torch bilinear
+  resize without antialiasing, bfloat16 pixels).
   A blank prompt retains the active prompt or uses the configured neutral
   description when starting the first world.
 - `set_prompt(prompt)`: restart from the selected image with a new nonempty
@@ -45,6 +57,12 @@ Changing the image or prompt starts a new world with neutral controls.
 
 The first chunk contains 9 RGB frames, followed by 12 frames per chunk on
 `main_video`. Playback follows measured generation time. No audio is produced.
+
+Generation follows the upstream Stage2 sampler: the seed's generator first
+draws the initial noise of the whole rollout (the camera path's chunks, or the
+rollout limit for held controls), then each chunk's re-noising. A camera path
+therefore reproduces upstream's output for the same image, prompt, seed and
+poses. Frames are rounded to uint8 as upstream does before encoding.
 
 Command replies are `image_selected`, `prompt_queued`,
 `camera_motion_changed` and `rollout_reset_queued`. Shared `state_update`

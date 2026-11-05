@@ -20,8 +20,13 @@ from reactor_runtime import (
     session_ended,
     session_started,
 )
-from solarwm_stage2_camera import CameraMotionPlanner, MotionConfig
-from solarwm_stage2_config import SolarWMConfig, read_config, prepare_runtime
+from solarwm_stage2_camera import (
+    CameraMotionPlanner,
+    CameraPath,
+    MotionConfig,
+    load_camera_path,
+)
+from solarwm_stage2_config import SolarWMConfig, prepare_runtime, read_config
 from solarwm_stage2_images import normalize_output_frames, prepare_uploaded_image
 from solarwm_stage2_model import (
     SolarWMAnchor,
@@ -31,6 +36,7 @@ from solarwm_stage2_model import (
 )
 from solarwm_stage2_types import (
     CameraMotionChanged,
+    CameraPathSelected,
     ImageSelected,
     PromptQueued,
     RolloutLimitReached,
@@ -51,6 +57,7 @@ class SolarWM(ReactorApp):
         super().__init__()
         self._config: SolarWMConfig | None = None
         self._engine: SolarWMModel
+        self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
         """Prepare pinned upstream assets and load SolarWM once."""
@@ -64,6 +71,7 @@ class SolarWM(ReactorApp):
     def on_session_started(self) -> None:
         """Initialize an empty world that waits for an uploaded anchor image."""
         config = self._require_config()
+        self._camera_path = None
         self.state._planner = CameraMotionPlanner(
             MotionConfig(
                 config.translation_units_per_latent, config.rotation_degrees_per_latent
@@ -94,6 +102,7 @@ class SolarWM(ReactorApp):
     def on_session_ended(self) -> None:
         """Release causal caches while retaining loaded model weights."""
         self._engine.reset()
+        self._camera_path = None
         self.output.flush()
 
     @event(
@@ -137,6 +146,7 @@ class SolarWM(ReactorApp):
         self.state._selected_image = pixels
         self.state._image_name = image.name
         self.state.prompt = normalized
+        self._camera_path = None
         self._request_restart()
         result = ImageSelected(
             filename=image.name, prompt=normalized, seed=self.state._seed
@@ -379,6 +389,30 @@ class SolarWM(ReactorApp):
         await self.send(self._state_update())
         return result
 
+    @event(
+        name="set_camera_path",
+        description="Select a finite uploaded camera path and restart from the selected image. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before an image is uploaded, or `invalid_camera_path` for a malformed path, without changing the world. Reset replays the path; selecting an image clears it.",
+    )
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(  # noqa: B008 - schema declaration
+            moderate=True,
+            description="JSON containing poses: OpenCV camera-to-world matrices at RGB frame rate, shape [12K-3,4,4], up to 32 MiB. Produces K chunks, 9 frames then 12 per chunk. The first pose anchors the relative trajectory.",
+        ),
+    ) -> CameraPathSelected:
+        if self.state._selected_image is None:
+            raise CommandError(
+                "image_required", "Upload an image before a camera path."
+            )
+        try:
+            path = load_camera_path(trajectory.data, self._require_config().max_chunks)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise CommandError("invalid_camera_path", str(exc)) from exc
+        self._camera_path = path
+        self._request_restart()
+        await self.send(self._state_update())
+        return CameraPathSelected(chunks=path.chunks, frames=path.frames)
+
     async def process_input(self) -> SolarWMInput:
         if self.state._selected_image is None:
             raise ApplicationError("no anchor image selected")
@@ -390,15 +424,22 @@ class SolarWM(ReactorApp):
                 image=self.state._selected_image,
                 prompt=self.state.prompt,
                 seed=self.state._seed,
+                chunks=self._camera_path.chunks
+                if self._camera_path is not None
+                else self._require_config().max_chunks,
             )
             self.state._planner.reset()
-        poses = self.state._planner.plan_chunk(
-            strafe=self.state.strafe,
-            vertical=self.state.vertical,
-            forward=self.state.forward,
-            pitch=self.state.pitch,
-            yaw=self.state.yaw,
-            roll=self.state.roll,
+        poses = (
+            self._camera_path.chunk(self.state._chunk_index)
+            if self._camera_path is not None
+            else self.state._planner.plan_chunk(
+                strafe=self.state.strafe,
+                vertical=self.state.vertical,
+                forward=self.state.forward,
+                pitch=self.state.pitch,
+                yaw=self.state.yaw,
+                roll=self.state.roll,
+            )
         )
         return SolarWMInput(world_id=self.state._world_id, anchor=anchor, poses=poses)
 
@@ -413,12 +454,18 @@ class SolarWM(ReactorApp):
         self.state._applied_world_id = result.world_id
         self.state._last_chunk_seconds = outcome.elapsed
         self.state._chunk_index = result.chunk_index
-        if result.complete:
+        if result.complete or (
+            self._camera_path is not None
+            and result.chunk_index >= self._camera_path.chunks
+        ):
             self.state._limit_reached = True
             self._clear_controls()
             await self.send(
                 RolloutLimitReached(
-                    completed_chunks=result.chunk_index, max_chunks=result.max_chunks
+                    completed_chunks=result.chunk_index,
+                    max_chunks=self._camera_path.chunks
+                    if self._camera_path is not None
+                    else result.max_chunks,
                 )
             )
         await self.send(self._state_update())
@@ -426,6 +473,11 @@ class SolarWM(ReactorApp):
 
     async def _set_axis(self, name: str, value: float) -> CameraMotionChanged:
         self._require_available_rollout()
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select a new image to resume held camera controls.",
+            )
         setattr(self.state, name, value)
         result = self._camera_changed()
         await self.send(self._state_update())
@@ -493,6 +545,9 @@ class SolarWM(ReactorApp):
             seed=self.state._seed,
             limit_reached=self.state._limit_reached,
             completed_chunks=self.state._chunk_index,
+            camera_path_chunks=self._camera_path.chunks
+            if self._camera_path is not None
+            else 0,
             last_chunk_seconds=self.state._last_chunk_seconds,
             next_chunk=next_chunk,
             next_chunk_frames=(9 if next_chunk == 1 else 12) if next_chunk else None,

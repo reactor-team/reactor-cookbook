@@ -2,10 +2,77 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 
 import numpy as np
+
+
+@dataclass(frozen=True)
+class CameraPath:
+    poses: np.ndarray
+    frames: int
+
+    @property
+    def chunks(self) -> int:
+        return len(self.poses) // 3
+
+    def chunk(self, index: int) -> np.ndarray:
+        if not 0 <= index < self.chunks:
+            raise ValueError("Camera path exhausted")
+        return self.poses[index * 3 : (index + 1) * 3].copy()
+
+
+def load_camera_path(data: bytes, max_chunks: int) -> CameraPath:
+    """Sample RGB C2W poses using SolarWM's causal [0,1,5,9,...] indices."""
+    if len(data) > 32 * 1024 * 1024:
+        raise ValueError("Camera path exceeds 32 MiB")
+    value = json.loads(data)
+    if not isinstance(value, dict) or "poses" not in value:
+        raise ValueError("Expected a JSON object containing poses")
+    poses = np.asarray(value["poses"], dtype=np.float32)
+    if poses.ndim != 3 or poses.shape[1:] != (4, 4):
+        raise ValueError("poses must have shape [12K-3,4,4]")
+    frames = len(poses)
+    if frames < 9 or (frames + 3) % 12 or (frames + 3) // 12 > max_chunks:
+        raise ValueError("Use exactly 12K-3 RGB poses within the rollout limit")
+    if not np.isfinite(poses).all() or not np.allclose(
+        poses[:, 3], [0, 0, 0, 1], atol=1e-5
+    ):
+        raise ValueError("Camera poses must be finite homogeneous transforms")
+    rotation = poses[:, :3, :3]
+    if not np.allclose(
+        rotation @ rotation.transpose(0, 2, 1), np.eye(3), atol=1e-4
+    ) or not np.allclose(np.linalg.det(rotation), 1, atol=1e-4):
+        raise ValueError("Camera rotations must be right-handed and orthonormal")
+
+    # Upstream build_camera_tokens selects the latent-aligned poses first, then
+    # rebases them with _relative_c2w_fp32 (data.py), not the shared relative_c2w.
+    selected = np.ascontiguousarray(poses[[0, *range(1, frames, 4)]])
+    return CameraPath(relative_c2w_fp32(selected), frames)
+
+
+def relative_c2w_fp32(c2w: np.ndarray) -> np.ndarray:
+    """Rebase absolute C2W poses on the first with upstream's FP32 operation order."""
+    w2c = _invert_se3(c2w)
+    target_c2w = np.eye(4, dtype=np.float32)
+    absolute_to_relative = target_c2w @ w2c[0]
+    relative = np.empty_like(c2w)
+    relative[0] = target_c2w
+    for index in range(1, c2w.shape[0]):
+        relative[index] = absolute_to_relative @ c2w[index]
+    return relative
+
+
+def _invert_se3(matrices: np.ndarray) -> np.ndarray:
+    """Invert SE3 matrices exactly as upstream solarwm.data.camera.invert_se3."""
+    result = np.zeros_like(matrices)
+    rotation_t = np.swapaxes(matrices[:, :3, :3], -1, -2)
+    result[:, :3, :3] = rotation_t
+    result[:, :3, 3] = -np.einsum("tij,tj->ti", rotation_t, matrices[:, :3, 3])
+    result[:, 3, 3] = 1
+    return result
 
 
 @dataclass(frozen=True)

@@ -358,8 +358,9 @@ solarwm_stage2_model.SolarWMModel()
 
 def test_image_prepared_once_at_native_shape():
     value = prepare_uploaded_image(_upload())
-    assert value.shape == (480, 864, 3)
-    assert value.dtype == np.uint8
+    assert value.shape == (3, 480, 864)
+    assert value.dtype == np.float32
+    assert value.flags.c_contiguous
     app = SolarWM()
     app.state = SolarWMState()
     app._config = SimpleNamespace(max_chunks=320, default_prompt="forest")
@@ -406,3 +407,41 @@ def test_application_with_fake_model():
     assert app.generate(value) is result
     asyncio.run(app.process_output(StepOutcome(result=result)))
     assert asyncio.run(app.process_input()).anchor is None
+
+
+def test_anchor_pixels_match_upstream_decode_video(monkeypatch):
+    """The anchor is upstream decode_video's bfloat16 frame, resized without antialias."""
+    data = pytest.importorskip("solarwm.backends.wan22.runtime.data")
+    decord = pytest.importorskip("decord")
+    import torch
+
+    from solarwm_stage2_images import anchor_pixels
+
+    rng = np.random.default_rng(0)
+    for shape in ((480, 864, 3), (720, 1280, 3), (600, 800, 3), (300, 400, 3)):
+        rgb = rng.integers(0, 256, shape, dtype=np.uint8)
+
+        class Reader:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_batch(self, indices):
+                return torch.from_numpy(rgb)[None].repeat(len(indices), 1, 1, 1)
+
+        monkeypatch.setattr(decord, "VideoReader", Reader)
+        expected = data.decode_video(b"", [0], height=480, width=864)[0].float().numpy()
+        np.testing.assert_array_equal(anchor_pixels(rgb), expected)
+
+
+def test_world_noise_horizon_follows_camera_path_or_limit():
+    from solarwm_stage2_camera import CameraPath
+
+    app = SolarWM()
+    app.state = SolarWMState()
+    app._config = SimpleNamespace(max_chunks=320, default_prompt="forest")
+    app.state._planner = CameraMotionPlanner(MotionConfig(1, 8))
+    asyncio.run(app.set_image(_upload(), "forest"))
+    assert asyncio.run(app.process_input()).anchor.chunks == 320
+    app._camera_path = CameraPath(np.repeat(np.eye(4, dtype=np.float32)[None], 33, 0), 129)
+    app._request_restart()
+    assert asyncio.run(app.process_input()).anchor.chunks == 11

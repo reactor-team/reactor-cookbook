@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-from solarwm_stage2_camera import CameraMotionPlanner
-
 from reactor_runtime import (
     InputField,
     InputState,
@@ -13,6 +11,7 @@ from reactor_runtime import (
     Output,
     Video,
 )
+from solarwm_stage2_camera import CameraMotionPlanner
 
 
 class SolarWMOutput(Output):
@@ -23,6 +22,11 @@ class SolarWMOutput(Output):
 
 class StateUpdate(ModelMessage):
     """Emitted after connection, state mutation, reset, or chunk completion."""
+
+    camera_path_chunks: int = MessageField(
+        default=0,
+        description="Selected finite camera path length in chunks; zero means held-axis control.",
+    )
 
     prompt: str = MessageField(
         description=(
@@ -114,6 +118,11 @@ class StateUpdate(ModelMessage):
             "boundary and held until changed or released."
         )
     )
+
+
+class CameraPathSelected(ModelMessage):
+    chunks: int = MessageField(description="Number of chunks in the accepted path.")
+    frames: int = MessageField(description="Total generated RGB frames.")
 
 
 class ImageSelected(ModelMessage):

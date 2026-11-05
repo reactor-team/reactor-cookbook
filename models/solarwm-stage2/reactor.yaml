@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: solarwm-5b-stage2
-  version: v0.1.2
+  version: v0.2.1
   description: |
     Explore SolarWM's autoregressive Wan2.2 TI2V-5B world from an uploaded
     image, a prompt, and six-axis camera motion.
@@ -32,7 +32,7 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.6.1"
+  runtime_version: "3.10.0"
   python_requirements: requirements.txt
   python_indexes:
     - https://download.pytorch.org/whl/cu128
