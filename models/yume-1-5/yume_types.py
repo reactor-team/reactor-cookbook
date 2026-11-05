@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from typing import Literal
-import numpy as np
-from yume_model import Movement, View
 
+import numpy as np
 from reactor_runtime import (
     InputField,
     InputState,
@@ -14,6 +13,7 @@ from reactor_runtime import (
     Output,
     Video,
 )
+from yume_model import Movement, View
 
 
 class YumeOutput(Output):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+
 import av
 import numpy as np
 from PIL import Image
@@ -15,7 +16,7 @@ MAX_VIDEO_BYTES = 500 * 1024 * 1024
 
 
 def prepare_image(image: UploadedFile) -> np.ndarray:
-    """Decode once to native uint8 RGB (704,1280,3), preserving bilinear resize."""
+    """Decode RGB without quantizing the native backend's floating-point resize."""
     if not image.mime_type.startswith("image/") or not image.data:
         raise CommandError("invalid_image", "Supply a nonempty image.")
     if image.size > MAX_BYTES:
@@ -30,16 +31,17 @@ def prepare_image(image: UploadedFile) -> np.ndarray:
                 raise CommandError(
                     "image_too_large", "Image exceeds 100 million pixels."
                 )
-            return np.array(
-                decoded.convert("RGB").resize((1280, 704), Image.Resampling.BILINEAR),
-                dtype=np.uint8,
-            )
+            if decoded.mode == "RGBA":
+                background = Image.new("RGB", decoded.size, (0, 0, 0))
+                background.paste(decoded, mask=decoded.getchannel("A"))
+                return np.array(background, dtype=np.uint8)
+            return np.array(decoded.convert("RGB"), dtype=np.uint8)
     except (Image.DecompressionBombError, OSError, ValueError) as error:
         raise CommandError("invalid_image", "Image cannot be decoded.") from error
 
 
 def prepare_video(video: UploadedFile) -> np.ndarray:
-    """Decode only the first 33 frames; preserve the native bicubic resize."""
+    """Decode the first 33 RGB frames for native tensor resizing in the backend."""
     if not video.mime_type.startswith("video/") or not video.data:
         raise CommandError("invalid_video", "Supply a nonempty video.")
     if video.size > MAX_VIDEO_BYTES:
@@ -52,11 +54,7 @@ def prepare_video(video: UploadedFile) -> np.ndarray:
                     raise CommandError(
                         "video_too_large", "Video frame exceeds 100 million pixels."
                     )
-                image = (
-                    frame.to_image()
-                    .convert("RGB")
-                    .resize((1280, 704), Image.Resampling.BICUBIC)
-                )
+                image = frame.to_image().convert("RGB")
                 frames.append(np.asarray(image, dtype=np.uint8))
                 if len(frames) == 33:
                     return np.ascontiguousarray(np.stack(frames))

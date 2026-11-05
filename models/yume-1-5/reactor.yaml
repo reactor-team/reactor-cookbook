@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: yume-1-5
-  version: v0.1.2
+  version: v0.1.3
   description: |
     Explore a continuous YUME-1.5 world from text or an uploaded first frame,
     using its released prompt-encoded keyboard and camera controls.
@@ -20,6 +20,10 @@ model:
 runtime:
   import: yume:Yume15
   config: yume.yaml
+  # One step's frames go back in one data-channel message; a native step is
+  # larger than the default 64 MiB.
+  webrtc:
+    max_message_size: 256Mi
   # Checkpoints, downloads and compiled kernels use the weights mount.
   weights_path: ~/.cache/reactor_registry/yume-1-5
   recording:
@@ -33,7 +37,7 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.6.1"
+  runtime_version: "3.11.3"
   python_requirements: requirements.txt
   python_version: "3.12"
   cuda_version: "12.8.1"
