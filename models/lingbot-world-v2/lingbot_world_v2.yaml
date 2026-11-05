@@ -61,11 +61,11 @@ inputs:
         surrounding ruins, waterfalls, and distant floating islands.
 
 inference:
-  # These are the released fast checkpoint's native four-step, four-latent settings.
+  # Match the native WanI2VCausal.generate() four-step schedule and chunk size.
   seed: 42
   max_area: 399360
   chunk_latents: 4
-  timesteps: [0, 179, 358, 679]
+  timesteps: [0, 250, 500, 750]
   shift: 10.0
   # The official causal-fast command uses an 18-frame rolling window with a 6-frame sink.
   local_attention_frames: 18

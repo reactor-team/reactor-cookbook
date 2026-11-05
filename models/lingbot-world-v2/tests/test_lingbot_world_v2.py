@@ -213,6 +213,7 @@ def test_model_owns_native_reset_count_limit_and_prompt_changes():
         prompt="Garden",
         seed=42,
         intrinsics=anchor.intrinsics,
+        noise_chunks=None,
     )
     assert backend.generate_chunk.call_args.kwargs["relative_poses"] is input.poses
     with pytest.raises(RolloutExhausted):
@@ -294,7 +295,7 @@ def test_config_paths_are_explicit_and_native_settings_are_preserved(
     assert config.source_path == tmp_path / "lingbot-world-v2"
     assert config.checkpoint_path == tmp_path / "lingbot-world-v2-14b-causal-fast"
     assert config.chunk_latents == 4
-    assert config.timesteps == (0, 179, 358, 679)
+    assert config.timesteps == (0, 250, 500, 750)
     assert (config.local_attention_frames, config.attention_sink_frames) == (18, 6)
     assert config.max_chunks == 256
     standalone = read_config(path)
