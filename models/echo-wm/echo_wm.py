@@ -15,12 +15,12 @@ from echo_wm_assets import (
     prepare_assets,
     read_config,
 )
-from echo_wm_camera import EchoCameraPlanner, MotionConfig
+from echo_wm_camera import CameraPath, EchoCameraPlanner, MotionConfig, load_camera_path
 from echo_wm_images import validate_uploaded_image
 from echo_wm_model import EchoAnchor, EchoInput, EchoModel, EchoResult
 from echo_wm_schema import (
-    AutomaticResetQueued,
     CameraMotionChanged,
+    CameraPathSelected,
     ChunkCompleted,
     EchoWMOutput,
     EchoWMState,
@@ -70,6 +70,7 @@ class EchoWM(ReactorApp):
         self._seed = 0
         self._chunk_index = 0
         self._generating = False
+        self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
         """Prepare public assets and load Echo-WM weights once at startup.
@@ -104,6 +105,7 @@ class EchoWM(ReactorApp):
         self.state._fov_degrees = config.fov_degrees
         self._clear_camera()
         self._selected_image = None
+        self._camera_path = None
         self._image_source = None
         self._image_name = None
         self._active_prompt = None
@@ -117,6 +119,7 @@ class EchoWM(ReactorApp):
         self._clear_camera()
         self.state._applied_world_id = None
         self._selected_image = None
+        self._camera_path = None
         self._image_source = None
         self._image_name = None
         self._active_prompt = None
@@ -177,6 +180,7 @@ class EchoWM(ReactorApp):
         if seed >= 0:
             self._seed = seed
         self._selected_image = image
+        self._camera_path = None
         self._image_source = "uploaded"
         self._image_name = image.name
         self.state.prompt = normalized
@@ -210,6 +214,7 @@ class EchoWM(ReactorApp):
         ]
         scene = secrets.choice(candidates or list(self._examples))
         self._selected_image = scene.image
+        self._camera_path = None
         self._image_source = "built_in"
         self._image_name = scene.image.name
         self.state.prompt = scene.prompt
@@ -260,6 +265,27 @@ class EchoWM(ReactorApp):
         return message
 
     @event(
+        name="set_camera_path",
+        description="Upload a finite camera-to-world path and queue a fresh world from the selected image. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path. Generation stops at the path end.",
+    )
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
+            description="JSON with poses [24 * chunks + 1, 4, 4] at 24 FPS, at most 4 MiB. The first pose anchors the world.",
+        ),
+    ) -> CameraPathSelected:
+        self._require_selected()
+        try:
+            path = load_camera_path(trajectory.data, self._require_loaded().max_chunks)
+        except (ValueError, TypeError, OverflowError) as error:
+            raise CommandError("invalid_camera_path", str(error)) from error
+        self._camera_path = path
+        self._request_reset()
+        await self.send(self._state_update())
+        return CameraPathSelected(chunks=len(path.chunks), frames=path.frames)
+
+    @event(
         name="set_camera_motion",
         description=(
             "Set Echo-WM's four native held camera axes atomically. Values are sampled at the "
@@ -297,6 +323,11 @@ class EchoWM(ReactorApp):
     ) -> CameraMotionChanged:
         """Set every native camera axis and report the complete held state."""
         self._require_selected()
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select a new image to return to held camera controls.",
+            )
         self.state._forward = forward
         self.state._strafe = strafe
         self.state._pitch = pitch
@@ -316,6 +347,11 @@ class EchoWM(ReactorApp):
     async def release_camera(self) -> CameraMotionChanged:
         """Release native camera motion and report neutral state."""
         self._require_selected()
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select a new image to return to held camera controls.",
+            )
         self._clear_camera()
         message = self._camera_changed()
         await self.send(self._state_update())
@@ -325,9 +361,10 @@ class EchoWM(ReactorApp):
         name="set_fov",
         description=(
             "Set the horizontal camera field of view for forthcoming chunks. The value is "
-            "sampled at the next chunk boundary and remains active. Emits "
-            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
-            "`image_required` before image selection."
+            "sampled at the next chunk boundary and remains active; a camera path samples it "
+            "once when its rollout starts. Emits `camera_motion_changed` and broadcasts "
+            "`state_update`. Fails with `image_required` before image selection, or "
+            "`camera_path_active` while a camera path rollout is running."
         ),
     )
     async def set_fov(
@@ -341,6 +378,14 @@ class EchoWM(ReactorApp):
     ) -> CameraMotionChanged:
         """Set and report the held camera field of view."""
         self._require_selected()
+        if (
+            self._camera_path is not None
+            and self.state._world_id == self.state._applied_world_id
+        ):
+            raise CommandError(
+                "camera_path_active",
+                "A camera path keeps its field of view; reset or upload a path to change it.",
+            )
         self.state._fov_degrees = fov_degrees
         message = self._camera_changed()
         await self.send(self._state_update())
@@ -383,6 +428,14 @@ class EchoWM(ReactorApp):
         if not prompt:
             raise ApplicationError("Echo-WM requires a prompt before generating.")
         config = self._require_loaded()
+        if not new_world and self._chunk_index >= config.max_chunks:
+            raise ApplicationError("Rollout is complete. Reset or select another image.")
+        if self._camera_path is not None and self._chunk_index >= len(
+            self._camera_path.chunks
+        ):
+            raise ApplicationError(
+                "Camera path is complete. Reset or upload another path."
+            )
         planner = self._planner
         if planner is None:
             raise RuntimeError("Echo-WM was not loaded")
@@ -395,20 +448,34 @@ class EchoWM(ReactorApp):
                 suffix=Path(selected.name).suffix.lower() or ".png",
                 seed=self._seed,
             )
-        camera = planner.plan_chunk(
-            forward=self.state._forward,
-            strafe=self.state._strafe,
-            pitch=self.state._pitch,
-            yaw=self.state._yaw,
-            frame_count=config.frames_per_chunk,
+        camera = (
+            None
+            if self._camera_path is not None
+            else planner.plan_chunk(
+                forward=self.state._forward,
+                strafe=self.state._strafe,
+                pitch=self.state._pitch,
+                yaw=self.state._yaw,
+                frame_count=config.frames_per_chunk,
+            )
         )
         self._generating = True
         return EchoInput(
             world_id=self.state._world_id,
             anchor=anchor,
             prompt=prompt,
-            poses=camera.latent_poses,
+            poses=(
+                self._camera_path.chunks[self._chunk_index].copy()
+                if self._camera_path is not None
+                else camera.latent_poses
+            ),
             fov_degrees=self.state._fov_degrees,
+            rollout_chunks=len(self._camera_path.chunks)
+            if self._camera_path is not None
+            else None,
+            camera_path=self._camera_path.poses
+            if self._camera_path is not None
+            else None,
         )
 
     def generate(self, input: EchoInput) -> EchoResult:
@@ -451,18 +518,6 @@ class EchoWM(ReactorApp):
                 yaw=self.state._yaw,
             )
         )
-        if result.complete:
-            # Preserve automatic continuation and held controls without cutting this output.
-            self.state._world_id += 1
-            if self._planner is not None:
-                self._planner.reset()
-            await self.send(
-                AutomaticResetQueued(
-                    completed_chunks=result.chunk_index,
-                    max_chunks=self._require_loaded().max_chunks,
-                    seed=self._seed,
-                )
-            )
         await self.send(self._state_update())
         return EchoWMOutput(main_video=result.video, main_audio=result.audio)
 
@@ -513,6 +568,12 @@ class EchoWM(ReactorApp):
             return None
         if self.state._world_id != self.state._applied_world_id:
             return 1
+        if self._config is not None and self._chunk_index >= self._config.max_chunks:
+            return None
+        if self._camera_path is not None and self._chunk_index >= len(
+            self._camera_path.chunks
+        ):
+            return None
         return self._chunk_index + 1 + int(self._generating)
 
     def _state_update(self) -> StateUpdate:
@@ -537,6 +598,9 @@ class EchoWM(ReactorApp):
             pitch=self.state._pitch,
             yaw=self.state._yaw,
             fov_degrees=self.state._fov_degrees,
+            camera_path_chunks=len(self._camera_path.chunks)
+            if self._camera_path is not None
+            else None,
         )
 
 

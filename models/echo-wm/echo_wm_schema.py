@@ -82,7 +82,7 @@ class StateUpdate(ModelMessage):
         description="One-based chunk that accepted camera state will first affect."
     )
     max_chunks: int = MessageField(
-        description="Chunk count that automatically starts a fresh world from the same image."
+        description="Maximum chunks in a rollout; reset explicitly after this limit."
     )
     forward: float = MessageField(
         description="Active backward-to-forward camera motion."
@@ -92,6 +92,19 @@ class StateUpdate(ModelMessage):
     yaw: float = MessageField(description="Active left-to-right yaw motion.")
     fov_degrees: float = MessageField(
         description="Active horizontal field of view in degrees."
+    )
+    camera_path_chunks: int | None = MessageField(
+        default=None,
+        description="Finite uploaded path length, or null for held camera controls.",
+    )
+
+
+class CameraPathSelected(ModelMessage):
+    """Emitted when a finite uploaded camera path queues a fresh rollout."""
+
+    chunks: int = MessageField(description="Number of audio-video chunks in the path.")
+    frames: int = MessageField(
+        description="Total video frames including the initial frame."
     )
 
 
@@ -168,15 +181,3 @@ class ChunkCompleted(ModelMessage):
     strafe: float = MessageField(description="Strafe motion sampled by the chunk.")
     pitch: float = MessageField(description="Pitch motion sampled by the chunk.")
     yaw: float = MessageField(description="Yaw motion sampled by the chunk.")
-
-
-class AutomaticResetQueued(ModelMessage):
-    """Emitted after the final chunk queues a fresh bounded rollout."""
-
-    completed_chunks: int = MessageField(
-        description="Chunks completed when the configured bound was reached."
-    )
-    max_chunks: int = MessageField(
-        description="Configured chunk bound that was reached."
-    )
-    seed: int = MessageField(description="Seed retained by the queued fresh world.")
