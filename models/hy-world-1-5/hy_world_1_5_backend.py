@@ -42,6 +42,7 @@ class HYWorld15Backend:
         self._intrinsic_history = np.empty((0, 3, 3), dtype=np.float32)
         self._action_history = np.empty((0,), dtype=np.int64)
         self._points_local: Any = None
+        self._planned_noise: Any = None
         self._active_prompt = ""
         self._decoded_latents = 0
 
@@ -99,8 +100,19 @@ class HYWorld15Backend:
             torch.cuda.get_device_name(0),
         )
 
-    def reset(self, *, image: Image.Image, prompt: str, seed: int) -> None:
-        """Initialize a fresh image-conditioned world and its text KV cache."""
+    def reset(
+        self,
+        *,
+        image: Image.Image,
+        prompt: str,
+        seed: int,
+        latent_frames: int | None = None,
+    ) -> None:
+        """Initialize a fresh image-conditioned world and its text KV cache.
+
+        With ``latent_frames``, draw the noise of the whole planned video in one
+        call, as upstream does; chunks then slice it in order.
+        """
         torch = self._require_torch()
         pipe = self._require_pipe()
         normalized_prompt = prompt.strip()
@@ -111,7 +123,23 @@ class HYWorld15Backend:
         pipe._guidance_scale = 1.0
         pipe._guidance_rescale = 0.0
         pipe._clip_skip = None
+        if latent_frames is not None and (
+            latent_frames <= 0 or latent_frames % _LATENTS_PER_CHUNK
+        ):
+            raise ValueError("latent_frames must be a positive multiple of four")
         self._generator = torch.Generator(device=self._device).manual_seed(seed)
+        self._planned_noise = None
+        if latent_frames is not None:
+            self._planned_noise = pipe.prepare_latents(
+                batch_size=1,
+                num_channels_latents=int(pipe.transformer.config.in_channels),
+                latent_height=_HEIGHT // int(pipe.vae_spatial_compression_ratio),
+                latent_width=_WIDTH // int(pipe.vae_spatial_compression_ratio),
+                video_length=latent_frames,
+                dtype=pipe.target_dtype,
+                device=self._device,
+                generator=self._generator,
+            )
         template = torch.zeros(
             (
                 1,
@@ -136,6 +164,9 @@ class HYWorld15Backend:
             pipe.init_kv_cache()
             self._kv_cache = pipe._kv_cache
             self._encode_text_cache(normalized_prompt)
+            # Upstream also draws this point cloud from the unseeded global CPU
+            # generator, so memory selection after latent 20 is not reproducible
+            # across processes there either.
             self._points_local = self._generate_points(
                 self._config.points_in_sphere, 8.0
             ).to(self._device)
@@ -173,16 +204,10 @@ class HYWorld15Backend:
                 [self._action_history, camera.actions], axis=0
             )
             current_start = len(self._action_history)
-            current_latents = pipe.prepare_latents(
-                batch_size=1,
-                num_channels_latents=int(pipe.transformer.config.in_channels),
-                latent_height=_HEIGHT // int(pipe.vae_spatial_compression_ratio),
-                latent_width=_WIDTH // int(pipe.vae_spatial_compression_ratio),
-                video_length=_LATENTS_PER_CHUNK,
-                dtype=pipe.target_dtype,
-                device=self._device,
-                generator=self._generator,
+            pipe.scheduler.set_timesteps(
+                self._config.inference_steps, device=self._device
             )
+            current_latents = self._initial_noise(current_start)
             current_cond = self._current_condition(current_start)
             selected = self._selected_context_indices(current_viewmats, current_start)
             if selected:
@@ -212,6 +237,25 @@ class HYWorld15Backend:
         self._decoded_latents += _LATENTS_PER_CHUNK
         return frames
 
+    def _initial_noise(self, current_start: int) -> Any:
+        """Return this chunk's noise: a slice of the planned draw, or a new draw."""
+        pipe = self._require_pipe()
+        if self._planned_noise is not None:
+            end = current_start + _LATENTS_PER_CHUNK
+            if end > int(self._planned_noise.shape[2]):
+                raise RuntimeError("The chunk exceeds the planned camera path")
+            return self._planned_noise[:, :, current_start:end].clone()
+        return pipe.prepare_latents(
+            batch_size=1,
+            num_channels_latents=int(pipe.transformer.config.in_channels),
+            latent_height=_HEIGHT // int(pipe.vae_spatial_compression_ratio),
+            latent_width=_WIDTH // int(pipe.vae_spatial_compression_ratio),
+            video_length=_LATENTS_PER_CHUNK,
+            dtype=pipe.target_dtype,
+            device=self._device,
+            generator=self._generator,
+        )
+
     def end_session(self) -> None:
         """Release per-world history while retaining the loaded model weights."""
         pipe = self._pipe
@@ -219,6 +263,7 @@ class HYWorld15Backend:
             pipe.vae.clear_cache()
             pipe.init_kv_cache()
         self._generator = None
+        self._planned_noise = None
         self._kv_cache = None
         self._vision_states = None
         self._initial_cond_chunk = None
@@ -368,7 +413,7 @@ class HYWorld15Backend:
             (len(selected),),
             self._config.stabilization_level - 1,
             device=self._device,
-            dtype=pipe.target_dtype,
+            dtype=pipe.scheduler.timesteps.dtype,
         )
         with torch.autocast(device_type="cuda", dtype=pipe.target_dtype):
             self._kv_cache = pipe.transformer(
@@ -401,7 +446,6 @@ class HYWorld15Backend:
         """Apply the distilled four-step scheduler to only the current chunk."""
         torch = self._require_torch()
         pipe = self._require_pipe()
-        pipe.scheduler.set_timesteps(self._config.inference_steps, device=self._device)
         viewmats = torch.as_tensor(
             camera.viewmats, device=self._device, dtype=pipe.target_dtype
         ).unsqueeze(0)
@@ -468,8 +512,9 @@ class HYWorld15Backend:
                     )
                 )
         decoded = torch.cat(decoded_parts, dim=2)
-        decoded = (decoded / 2 + 0.5).clamp(0, 1)
-        decoded = (decoded * 255).round().to(torch.uint8).cpu()
+        # Match upstream save_video: scale in float32 and truncate to uint8.
+        decoded = (decoded / 2 + 0.5).clamp(0, 1).cpu().float()
+        decoded = (decoded * 255).clamp(0, 255).to(torch.uint8)
         return np.ascontiguousarray(decoded[0].permute(1, 2, 3, 0).numpy())
 
     def _require_torch(self) -> Any:
