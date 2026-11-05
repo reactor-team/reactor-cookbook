@@ -1,6 +1,6 @@
 # Run SANA-WM through Reactor Runtime
 
-The adapter uses Reactor Runtime 3.5's native step loop with typed input snapshots
+The adapter uses Reactor Runtime 3.10's native step loop with typed input snapshots
 and one native chunk per generation step.
 
 Run NVIDIA's public [SANA-WM](https://github.com/NVlabs/SANA) streaming world
@@ -23,7 +23,7 @@ weights cache and calls its streaming inference components directly.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` controls its Reactor
-Runtime 3.5.0, CUDA 12.8, Python 3.12, system packages, and Python dependencies.
+Runtime 3.10.0, CUDA 12.8, Python 3.12, system packages, and Python dependencies.
 `requirements.txt` contains the model's inference dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -124,6 +124,18 @@ The defaults in `sana_wm.yaml` preserve those released memory lengths. Prompt
 changes start a fresh rollout because upstream encodes text when the caches are
 initialized. The distilled release uses classifier-free guidance scale 1 with
 its fixed empty negative prompt.
+
+The adapter reproduces `inference_video_scripts/wm/inference_sana_wm_streaming.py`
+frame for frame. Upstream draws the Stage-1 noise for the whole clip at once,
+so a rollout driven by `set_camera_trajectory` spans the trajectory's whole
+24-frame chunks, exactly as `--camera <file> --num_frames <F>` does; live
+controls keep the 512-chunk bound. The session seed is upstream's `--seed`;
+the refiner keeps upstream's separate `--refiner_seed` (`inference.refiner_seed`,
+42). Startup applies upstream's backend settings (TF32 matmuls, SDPA selection,
+cuDNN benchmark) and compiles the refiner transformer as upstream does
+(`inference.torch_compile`; `SANA_WM_TORCH_COMPILE_*` override it), so the first
+chunk after startup includes the compile warmup. Frames are quantized with
+upstream's bfloat16 `(x + 1) * 127.5` truncation.
 
 Each rollout is bounded at 512 chunks. Reaching the bound broadcasts a reset,
 reinitializes the caches from the selected image, prompt, and seed, and

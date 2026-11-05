@@ -26,12 +26,17 @@ def camera_control():
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    module.SOURCE = Path(source)
     return module
 
 
 def backend(camera_control):
     model = object.__new__(SanaCameraPlanner)
     model._camera = camera_control
+    cam_utils = camera_control.SOURCE / "diffusion/utils/cam_utils.py"
+    spec = importlib.util.spec_from_file_location("sana_wm_test_cam_utils", cam_utils)
+    model._cam_utils = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(model._cam_utils)
     model._trajectory = None
     model._config = SimpleNamespace(translation_speed=0.025, rotation_speed_degrees=0.6)
     model._integrator = camera_control.CameraPoseIntegrator(math.radians(60))
@@ -120,3 +125,28 @@ def test_finite_trajectory_normalization_and_end(camera_control):
     np.testing.assert_array_equal(model.plan_chunk(set()), expected[1:25])
     np.testing.assert_array_equal(model.plan_chunk(set()), expected[25:49])
     assert model.plan_chunk(set()) is None
+
+
+def test_trajectory_relativization_matches_upstream_prepare_camera(camera_control):
+    import torch
+
+    model = backend(camera_control)
+    model._config.pitch_limit_degrees = 60
+    rng = np.random.default_rng(0)
+    angles = rng.uniform(-1, 1, size=(49, 3)).astype(np.float32)
+    trajectory = np.tile(np.eye(4, dtype=np.float32), (49, 1, 1))
+    for index, (a, b, c) in enumerate(angles):
+        ca, sa, cb, sb = math.cos(a), math.sin(a), math.cos(b), math.sin(b)
+        trajectory[index, :3, :3] = np.array(
+            [[ca * cb, -sa, ca * sb], [sa * cb, ca, sa * sb], [-sb, 0, cb]]
+        )
+        trajectory[index, :3, 3] = rng.normal(size=3) * c
+    # Upstream inference_sana_wm.prepare_camera, verbatim.
+    poses = torch.from_numpy(trajectory).float()
+    first_inv = model._cam_utils.get_pose_inverse(poses[0:1]).squeeze(0)
+    expected = torch.cat(
+        [torch.eye(4).unsqueeze(0), torch.matmul(first_inv, poses[1:])], dim=0
+    ).numpy()
+    model.reset(trajectory)
+    np.testing.assert_array_equal(model.plan_chunk(set()), expected[1:25])
+    np.testing.assert_array_equal(model.plan_chunk(set()), expected[25:49])

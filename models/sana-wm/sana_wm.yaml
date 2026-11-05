@@ -20,6 +20,12 @@ assets:
 
 inference:
   seed: 42
+  # Upstream `--refiner_seed`: the streaming CLI seeds the refiner separately
+  # from `--seed`, so a session seed changes only the Stage-1 noise.
+  refiner_seed: 42
+  # Upstream compiles the refiner transformer by default
+  # (max-autotune-no-cudagraphs; SANA_WM_TORCH_COMPILE_* override it).
+  torch_compile: true
   # Upstream streaming defaults. Keep these values for memory evaluation.
   num_cached_blocks: 2
   refiner_kv_max_frames: 11
