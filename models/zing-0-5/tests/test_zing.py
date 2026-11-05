@@ -191,6 +191,24 @@ def test_image_upload_is_real_and_moderated(tmp_path: Path) -> None:
     )
 
 
+def test_image_is_resized_without_crop_like_upstream(tmp_path: Path) -> None:
+    # Upstream MessageProcessor: Image.open(path).convert("RGB").resize(..., BICUBIC).
+    rng = np.random.default_rng(0)
+    source = Image.fromarray(rng.integers(0, 256, (768, 1376, 3), dtype=np.uint8))
+    path = tmp_path / "case.png"
+    source.save(path)
+    pixels = prepare_image(
+        UploadedFile(name=path.name, mime_type="image/png", data=path.read_bytes())
+    )
+    with Image.open(path) as image:
+        expected = np.asarray(
+            image.convert("RGB").resize((1248, 704), Image.Resampling.BICUBIC),
+            dtype=np.uint8,
+        )
+    assert pixels.shape == (704, 1248, 3)
+    assert np.array_equal(pixels, expected)
+
+
 def test_new_session_waits_for_user_input() -> None:
     class IdleBackend:
         def reset(self, **_: object) -> None:
