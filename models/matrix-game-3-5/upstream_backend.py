@@ -101,9 +101,16 @@ class MatrixWorkerBackend:
         anchor_image: Path | bytes,
         prompt: str,
         suffix: str,
+        camera: np.ndarray | None = None,
     ) -> None:
-        """Start a fresh stateful rollout from an image and prompt."""
+        """Start a fresh stateful rollout from an image, prompt, and optional path.
+
+        ``camera`` is a full ``(N, 4, 4)`` camera-to-world path. Without one,
+        the rollout timeline starts from the default sample camera and each
+        chunk supplies its own poses.
+        """
         upload_path: Path | None = None
+        camera_path: Path | None = None
         if isinstance(anchor_image, bytes):
             suffix = suffix if suffix in {".bmp", ".jpg", ".png", ".webp"} else ".image"
             upload_path = self._root / f"anchor_{self._request_id + 1}{suffix}"
@@ -111,16 +118,29 @@ class MatrixWorkerBackend:
             image_path = upload_path
         else:
             image_path = anchor_image
+        if camera is not None:
+            poses = np.ascontiguousarray(camera, dtype=np.float32)
+            if poses.ndim != 3 or poses.shape[1:] != (4, 4) or not np.isfinite(poses).all():
+                raise ValueError(f"camera path must be finite (N, 4, 4), got {poses.shape}")
+            camera_path = self._root / f"path_{self._request_id + 1}.npz"
+            np.savez(
+                camera_path,
+                extrinsics_c2w=poses,
+                intrinsics=np.repeat(self._intrinsics[None], len(poses), axis=0),
+            )
         try:
             self._request(
                 "reset",
                 seed=int(seed),
                 anchor_image=str(image_path),
                 prompt=prompt,
+                camera=str(camera_path) if camera_path is not None else "",
             )
         finally:
             if upload_path is not None:
                 upload_path.unlink(missing_ok=True)
+            if camera_path is not None:
+                camera_path.unlink(missing_ok=True)
 
     def generate_chunk(
         self,

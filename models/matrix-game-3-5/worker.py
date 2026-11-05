@@ -165,6 +165,10 @@ class MatrixRuntime:
 
         self._np = np
         self._torch = torch
+        self._derive_seed = importlib.import_module(
+            "diffsynth.core.data.unified_dataset"
+        )._derive_seed
+        self._rng_state: tuple[Any, Any, Any, Any] | None = None
         self._build_index = infer.build_index
         self._build_input_workspace = infer.build_input_workspace
         self._build_runtime_args = build_runtime_args
@@ -187,21 +191,32 @@ class MatrixRuntime:
                 accelerate.DistributedDataParallelKwargs(find_unused_parameters=False)
             ],
         )
+        # tools/run_distilled_inference.py seeds the global generators from the
+        # pipeline seed (not the rollout seed) before it builds the dataset and
+        # model. Depth-Anything-3 registration draws from them during the
+        # rollout, so every session restores the state they have here.
         initial_args, _initial_dataset, initial_root = self._prepare_request(
             Path(settings["default_camera"]),
             seed=int(self._config.seed),
             anchor_image=self._default_anchor,
             prompt=self._default_prompt,
+            seed_pipeline=True,
         )
         try:
-            self._seed(int(self._config.seed))
             self._model = build_model(initial_args, self._accelerator)
             self._model.eval()
+            self._rng_state = self._capture_rng()
         finally:
             shutil.rmtree(initial_root, ignore_errors=True)
 
-    def reset(self, seed: int, anchor_image: Path, prompt: str) -> None:
-        """Start a fresh causal session without reloading model weights."""
+    def reset(
+        self, seed: int, anchor_image: Path, prompt: str, camera: Path | None = None
+    ) -> None:
+        """Start a fresh causal session without reloading model weights.
+
+        ``camera`` replaces the default sample trajectory with a full uploaded
+        path, matching the official ``--camera`` input for the whole rollout.
+        """
         anchor_image = anchor_image.resolve()
         prompt = prompt.strip()
         if not anchor_image.is_file():
@@ -213,7 +228,7 @@ class MatrixRuntime:
         self._stop_session()
         self._active_seed = int(seed)
         args, dataset, request_root = self._prepare_request(
-            Path(self._settings["default_camera"]),
+            camera if camera is not None else Path(self._settings["default_camera"]),
             seed=self._active_seed,
             anchor_image=anchor_image,
             prompt=prompt,
@@ -223,7 +238,7 @@ class MatrixRuntime:
         self._session_root = request_root
         self._session_dataset = dataset
         self._chunk_index = 0
-        self._seed(self._active_seed)
+        self._restore_rng()
         output = self._runtime_root / "interactive-unused.mp4"
 
         def run() -> None:
@@ -278,8 +293,13 @@ class MatrixRuntime:
         seed: int,
         anchor_image: Path,
         prompt: str,
+        seed_pipeline: bool = False,
     ) -> tuple[Any, Any, Path]:
-        """Build the one-scene public Matrix dataset for a rollout session."""
+        """Build the one-scene public Matrix dataset for a rollout session.
+
+        ``seed_pipeline`` seeds the global generators just before the dataset
+        is built, where the official runner seeds them.
+        """
         request_root = self._runtime_root / "requests" / uuid.uuid4().hex
         workspace = Path(
             self._build_input_workspace(
@@ -313,6 +333,10 @@ class MatrixRuntime:
         args.start_epoch = 0
         args.start_global_step = 0
         args.rank = self._accelerator.process_index
+        if seed_pipeline:
+            self._seed(
+                self._derive_seed(args.seed, "trainer", self._accelerator.process_index, 0)
+            )
         dataset = self._build_dataset(args, train_dataset=None)
         if len(dataset) != 1:
             raise RuntimeError(
@@ -370,12 +394,33 @@ class MatrixRuntime:
         )
 
     def _seed(self, seed: int) -> None:
-        """Seed every upstream generator used by the causal rollout."""
+        """Seed every global generator as tools/run_distilled_inference.py does."""
         self._torch.manual_seed(seed)
         if self._torch.cuda.is_available():
             self._torch.cuda.manual_seed_all(seed)
         self._np.random.seed(seed & 0xFFFFFFFF)
         random.seed(seed)
+
+    def _capture_rng(self) -> tuple[Any, Any, Any, Any]:
+        """Return the global generator states after model construction."""
+        torch = self._torch
+        return (
+            torch.get_rng_state(),
+            torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            self._np.random.get_state(),
+            random.getstate(),
+        )
+
+    def _restore_rng(self) -> None:
+        """Give a fresh rollout the generator states of an official run."""
+        if self._rng_state is None:
+            raise RuntimeError("Matrix worker generator state was not captured")
+        cpu, cuda, numpy_state, python_state = self._rng_state
+        self._torch.set_rng_state(cpu)
+        if cuda is not None:
+            self._torch.cuda.set_rng_state_all(cuda)
+        self._np.random.set_state(numpy_state)
+        random.setstate(python_state)
 
 
 def _intrinsic_matrices(value: np.ndarray, frame_count: int) -> np.ndarray:
@@ -431,10 +476,12 @@ def main() -> int:
             elif command == "reset":
                 if runtime is None:
                     raise RuntimeError("Matrix worker is not initialized")
+                camera = str(request.get("camera") or "")
                 runtime.reset(
                     int(request["seed"]),
                     Path(request["anchor_image"]),
                     str(request["prompt"]),
+                    Path(camera) if camera else None,
                 )
                 _respond(request_id, ok=True)
             elif command == "generate":

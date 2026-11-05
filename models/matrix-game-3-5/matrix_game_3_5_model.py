@@ -30,11 +30,12 @@ def normalize_output_frames(value: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True)
 class MatrixGame35Anchor:
-    """Carry the reference and seed used only when starting a fresh world."""
+    """Carry the reference, seed, and optional full camera path of a fresh world."""
 
     image: Path | bytes
     suffix: str
     seed: int
+    camera: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ class MatrixGame35Model:
                 anchor_image=input.anchor.image,
                 suffix=input.anchor.suffix,
                 prompt=input.prompt.strip(),
+                camera=input.anchor.camera,
             )
             self._seed = input.anchor.seed
             self._world_id = input.world_id
