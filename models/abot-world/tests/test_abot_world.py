@@ -247,7 +247,7 @@ class _Pipeline:
         self.kv_cache1 = None
         self.index = 0
         self.vae = SimpleNamespace(
-            model=SimpleNamespace(clear_cache=lambda: self.events.append("vae_clear")),
+            model=SimpleNamespace(clear_cache=self.clear_decoder_cache),
             taehv=SimpleNamespace(reset=lambda: self.events.append("taehv_reset")),
         )
 
@@ -260,6 +260,9 @@ class _Pipeline:
     def reset_stream(self, **kwargs):
         self.events.append("reset_stream")
         self.kv_cache1 = object()
+
+    def clear_decoder_cache(self):
+        self.events.append("vae_clear")
         self.index = 0
 
     def set_first_frame_latent(self, path, **kwargs):
@@ -304,6 +307,7 @@ def test_native_model_world_cache_prompt_and_cleanup(tmp_path):
     assert second.complete and second.prompt == "New prompt"
     assert second.sampled_keys == frozenset({"J"}) and pipeline.kv_cache1 is cache
     assert pipeline.events.count("reset_stream") == 1
+    assert pipeline.events.count("vae_clear") == 1
     images = [
         event
         for event in pipeline.events
@@ -314,6 +318,7 @@ def test_native_model_world_cache_prompt_and_cleanup(tmp_path):
         model.generate(ABotInput(1, None, "World", {}))
     fresh = model.generate(ABotInput(2, anchor, "World", {}))
     assert fresh.chunk_index == 1 and fresh.frames.shape[0] == 9
+    assert pipeline.events.count("vae_clear") == 2
     model.reset()
     assert pipeline.events[-2:] == ["vae_clear", "taehv_reset"]
     with pytest.raises(NoAnchor):

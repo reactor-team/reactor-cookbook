@@ -220,6 +220,7 @@ class ABotWorldModel:
             device=self._device,
             initial_latent=None,
         )
+        self._clear_decoder_cache()
         with _materialized_image(
             selected_input, suffix, self._weights_root
         ) as image_path:
@@ -287,6 +288,11 @@ class ABotWorldModel:
             device=self._device,
             initial_latent=None,
         )
+        self._clear_decoder_cache()
+
+    def _clear_decoder_cache(self) -> None:
+        """Clear temporal decoder history at every fresh-world boundary."""
+        pipeline = self._require_pipeline()
         vae_model = getattr(pipeline.vae, "model", None)
         if vae_model is not None and hasattr(vae_model, "clear_cache"):
             vae_model.clear_cache()
