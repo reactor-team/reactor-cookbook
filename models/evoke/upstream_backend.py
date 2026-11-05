@@ -91,8 +91,13 @@ class EvokeWorkerBackend:
         source_fps: int = 30,
         source_height: int = 720,
         source_width: int = 1280,
+        camera_path: np.ndarray | None = None,
     ) -> None:
-        """Start a fresh rollout without reloading model weights."""
+        """Start a fresh rollout without reloading model weights.
+
+        ``camera_path`` is a complete uploaded c2w path. The worker conditions
+        it once with the released pose-track recipe and owns it for the rollout.
+        """
         previous_uploads = self._session_uploads
         self._session_uploads = []
         media_path = self._materialize(media, "media", media_suffix)
@@ -108,6 +113,9 @@ class EvokeWorkerBackend:
                 source_fps=int(source_fps),
                 source_height=int(source_height),
                 source_width=int(source_width),
+                camera_path=None
+                if camera_path is None
+                else np.asarray(camera_path, dtype=np.float32).tolist(),
             )
         finally:
             for path in previous_uploads:

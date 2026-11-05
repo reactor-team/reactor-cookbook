@@ -18,12 +18,24 @@ from typing import Any
 import numpy as np
 
 _RESPONSE_PREFIX = "REACTOR_EVOKE_RESPONSE "
+# The released launcher's negative prompt (scripts/inference/infer_batch.py NEG). CFG is off
+# at guidance_scale=1.0, so it is never encoded; it is kept identical for the record.
 _NEGATIVE_PROMPT = (
     "oversaturated, garish colors, color shift, hue shift, color drift, inconsistent colors, "
     "color cast, color banding, flickering, jittery motion, abrupt transitions, sudden scene "
     "changes, temporal inconsistency, static, still picture, blurred details, subtitles, style, "
-    "works, paintings, images, deformed, disfigured, messy background"
+    "works, paintings, images, extra fingers, poorly drawn hands, poorly drawn faces, deformed, "
+    "disfigured, misshapen limbs, fused fingers, three legs, many people in the background, "
+    "walking backwards, messy background"
 )
+# Pose-track conditioning applied by the released launcher (infer_batch.py defaults that
+# infer_post_distill.sh keeps): a five-frame low-pass, then a per-chunk clamp of 10 degrees
+# and 3 units on the engine's 33-then-36 frame chunk layout.
+_POSE_SMOOTH_WINDOW = 5
+_MAX_DEGREES_PER_CHUNK = 10.0
+_MAX_TRANSLATION_PER_CHUNK = 3.0
+# A rollout of N chunks reads N * 36 - 3 poses: the official loader requests that many.
+_POSE_TAIL_UNUSED = 3
 
 
 class _InteractiveStopError(Exception):
@@ -89,12 +101,10 @@ class _InteractiveSession:
         value = decoded.detach().float().cpu().numpy()
         if value.ndim != 5 or value.shape[0] != 1 or value.shape[1] != 3:
             raise RuntimeError(f"unexpected EVOKE decoded shape: {value.shape}")
-        frames = np.transpose(value[0], (1, 2, 3, 0))
-        if float(frames.min()) < -0.05:
-            frames = (frames + 1.0) * 127.5
-        elif float(frames.max()) <= 1.5:
-            frames = frames * 255.0
-        frames = np.clip(frames, 0.0, 255.0).round().astype(np.uint8)
+        # The official output path: diffusers postprocess_video maps [-1, 1] with x * 0.5 + 0.5
+        # and clamps to [0, 1]; infer_single.py then scales by 255 and rounds.
+        frames = np.clip(np.transpose(value[0], (1, 2, 3, 0)) * 0.5 + 0.5, 0.0, 1.0)
+        frames = (frames * 255.0).round().astype(np.uint8)
         self._results.put(_GeneratedChunk(chunk_index, np.ascontiguousarray(frames)))
 
     def generate(
@@ -177,8 +187,9 @@ class EvokeRuntime:
         source_fps: int,
         source_height: int,
         source_width: int,
+        camera_path: np.ndarray | None = None,
     ) -> None:
-        """Start a fresh i2v, v2v, or t2v rollout."""
+        """Start a fresh i2v, v2v, or t2v rollout, optionally along a complete camera path."""
         if mode not in {"i2v", "v2v", "t2v"}:
             raise ValueError(f"unsupported EVOKE mode: {mode}")
         prompt = prompt.strip() or self._stability_prompt
@@ -201,6 +212,7 @@ class EvokeRuntime:
             source_fps,
             source_height,
             source_width,
+            camera_path,
         )
         session = _InteractiveSession(self._max_chunks, prepared["pose_base"])
         self._session = session
@@ -254,6 +266,7 @@ class EvokeRuntime:
         source_fps: int,
         source_height: int,
         source_width: int,
+        camera_path: np.ndarray | None = None,
     ) -> dict[str, Any]:
         torch = self._torch
         if mode == "t2v":
@@ -286,7 +299,11 @@ class EvokeRuntime:
                 target_fps=24,
                 source_fps=30,
             )
-            c2ws = torch.eye(4, dtype=torch.float32).repeat(self._max_chunks * 36, 1, 1)
+            if camera_path is not None:
+                # The official i2v input: the path is the pose track, used in its own frame.
+                c2ws = self._condition_camera_path(camera_path)
+            else:
+                c2ws = torch.eye(4, dtype=torch.float32).repeat(self._max_chunks * 36, 1, 1)
             return {
                 "image": image,
                 "video": None,
@@ -320,6 +337,11 @@ class EvokeRuntime:
             pose_extend_mode="clamp",
         )
         pose_base = c2ws[max(0, ref_frames - 1)].cpu().numpy().astype(np.float32)
+        if camera_path is not None:
+            # Continue the reference track along the conditioned path, relative to its first pose.
+            path = self._condition_camera_path(camera_path)
+            path = torch.linalg.inv(path[:1]) @ path
+            c2ws = torch.cat([c2ws[:ref_frames], torch.from_numpy(pose_base) @ path])
         return {
             "image": video[0:1].clone(),
             "video": video,
@@ -327,6 +349,29 @@ class EvokeRuntime:
             "c2ws": c2ws,
             "pose_base": pose_base,
         }
+
+    def _condition_camera_path(self, camera_path: np.ndarray) -> Any:
+        """Condition a complete c2w path exactly as infer_single.py does for a pose file."""
+        from evoke.utils.trajectory_capping import (
+            clamp_target_per_chunk_motion,
+            smooth_c2w_trajectory,
+        )
+
+        poses = np.asarray(camera_path, dtype=np.float32)
+        c2ws = self._torch.from_numpy(poses[: len(poses) - _POSE_TAIL_UNUSED]).float()
+        c2ws, _ = smooth_c2w_trajectory(
+            c2ws, ref_pix=0, win=_POSE_SMOOTH_WINDOW, verbose=False
+        )
+        c2ws, _, _ = clamp_target_per_chunk_motion(
+            c2ws=c2ws,
+            ref_pix=0,
+            frames_per_chunk=36,
+            first_chunk_frames=33,
+            max_deg=_MAX_DEGREES_PER_CHUNK,
+            max_trans=_MAX_TRANSLATION_PER_CHUNK,
+            verbose=False,
+        )
+        return c2ws
 
     def _run_pipeline(
         self,
@@ -462,6 +507,9 @@ class EvokeRuntime:
             "overlap_noise",
             "--geo_recon_backend",
             "da3",
+            # The released launcher's depth resolution; the CLI default (504) is not the recipe.
+            "--geo_da3_process_res",
+            "644",
             "--geo_cloud_update_n",
             "12",
             "--geo_depth_backend",
@@ -528,6 +576,9 @@ def main() -> None:
                     source_fps=int(request["source_fps"]),
                     source_height=int(request["source_height"]),
                     source_width=int(request["source_width"]),
+                    camera_path=None
+                    if request.get("camera_path") is None
+                    else np.asarray(request["camera_path"], dtype=np.float32),
                 )
                 _respond(request_id, ok=True)
             elif command == "generate":

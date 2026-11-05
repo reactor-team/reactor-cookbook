@@ -22,6 +22,7 @@ class EvokeAnchor:
     source_fps: int
     source_height: int
     source_width: int
+    camera_path: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,7 @@ class EvokeModel:
                 source_fps=anchor.source_fps,
                 source_height=anchor.source_height,
                 source_width=anchor.source_width,
+                camera_path=anchor.camera_path,
             )
             self._world_id = input.world_id
             self._chunk_index = 0

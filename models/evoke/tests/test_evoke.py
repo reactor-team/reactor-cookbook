@@ -123,6 +123,7 @@ def test_contract_documents_commands_messages_and_video_track() -> None:
     assert set(contract.commands) == {
         "reset",
         "set_forward",
+        "set_camera_path",
         "set_image",
         "set_pitch",
         "set_prompt",
@@ -149,15 +150,15 @@ def test_contract_documents_commands_messages_and_video_track() -> None:
         {"name": "main_video", "kind": "video", "direction": "out"}
     ]
     assert set(document["webhooks"]) == {
+        "camera_path_selected",
         "command_applied",
-        "rollout_restarted",
         "state_update",
     }
     assert all(
         webhook["post"]["summary"].startswith("Emitted ")
         for webhook in document["webhooks"].values()
     )
-    for name in ("StateUpdate", "CommandApplied", "RolloutRestarted"):
+    for name in ("StateUpdate", "CommandApplied"):
         properties = document["components"]["schemas"][name]["properties"]
         assert all(
             property_schema.get("description")
@@ -172,7 +173,7 @@ def test_reactor_manifest_declares_generated_gpu_build() -> None:
     assert document["$schema"] == "reactor/v2"
     assert document["model"]["resources"]["gpu"]["count"] == 1
     assert document["runtime"]["weights_path"] == "~/.cache/reactor_registry/evoke"
-    assert document["build"]["runtime_version"] == "3.5.0"
+    assert document["build"]["runtime_version"] == "3.10.0"
     assert document["build"]["python_requirements"] == "requirements.txt"
     assert "git" in document["build"]["system_packages"]
     assert not (EXAMPLE_DIR / "Dockerfile").exists()
@@ -360,10 +361,10 @@ def test_step_snapshot_preserves_conditioning_and_errors() -> None:
 
 
 @pytest.mark.parametrize("max_chunks", [512, 2048])
-def test_automatic_restart_effects_belong_to_output(
+def test_rollout_limit_preserves_world_until_manual_reset(
     monkeypatch: Any, max_chunks: int
 ) -> None:
-    """Snapshot a neutral fresh rollout without sending or flushing in input."""
+    """Stop at the horizon without replaying the reference or flushing history."""
     model, backend, messages = _ready_model()
     model._config = SimpleNamespace(max_chunks=max_chunks)
     model._engine._max_chunks = max_chunks
@@ -381,8 +382,13 @@ def test_automatic_restart_effects_belong_to_output(
         await model.process_output(StepOutcome(result=model.generate(last)))
         assert model._chunk_index == max_chunks
         messages.clear()
+        with pytest.raises(ApplicationError, match="complete"):
+            await model.process_input()
+        assert model._state_update().next_chunk is None
+        assert not messages and not flushes and not backend.reset_calls
+        assert model.state._world_id == model.state._applied_world_id
+        await model.reset(seed=42)
         snapshot = await model.process_input()
-        assert not messages and not flushes
         assert snapshot.anchor is not None
         np.testing.assert_allclose(
             snapshot.trajectory, np.repeat(np.eye(4)[None], 36, axis=0)

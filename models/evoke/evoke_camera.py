@@ -2,10 +2,53 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 
 import numpy as np
+
+
+@dataclass(frozen=True)
+class CameraPath:
+    """Finite absolute camera trajectory in the native OpenCV convention.
+
+    ``poses`` keeps the uploaded camera-to-world matrices verbatim, 36 per
+    native chunk. The worker conditions them with EVOKE's released pose-track
+    recipe before the rollout starts, as the official launcher does for a
+    pose file.
+    """
+
+    poses: np.ndarray
+
+    @property
+    def chunk_count(self) -> int:
+        """Return the native 36-frame chunks the path spans."""
+        return len(self.poses) // 36
+
+
+def load_camera_path(data: bytes, max_chunks: int) -> CameraPath:
+    """Validate a pixel-rate pose sequence spanning whole native 36-pose windows."""
+    if len(data) > 16 * 1024 * 1024:
+        raise ValueError("Camera path exceeds 16 MiB")
+    payload = json.loads(data)
+    if not isinstance(payload, dict) or set(payload) != {"poses"}:
+        raise ValueError("Camera path must contain only poses")
+    poses = np.asarray(payload["poses"], dtype=np.float32)
+    if poses.ndim != 3 or poses.shape[1:] != (4, 4):
+        raise ValueError("poses must have shape [N, 4, 4]")
+    if not 36 <= len(poses) <= max_chunks * 36 or len(poses) % 36:
+        raise ValueError("A path needs 36 * chunks poses within rollout capacity")
+    if not np.isfinite(poses).all() or not np.allclose(
+        poses[:, 3], [0, 0, 0, 1], atol=1e-5
+    ):
+        raise ValueError("Camera poses must be finite homogeneous transforms")
+    rotations = poses[:, :3, :3]
+    if not np.allclose(
+        rotations @ rotations.transpose(0, 2, 1), np.eye(3), atol=1e-4
+    ) or not np.allclose(np.linalg.det(rotations), 1, atol=1e-4):
+        raise ValueError("Camera poses require proper rotations")
+    return CameraPath(np.ascontiguousarray(poses))
 
 
 @dataclass(frozen=True)
