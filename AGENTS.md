@@ -169,7 +169,12 @@ confirm only the intended surface moved.
 ## Robotics client documentation
 
 Public robotics docs consume `robotics/sim/notebooks/reactor_robotics` and the
-`cosmos-droid`, `robotwin`, `dreamzero`, and `libero` simulator packages.
+`cosmos-droid` and `dreamzero` simulator packages. The launch-facing READMEs
+cover Cosmos Nano, DreamZero, and FLUX Action on DROID under policy inference.
+Preserve Cosmos3 Nano Sim Bimanual and Transfer under a separate action-conditioned
+simulation section, including their examples and all targets linked by the docs.
+Keep other policy examples available in source without recommending them as
+launched policies.
 The robotics environments use the current tested Python SDK with lockfiles.
 Upgrade their manifests and lockfiles together; run `.github/workflows/robotics.yml`.
 `robotics/sim/robocasa365` uses native SDK tracks in local mode; its historical
