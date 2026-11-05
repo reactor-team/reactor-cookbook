@@ -20,6 +20,10 @@ model:
 runtime:
   import: matrix_game_3_0:MatrixGame30
   config: matrix_game_3_0.yaml
+  # One step's frames go back in one data-channel message; a native step is
+  # larger than the default 64 MiB.
+  webrtc:
+    max_message_size: 256Mi
   # Source checkout, distilled checkpoint, and uploads stay here.
   weights_path: ~/.cache/reactor_registry/matrix-game-3-0-distilled
   recording:
@@ -33,7 +37,7 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.5.0"
+  runtime_version: "3.11.3"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"

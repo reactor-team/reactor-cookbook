@@ -61,9 +61,10 @@ class _InteractiveModule(Protocol):
 
 
 class _AttentionModule(Protocol):
-    """Describe the upstream attention dispatcher selected by configuration."""
+    """Describe which FlashAttention kernels the upstream dispatcher found."""
 
-    attention: Callable[..., Any]
+    FLASH_ATTN_2_AVAILABLE: bool
+    FLASH_ATTN_3_AVAILABLE: bool
 
 
 class _ModelModule(Protocol):
@@ -90,6 +91,60 @@ def action_from_controls(
         0.0,
     )
     return NativeAction(keyboard=keyboard, mouse=(pitch * 0.1, yaw * 0.1))
+
+
+def key_length_attention(
+    q: Any,
+    k: Any,
+    v: Any,
+    q_lens: Any = None,
+    k_lens: Any = None,
+    dropout_p: float = 0.0,
+    softmax_scale: float | None = None,
+    q_scale: float | None = None,
+    causal: bool = False,
+    window_size: tuple[int, int] = (-1, -1),
+    deterministic: bool = False,
+    dtype: Any = None,
+    version: object = None,
+) -> Any:
+    """Match upstream ``flash_attention`` with SDPA over each item's valid keys.
+
+    Upstream pads every DiT sequence to its maximum memory length and passes the
+    unpadded lengths as ``k_lens``; FlashAttention ignores the padded keys.
+    """
+    torch = importlib.import_module("torch")
+    functional = importlib.import_module("torch.nn.functional")
+    if dropout_p or causal or tuple(window_size) != (-1, -1):
+        raise NotImplementedError(
+            "Matrix-Game 3.0 SDPA attention supports non-causal global attention only"
+        )
+    batch, query_length, key_length = q.size(0), q.size(1), k.size(1)
+    if q_lens is not None and any(int(n) != query_length for n in q_lens):
+        raise NotImplementedError("Matrix-Game 3.0 SDPA attention needs full queries")
+    half_dtypes = (torch.float16, torch.bfloat16)
+    cast_dtype = torch.bfloat16 if dtype is None else dtype
+    out_dtype = q.dtype
+
+    def half(value: Any) -> Any:
+        return value if value.dtype in half_dtypes else value.to(cast_dtype)
+
+    lengths = [key_length] * batch if k_lens is None else [int(n) for n in k_lens]
+    v = half(v)
+    q = half(q).to(v.dtype)
+    k = half(k).to(v.dtype)
+    if q_scale is not None:
+        q = q * q_scale
+    outputs = [
+        functional.scaled_dot_product_attention(
+            q[index : index + 1].transpose(1, 2),
+            k[index : index + 1, :length].transpose(1, 2),
+            v[index : index + 1, :length].transpose(1, 2),
+            scale=softmax_scale,
+        ).transpose(1, 2)
+        for index, length in enumerate(lengths)
+    ]
+    return torch.cat(outputs).type(out_dtype)
 
 
 class MatrixGame30Backend:
@@ -120,7 +175,11 @@ class MatrixGame30Backend:
             _AttentionModule, importlib.import_module("wan.modules.attention")
         )
         model_module = cast(_ModelModule, importlib.import_module("wan.modules.model"))
-        model_module.flash_attention = attention.attention
+        if not (attention.FLASH_ATTN_2_AVAILABLE or attention.FLASH_ATTN_3_AVAILABLE):
+            # Upstream DiT layers call FlashAttention directly and require it.
+            # Without it, keep FlashAttention's key-length mask instead of the
+            # upstream SDPA fallback, which attends to the zero-padded tokens.
+            model_module.flash_attention = key_length_attention
         config = configs.WAN_CONFIGS["matrix_game3"]
         args = self._build_args()
         pipeline_type = module.MatrixGame3Pipeline
@@ -135,7 +194,7 @@ class MatrixGame30Backend:
             t5_cpu=False,
             convert_model_dtype=False,
             args=args,
-            fa_version="0",
+            fa_version=None,
             use_base_model=False,
         )
         self._module = module
@@ -222,7 +281,7 @@ class MatrixGame30Backend:
             vae_type=config.vae_type,
             use_int8=config.use_int8,
             verify_quant=False,
-            fa_version="0",
+            fa_version=None,
             interactive=True,
             use_base_model=False,
         )

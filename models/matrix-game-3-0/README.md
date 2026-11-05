@@ -1,6 +1,6 @@
 # Play Matrix-Game 3.0 through Reactor Runtime
 
-The adapter uses Reactor Runtime 3.5's native step loop. `matrix_game_3_0.py`
+The adapter uses Reactor Runtime 3.10's native step loop. `matrix_game_3_0.py`
 handles client commands and publishes video and state updates;
 `matrix_game_3_0_model.py` owns the native rollout and its successful chunk
 count without a Runtime dependency. Typed inputs identify each world and
@@ -30,7 +30,7 @@ cache and calls the upstream interactive pipeline directly.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
-controls its Reactor Runtime 3.5.0, CUDA 12.8.1, Python 3.12, system packages,
+controls its Reactor Runtime 3.11.3, CUDA 12.8.1, Python 3.12, system packages,
 and Python dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -162,7 +162,10 @@ Docker daemon's data root on a large disk when the system disk is constrained.
   native rollout length.
 - The first load downloads the distilled 5B DiT, UMT5 assets, Wan2.2
   encoder VAE, and the 0.75-pruned MG-LightVAE v2 decoder.
-- The upstream model imports its attention function directly. The adapter
-  routes that symbol through the adjacent upstream dispatcher so `fa_version: 0`
-  consistently uses SDPA.
+- The upstream DiT calls FlashAttention directly and the image does not ship
+  it. When FlashAttention 2 or 3 is installed, the adapter uses upstream's
+  default kernel selection unchanged. Otherwise it substitutes PyTorch SDPA
+  over each sequence's valid keys, preserving FlashAttention's key-length mask
+  over the zero-padded memory slots; upstream's own SDPA fallback ignores that
+  mask.
 - Stop `reactor run` to remove the container and release its GPU memory.
