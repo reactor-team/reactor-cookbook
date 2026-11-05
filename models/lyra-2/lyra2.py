@@ -6,9 +6,27 @@ import asyncio
 import secrets
 from pathlib import Path
 
-from reactor_runtime.distributed import DistributedRunner
+import numpy as np
 from lyra2_assets import prepare_config
+from lyra2_camera import (
+    CameraPath,
+    Lyra2CameraPlanner,
+    camera_path_chunk,
+    load_camera_path,
+)
 from lyra2_images import prepare_image
+from lyra2_model import Lyra2Input, Lyra2Model, Lyra2Result
+from lyra2_types import (
+    CameraChanged,
+    CameraPathSelected,
+    ChunkCompleted,
+    ImageSelected,
+    Lyra2Output,
+    Lyra2State,
+    PromptQueued,
+    ResetQueued,
+    StateUpdate,
+)
 from reactor_runtime import (
     ApplicationError,
     ClientInfo,
@@ -24,19 +42,7 @@ from reactor_runtime import (
     session_ended,
     session_started,
 )
-
-from lyra2_model import Lyra2Input, Lyra2Model, Lyra2Result
-from lyra2_camera import Lyra2CameraPlanner
-from lyra2_types import (
-    CameraChanged,
-    ChunkCompleted,
-    ImageSelected,
-    Lyra2Output,
-    Lyra2State,
-    PromptQueued,
-    ResetQueued,
-    StateUpdate,
-)
+from reactor_runtime.distributed import DistributedRunner
 
 
 class Lyra2(ReactorApp):
@@ -49,6 +55,8 @@ class Lyra2(ReactorApp):
         super().__init__()
         self.config: dict | None = None
         self.engine: DistributedRunner | None = None
+        self._camera_path: CameraPath | None = None
+        self._path_calibration: np.ndarray | None = None
 
     def load(self, config_path: Path | None) -> None:
         if config_path is None:
@@ -67,6 +75,8 @@ class Lyra2(ReactorApp):
     @session_started
     def started(self) -> None:
         config = self._cfg()
+        self._camera_path = None
+        self._path_calibration = None
         self.state._seed = config["seed"]
         self.state._planner = Lyra2CameraPlanner(
             translation_per_frame=config["translation_per_frame"],
@@ -76,6 +86,8 @@ class Lyra2(ReactorApp):
     @session_ended
     def ended(self) -> None:
         self.engine.reset()
+        self._camera_path = None
+        self._path_calibration = None
         self.output.flush()
 
     @connected
@@ -98,11 +110,11 @@ class Lyra2(ReactorApp):
     )
     async def set_image(
         self,
-        image: UploadedFile = InputField(
+        image: UploadedFile = InputField(  # noqa: B008 - schema field declaration
             moderate=True,
             description=(
                 "Anchor image uploaded through Reactor. JPEG, PNG, WebP, or BMP up to 25 MiB; it is "
-                "resized to 768x448 and becomes active when the fresh rollout begins."
+                "resized to 832x480 and becomes active when the fresh rollout begins."
             ),
         ),
         prompt: str = InputField(
@@ -128,6 +140,7 @@ class Lyra2(ReactorApp):
         if seed >= 0:
             self.state._seed = seed
         self.state._image, self.state._image_name = None, image.name
+        self._camera_path = None
         self.state.prompt = prompt.strip() or self._cfg()["default_prompt"]
         self._request_reset()
         await self.send(self._state())
@@ -166,6 +179,7 @@ class Lyra2(ReactorApp):
         anchor = await asyncio.to_thread(prepare_image, upload)
         self.state._image, self.state._image_name = selected, selected.name
         self.state._anchor = anchor
+        self._camera_path = None
         caption = selected.with_suffix(".txt")
         self.state.prompt = (
             caption.read_text().strip()
@@ -260,6 +274,11 @@ class Lyra2(ReactorApp):
         ),
     ) -> CameraChanged:
         self._require_image()
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select an image to return to held camera controls.",
+            )
         self.state.forward = forward
         self.state.strafe = strafe
         self.state.vertical = vertical
@@ -279,6 +298,11 @@ class Lyra2(ReactorApp):
     )
     async def release_camera(self) -> CameraChanged:
         self._require_image()
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select an image to return to held camera controls.",
+            )
         self._clear_motion()
         await self.send(self._state())
         return self._camera_message()
@@ -311,12 +335,46 @@ class Lyra2(ReactorApp):
         await self.send(self._state())
         return ResetQueued(seed=self.state._seed, replaced_chunks=old)
 
+    @event(
+        name="set_camera_path",
+        description="Queue a finite camera-to-world path from the selected image. The first pose is the seed camera; future poses retain their authored trajectory. Reset rewinds the path; image selection restores held controls. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path.",
+    )
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
+            description="JSON poses[N,4,4], N=80*chunks+1 including the image anchor, at most 2 MiB, and optional intrinsics[3,3] or [N,3,3] in pixels at 832x480. Without intrinsics, the seed's DA3-predicted intrinsics are used.",
+        ),
+    ) -> CameraPathSelected:
+        self._require_image()
+        try:
+            path = load_camera_path(trajectory.data)
+        except (ValueError, TypeError, OverflowError) as error:
+            raise CommandError("invalid_camera_path", str(error)) from error
+        self._camera_path = path
+        self._request_reset()
+        # The seed camera is the identity, so the path's first pose maps to it.
+        self._path_calibration = np.linalg.inv(path.poses[0])
+        await self.send(self._state())
+        frames = len(path.poses) - 1
+        return CameraPathSelected(chunks=frames // 80, frames=frames)
+
     async def process_input(self) -> Lyra2Input:
         if self.state._anchor is None:
             raise ApplicationError("No image selected")
         fresh = self.state._world_id != self.state._applied_world_id
-        camera = None
-        if not fresh:
+        # A fresh world is seeded and generates its first chunk in one step;
+        # intrinsics None there means the seed's (DA3's or the path's first K).
+        if self._camera_path is not None:
+            if self.state._chunk >= (len(self._camera_path.poses) - 1) // 80:
+                raise ApplicationError("Camera path complete; reset or select an image.")
+            camera = camera_path_chunk(
+                self._camera_path,
+                self._path_calibration,
+                self.state._chunk,
+                self.state._intrinsics,
+            )
+        else:
             camera = self.state._planner.plan_chunk(
                 **self._axes(), frame_count=80, intrinsics=self.state._intrinsics
             )
@@ -325,8 +383,15 @@ class Lyra2(ReactorApp):
             anchor=self.state._anchor if fresh else None,
             prompt=self.state.prompt,
             seed=self.state._seed,
-            w2c=None if camera is None else camera.w2c,
-            intrinsics=None if camera is None else camera.intrinsics,
+            w2c=camera.w2c,
+            intrinsics=camera.intrinsics,
+            seed_intrinsics=(
+                self._camera_path.intrinsics[0]
+                if fresh
+                and self._camera_path is not None
+                and self._camera_path.intrinsics is not None
+                else None
+            ),
         )
 
     def generate(self, input: Lyra2Input) -> Lyra2Result:
@@ -343,10 +408,6 @@ class Lyra2(ReactorApp):
         if result.intrinsics is not None:
             self.state._intrinsics = result.intrinsics
         self.state._chunk = result.chunk
-        if result.frames is None:
-            self.state._active_prompt = None
-            await self.send(self._state())
-            return None
         self.state._active_prompt = self.state.prompt
         await self.send(
             ChunkCompleted(
@@ -361,6 +422,8 @@ class Lyra2(ReactorApp):
 
     def _request_reset(self) -> None:
         self.output.flush()
+        if self.state._planner is not None:
+            self.state._planner.reset()
         self.state._chunk = 0
         self.state._active_prompt = None
         self.state._intrinsics = None
@@ -387,7 +450,12 @@ class Lyra2(ReactorApp):
         self.state.roll = 0.0
 
     def _camera_message(self) -> CameraChanged:
-        return CameraChanged(**self._axes(), applies_to_chunk=self.state._chunk + 1)
+        return CameraChanged(
+            **self._axes(),
+            applies_to_chunk=None
+            if self.state._anchor is None
+            else self.state._chunk + 1,
+        )
 
     def _state(self) -> StateUpdate:
         return StateUpdate(
@@ -396,6 +464,13 @@ class Lyra2(ReactorApp):
             active_prompt=self.state._active_prompt,
             seed=self.state._seed,
             completed_chunks=self.state._chunk,
+            camera_path_chunks=(len(self._camera_path.poses) - 1) // 80
+            if self._camera_path is not None
+            else 0,
+            camera_path_complete=bool(
+                self._camera_path is not None
+                and self.state._chunk >= (len(self._camera_path.poses) - 1) // 80
+            ),
             **self._axes(),
         )
 

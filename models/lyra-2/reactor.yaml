@@ -1,7 +1,7 @@
 $schema: reactor/v2
 model:
   name: lyra-2-dmd
-  version: v0.1.2
+  version: v0.3.0
   description: Autoregressively explore an image-conditioned Lyra 2.0 video world one native 80-frame chunk at a time.
   resources:
     gpu: {type: NVIDIA_B200, count: 1}
@@ -10,6 +10,10 @@ model:
 runtime:
   import: lyra2:Lyra2
   config: lyra2.yaml
+  # One step's frames go back in one data-channel message; a native step is
+  # larger than the default 64 MiB.
+  webrtc:
+    max_message_size: 256Mi
   weights_path: ~/.cache/reactor_registry/lyra-2
   recording:
     enabled: true
@@ -18,7 +22,7 @@ runtime:
     video_track: main_video
     video: {codec: h264, preset: veryfast, crf: 20}
 build:
-  runtime_version: "3.6.1"
+  runtime_version: "3.11.3"
   python_requirements: requirements.txt
   python_indexes:
     - https://download.pytorch.org/whl/cu128
@@ -48,10 +52,13 @@ build:
   run:
     # MoGe declares Gradio even for its Python API. This release supports the
     # Hugging Face Hub 0.x API required by Lyra's Transformers 4.x stack.
+    # utils3d_moge is MoGe's own pinned geometry dependency; the recipe's
+    # depth rescale (lyra2_custom_traj_inference --use_moge_scale) imports it.
     - >-
       python -m pip install --no-cache-dir --no-build-isolation
       'gradio==6.16.0'
       git+https://github.com/microsoft/MoGe.git@74fbce054ebed49800de42d0ad0e83495065719a
+      'utils3d_moge @ git+https://github.com/EasternJournalist/utils3d-moge.git@62f09d58509485564e24d5d9f6aac9ee9ebc0c37'
     - >-
       git init /opt/lyra &&
       git -C /opt/lyra remote add origin https://github.com/nv-tlabs/lyra.git &&
