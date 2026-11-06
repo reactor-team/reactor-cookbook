@@ -41,6 +41,7 @@ class LingBotBackend:
 
         self._torch = torch
         self._rank = rank
+        self._max_chunks = int(settings.max_chunks)
         self._runtime_root = Path(settings.runtime_root).resolve()
         self._runtime_root.mkdir(parents=True, exist_ok=True)
         config = WAN_CONFIGS["i2v-A14B"]
@@ -94,12 +95,21 @@ class LingBotBackend:
         seed: int,
         anchor_image: Path | bytes,
         suffix: str,
-        intrinsics: Path,
+        intrinsics: Path | np.ndarray,
         prompt: str,
+        noise_chunks: int | None = None,
     ) -> None:
         """Start a fresh image-conditioned causal rollout."""
-        if not intrinsics.is_file():
-            raise FileNotFoundError(f"LingBot intrinsics do not exist: {intrinsics}")
+        chunks = self._max_chunks if noise_chunks is None else noise_chunks
+        if type(chunks) is not int or not 1 <= chunks <= self._max_chunks:
+            raise ValueError("Noise horizon must fit the configured rollout limit")
+        # Native generate draws the entire finite trajectory before denoising.
+        # KV capacity is independent and retains the configured history window.
+        self._rollout.max_chunks = chunks
+        if isinstance(intrinsics, Path):
+            calibration = np.load(intrinsics, allow_pickle=False)
+        else:
+            calibration = np.asarray(intrinsics, dtype=np.float32).reshape(1, 4)
         with ExitStack() as stack:
             if isinstance(anchor_image, bytes):
                 temporary = stack.enter_context(
@@ -114,7 +124,7 @@ class LingBotBackend:
                 self._rollout.reset(
                     prompt,
                     image.convert("RGB"),
-                    np.load(intrinsics, allow_pickle=False),
+                    calibration,
                     seed,
                 )
         self._active = True

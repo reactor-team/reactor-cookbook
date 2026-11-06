@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 import numpy as np
-
 from lyra2_backend import Lyra2Backend
 
 
@@ -15,6 +14,8 @@ class Lyra2Input:
     seed: int
     w2c: np.ndarray | None
     intrinsics: np.ndarray | None
+    # A camera path's first K, which seeds the world instead of DA3's.
+    seed_intrinsics: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class Lyra2Model:
     def __init__(self) -> None:
         self.backend: Lyra2Backend | None = None
         self.world_id: int | None = None
+        self.intrinsics: np.ndarray | None = None
         self.chunk = 0
 
     def load(self, config: dict) -> None:
@@ -48,39 +50,54 @@ class Lyra2Model:
         if self.backend is not None:
             self.backend.clear()
         self.world_id = None
+        self.intrinsics = None
         self.chunk = 0
 
     def generate(self, input: Lyra2Input) -> Lyra2Result:
+        """Run one native 80-frame chunk; a new world is seeded first, in the same step.
+
+        Every Runtime step yields video: seeding (DA3/MoGe depth, cache) and the
+        world's first chunk run together, in the official script's order.
+        ``input.intrinsics`` None means the seed's intrinsics.
+        """
         if self.backend is None:
             raise RuntimeError("Lyra-2 not loaded")
-        if input.world_id != self.world_id:
+        if input.w2c is None:
+            raise NoCamera("Each Lyra step needs its 80 camera poses")
+        fresh = input.world_id != self.world_id
+        seed_k = None
+        if fresh:
             if input.anchor is None:
                 raise NoAnchor("A new Lyra world requires an anchor image")
-            c2w, intrinsics = self.backend.reset(
-                input.anchor, prompt=input.prompt, seed=input.seed
+            self.world_id = None
+            seed_c2w, seed_k = self.backend.reset(
+                input.anchor,
+                prompt=input.prompt,
+                seed=input.seed,
+                intrinsics=input.seed_intrinsics,
             )
-            self.world_id = input.world_id
+            # Paths and held controls are planned from the identity seed camera.
+            if not np.array_equal(seed_c2w, np.eye(4, dtype=seed_c2w.dtype)):
+                raise RuntimeError("Lyra seeded a non-identity camera")
+            self.intrinsics = seed_k
             self.chunk = 0
-            return Lyra2Result(
-                world_id=input.world_id,
-                chunk=0,
-                frames=None,
-                corrected_c2w=c2w,
-                intrinsics=intrinsics,
+        intrinsics = input.intrinsics
+        if intrinsics is None:
+            intrinsics = np.repeat(
+                np.asarray(self.intrinsics, dtype=np.float32)[None], len(input.w2c), 0
             )
-        if input.w2c is None or input.intrinsics is None:
-            raise NoCamera("Camera poses must follow seed calibration")
         frames, corrected = self.backend.generate_chunk(
             input.w2c,
-            input.intrinsics,
+            intrinsics,
             prompt=input.prompt,
             chunk=self.chunk + 1,
         )
+        self.world_id = input.world_id
         self.chunk += 1
         return Lyra2Result(
             world_id=input.world_id,
             chunk=self.chunk,
             frames=frames,
             corrected_c2w=corrected,
-            intrinsics=None,
+            intrinsics=seed_k,
         )

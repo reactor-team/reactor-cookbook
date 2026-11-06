@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: alaya-world
-  version: v0.1.4
+  version: v0.2.1
   description: |
     Play the distilled AlayaWorld model with live prompt and six-axis camera controls.
   resources:
@@ -34,7 +34,7 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.5.0"
+  runtime_version: "3.10.0"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"

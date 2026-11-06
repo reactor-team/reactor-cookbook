@@ -33,7 +33,7 @@ A new session waits for an explicit input selection.
 | Command | Effect |
 | --- | --- |
 | `set_prompt(prompt)` | Start a text-conditioned world, or change the description for the next segment of the current world. |
-| `set_image(image, prompt, seed)` | Start a new world from JPEG, PNG, WebP or BMP, up to 25 MiB and 100 million pixels. Images are fitted to 1248×704 by aspect-preserving resize and center crop. Blank text uses a neutral prompt; seed -1 keeps the current seed. |
+| `set_image(image, prompt, seed)` | Start a new world from JPEG, PNG, WebP or BMP, up to 25 MiB and 100 million pixels. Images are resized to 1248×704 with bicubic filtering and no crop or EXIF rotation, as the upstream inference script does. Blank text uses a neutral prompt; seed -1 keeps the current seed. |
 | `example_image()` | Select the upstream pixel-art example and its paired prompt. Missing sample assets return a command error. |
 | `set_key(key, pressed)` | Hold or release one of W/A/S/D (forward/left/back/right) or I/J/K/L (look up/left/down/right). |
 | `release_controls()` | Release all held keys. |

@@ -67,6 +67,7 @@ class LingBotBackend:
         self._pipe.model.to(self._device)
         self._session_ready = False
         self._chunk_index = 0
+        self._rollout_chunks = 0
         self._prompt = ""
         self._context: list[Any] | None = None
         self._self_kv: list[dict[str, Any]] | None = None
@@ -99,6 +100,7 @@ class LingBotBackend:
         prompt: str,
         seed: int,
         intrinsics: np.ndarray,
+        noise_chunks: int | None = None,
     ) -> None:
         """Start a fresh native causal rollout from an image and prompt.
 
@@ -107,11 +109,17 @@ class LingBotBackend:
             prompt: Non-empty text condition for the first chunk.
             seed: Deterministic scheduler seed for the complete rollout.
             intrinsics: Packed ``[fx, fy, cx, cy]`` camera calibration.
+            noise_chunks: Finite initial-noise horizon; ``None`` uses the configured
+                interactive horizon. Attention window and sink remain unchanged.
         """
         prompt = prompt.strip()
         if not prompt:
             raise ValueError("LingBot prompt must not be empty")
+        chunks = self._config.max_chunks if noise_chunks is None else noise_chunks
+        if type(chunks) is not int or not 1 <= chunks <= self._config.max_chunks:
+            raise ValueError("Noise horizon must fit the configured rollout limit")
         self.end_session()
+        self._rollout_chunks = chunks
         torch = self._torch
         image_tensor = self._tf.to_tensor(_open_image(image)).sub_(0.5).div_(0.5)
         image_height, image_width = image_tensor.shape[1:]
@@ -158,7 +166,7 @@ class LingBotBackend:
         self._timesteps = self._pipe.scheduler.timesteps[list(self._config.timesteps)]
         self._seed_generator = torch.Generator(device=self._device)
         self._seed_generator.manual_seed(seed)
-        total_latents = self._config.max_chunks * self._config.chunk_latents
+        total_latents = self._rollout_chunks * self._config.chunk_latents
         self._base_noise = torch.randn(
             16,
             total_latents,
@@ -194,7 +202,7 @@ class LingBotBackend:
         """
         if not self._session_ready:
             raise RuntimeError("LingBot rollout must be reset before generation")
-        if self._chunk_index >= self._config.max_chunks:
+        if self._chunk_index >= self._rollout_chunks:
             raise RuntimeError("LingBot rollout reached its native positional limit")
         prompt = prompt.strip()
         if not prompt:
@@ -276,6 +284,7 @@ class LingBotBackend:
         """Release rollout caches while keeping public model weights resident."""
         self._session_ready = False
         self._chunk_index = 0
+        self._rollout_chunks = 0
         self._prompt = ""
         self._context = None
         self._self_kv = None
@@ -381,12 +390,13 @@ class LingBotBackend:
                     )
                 )
             video = torch.cat(decoded, dim=2).float().clamp_(-1, 1).squeeze(0)
+        # Match upstream save_video: normalize [-1, 1], scale, then truncate to uint8.
         return (
-            ((video + 1.0) * 127.5)
-            .round()
-            .clamp_(0, 255)
-            .to(torch.uint8)
+            video.sub_(-1.0)
+            .div_(2.0)
             .permute(1, 2, 3, 0)
+            .mul(255.0)
+            .to(torch.uint8)
             .contiguous()
             .cpu()
             .numpy()

@@ -21,6 +21,11 @@ class EvokeOutput(Output):
 class StateUpdate(ModelMessage):
     """Emitted after a viewer connects, state changes, or a video chunk completes."""
 
+    camera_path_chunks: int | None = MessageField(
+        default=None,
+        description="Finite uploaded path length, or null for held camera controls.",
+    )
+
     mode: str = MessageField(
         description=(
             "Active conditioning mode: `i2v` for an anchor image, `v2v` for a reference "
@@ -64,16 +69,15 @@ class StateUpdate(ModelMessage):
             "chunks emit 36 RGB frames; prompt-only t2v emits 33 for chunk 1 and 36 later."
         )
     )
-    next_chunk: int = MessageField(
+    next_chunk: int | None = MessageField(
         description=(
             "One-based chunk that camera and prompt commands accepted now will first affect. "
-            "It returns to 1 after a rollout reset."
+            "Null after the rollout ends; returns to 1 after an explicit reset."
         )
     )
     max_chunks: int = MessageField(
         description=(
-            "Chunks generated before the adapter automatically starts a fresh rollout from "
-            "the active conditioning input."
+            "Maximum chunks in a rollout; reset explicitly after this limit."
         )
     )
     forward: float = MessageField(
@@ -137,18 +141,11 @@ class CommandApplied(ModelMessage):
     )
 
 
-class RolloutRestarted(ModelMessage):
-    """Emitted when the chunk horizon starts a fresh rollout automatically."""
+class CameraPathSelected(ModelMessage):
+    """Emitted when a finite camera path queues a fresh camera-conditioned world."""
 
-    replaced_chunks: int = MessageField(
-        description="Number of completed chunks replaced by the automatic fresh rollout."
-    )
-    max_chunks: int = MessageField(
-        description="Configured horizon that triggered this automatic rollout restart."
-    )
-    seed: int = MessageField(
-        description="Seed retained by the fresh rollout so the restart is observable."
-    )
+    chunks: int = MessageField(description="Number of 36-frame chunks in the path.")
+    frames: int = MessageField(description="Total output video frames.")
 
 
 class EvokeState(InputState):

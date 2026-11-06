@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+_LATENT = (48, 30, 54)
+
 
 @dataclass(frozen=True)
 class BackendSettings:
@@ -26,6 +28,7 @@ class _Run:
     first_latent: Any
     condition: Any
     generator: Any
+    initial_noise: Any
     kv_cache: Any
     crossattn_cache: Any
     chunk_index: int = 0
@@ -56,16 +59,21 @@ class SolarWMBackend:
         self.device = self.provider.device
         self._run: _Run | None = None
 
-    def reset(self, seed: int, image: np.ndarray, prompt: str) -> None:
-        """Encode a fresh uploaded anchor and allocate native rolling caches."""
+    def reset(self, seed: int, image: np.ndarray, prompt: str, chunks: int) -> None:
+        """Encode a fresh anchor, draw the horizon's noise and allocate native caches.
+
+        ``image`` is the (3,480,864) float32 anchor in [-1,1]. As upstream
+        _stage2_self_forcing_latents does, the initial noise of all ``chunks``
+        is drawn once, before any chunk's re-noising draws.
+        """
         torch = self.torch
         self.end_session()
-        pixel_tensor = torch.from_numpy(image).to(self.device, dtype=torch.float32)
-        pixel_tensor = (pixel_tensor.permute(2, 0, 1)[None, :, None] / 127.5) - 1.0
+        pixel_tensor = torch.from_numpy(image)[None, :, None].to(self.device)
         with torch.no_grad():
             first_latent = self.provider.vae.encode(pixel_tensor).to(torch.bfloat16)
             condition = self.provider.text_encoder([prompt])
         generator = torch.Generator(device=self.device).manual_seed(int(seed))
+        initial_noise = self.provider._noise((1, 3 * int(chunks), *_LATENT), generator)
         kv_cache = self.provider.allocate_kv_cache(
             1, dtype=torch.bfloat16, device=self.device
         )
@@ -77,6 +85,7 @@ class SolarWMBackend:
             first_latent=first_latent,
             condition=condition,
             generator=generator,
+            initial_noise=initial_noise,
             kv_cache=kv_cache,
             crossattn_cache=crossattn_cache,
         )
@@ -92,8 +101,9 @@ class SolarWMBackend:
 
         chunk, frame_tokens = 3, int(self.config["model"]["frame_sequence_length"])
         start = run.chunk_index * chunk
-        shape = (1, chunk, 48, 30, 54)
-        latents = self.provider._noise(shape, run.generator)
+        if start + chunk > run.initial_noise.shape[1]:
+            raise RuntimeError("SolarWM rollout horizon is exhausted")
+        latents = run.initial_noise[:, start : start + chunk].clone()
         if start == 0:
             latents[:, :1] = run.first_latent
         camera = _camera_tokens(relative_c2ws, frame_tokens, self.device)
@@ -159,8 +169,9 @@ class SolarWMBackend:
                 cache_update_policy="commit_detached",
             )
             decoded = self.provider.vae.decode(latents, use_cache=True)
-        frames = ((decoded[0].float().clamp(-1, 1) + 1) * 127.5).permute(0, 2, 3, 1)
-        output = frames.byte().cpu().numpy()
+        # Upstream _encode_mp4 rounds to uint8 before encoding.
+        frames = ((decoded[0].float().clamp(-1, 1) + 1.0) * 127.5).round()
+        output = frames.to(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
         run.chunk_index += 1
         return output, run.chunk_index
 
@@ -173,21 +184,34 @@ class SolarWMBackend:
 def _camera_tokens(
     c2ws: np.ndarray, frame_tokens: int, device: object
 ) -> dict[str, object]:
-    """Convert first-pose-relative C2W matrices to SolarWM W2C and intrinsic tokens."""
-    import torch
+    """Convert first-pose-relative C2W matrices to SolarWM W2C and intrinsic tokens.
 
-    c2w = torch.as_tensor(c2ws, dtype=torch.float32, device=device)
-    viewmats = torch.linalg.inv(c2w)[None].repeat_interleave(frame_tokens, dim=1)
-    intrinsic = torch.tensor(
-        [
-            [969.6969696969696 / 1920.0, 0.0, 0.5],
-            [0.0, 969.6969696969696 / 1080.0, 0.5],
-            [0.0, 0.0, 1.0],
-        ],
-        dtype=torch.float32,
-        device=device,
+    Follows upstream build_camera_tokens: analytic FP32 SE3 inversion on the
+    CPU, each latent's view matrix repeated over its tokens, fixed intrinsics.
+    """
+    import torch
+    from solarwm.backends.wan22.runtime.data import (
+        FX_NORM,
+        FY_NORM,
+        _torch_invert_se3_fp32,
     )
+
+    relative = torch.as_tensor(np.ascontiguousarray(c2ws, dtype=np.float32))
+    viewmats = _torch_invert_se3_fp32(relative)
+    viewmats = (
+        viewmats.unsqueeze(1)
+        .expand(-1, int(frame_tokens), -1, -1)
+        .reshape(-1, 4, 4)
+        .contiguous()
+    )
+    intrinsics = torch.zeros((1, 3, 3), dtype=torch.float32)
+    intrinsics[:, 0, 0] = FX_NORM
+    intrinsics[:, 1, 1] = FY_NORM
+    intrinsics[:, 0, 2] = 0.5
+    intrinsics[:, 1, 2] = 0.5
+    intrinsics[:, 2, 2] = 1.0
+    intrinsics = intrinsics.expand(viewmats.shape[0], -1, -1).contiguous()
     return {
-        "viewmats": viewmats,
-        "K": intrinsic[None, None].expand(1, 3 * frame_tokens, 3, 3),
+        "viewmats": viewmats.unsqueeze(0).to(device),
+        "K": intrinsics.unsqueeze(0).to(device),
     }

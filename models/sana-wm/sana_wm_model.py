@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 from sana_wm_assets import SanaWMConfig
 
+_PIXEL_FRAMES_PER_CHUNK = 24
+
 if TYPE_CHECKING:
     from sana_wm_backend import SanaStreamingBackend
 
@@ -38,6 +40,17 @@ class SanaResult:
     world_id: int
     prompt: str
     chunk_index: int
+
+
+def rollout_chunks(trajectory_frames: int, max_chunks: int) -> int:
+    """Return the native chunks one rollout spans: a trajectory's whole chunks, else the bound.
+
+    Upstream sizes its Stage-1 noise and intrinsics from `--num_frames`, which
+    a finite `(F, 4, 4)` trajectory caps at `24 * ((F - 1) // 24) + 1` frames.
+    """
+    if trajectory_frames <= 0:
+        return max_chunks
+    return max(1, min(max_chunks, (trajectory_frames - 1) // _PIXEL_FRAMES_PER_CHUNK))
 
 
 class NoAnchor(Exception):
@@ -89,6 +102,7 @@ class SanaModel:
                 anchor.prompt,
                 anchor.seed,
                 intrinsics_source=anchor.intrinsics,
+                chunks=rollout_chunks(anchor.trajectory_frames, config.max_chunks),
             )
             self._world_id = input.world_id
             self._chunk_index = 0

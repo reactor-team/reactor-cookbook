@@ -174,6 +174,61 @@ def _anchors(model: FakeModel) -> list[AnchorImage]:
     return [input.anchor for input in model.inputs if input.anchor is not None]
 
 
+def _path_upload(count=121):
+    poses = np.repeat(np.eye(4)[None], count, axis=0)
+    poses[:, 0, 3] = np.linspace(0, 2, count)
+    return UploadedFile(name="path.json", mime_type="application/json", data=json.dumps(
+        dict(poses=poses.tolist(), intrinsics=[502.9116,503.10812,415.77786,239.77779])).encode())
+
+
+def test_path_capacity_uses_decoded_chunks_not_rgb_input_length():
+    from lingbot_world_v1_camera import load_camera_path
+    path = load_camera_path(_path_upload(61).data, max_chunks=5, chunk_latents=3)
+    assert len(path.chunks) == 5 and path.output_frames == 57
+    with pytest.raises(ValueError):
+        load_camera_path(_path_upload(69).data, max_chunks=5, chunk_latents=3)
+
+
+def test_finite_path_ten_chunks_and_replay():
+    world, model, messages = _loaded_world()
+    async def run():
+        selected = await world.set_camera_path(_path_upload())
+        assert selected.chunks == 10 and selected.frames == 117
+        planned = world._camera_path.chunks.copy()
+        with pytest.raises(CommandError):
+            await world.set_forward(1.0)
+        for index in range(10):
+            input = await world.process_input()
+            if index == 0:
+                assert input.anchor.noise_chunks == 10
+            np.testing.assert_array_equal(input.poses, planned[index])
+            # Preparing/refusing an input does not consume a path chunk.
+            np.testing.assert_array_equal((await world.process_input()).poses, planned[index])
+            result = world.generate(input)
+            await world.process_output(StepOutcome(result=result, elapsed=0.1))
+        assert world._state_update().limit_reached
+        with pytest.raises(ApplicationError):
+            await world.process_input()
+        await world.reset(seed=42)
+        np.testing.assert_array_equal((await world.process_input()).poses, planned[0])
+        assert isinstance((await world.process_input()).anchor.intrinsics, np.ndarray)
+        await world.random_image()
+        assert world._camera_path is None
+    asyncio.run(run())
+
+
+def test_invalid_path_does_not_replace_active_world():
+    world, _, _ = _loaded_world()
+    async def run():
+        await world.set_camera_path(_path_upload())
+        path = world._camera_path
+        world_id = world.state._world_id
+        with pytest.raises(CommandError):
+            await world.set_camera_path(UploadedFile(name="bad.json", mime_type="application/json", data=b'{}'))
+        assert world._camera_path is path and world.state._world_id == world_id
+    asyncio.run(run())
+
+
 async def _step(world: Any) -> Any:
     input = await world.process_input()
     result = world.generate(input)
@@ -374,6 +429,7 @@ def test_model_starts_a_world_on_an_unseen_id_and_counts_its_chunks() -> None:
         "suffix": ".png",
         "intrinsics": Path("intrinsics.npy"),
         "prompt": "a lake",
+        "noise_chunks": None,
     }
     assert (first.world_id, first.chunk_index) == (1, 1)
     assert (second.world_id, second.chunk_index) == (1, 2)
@@ -530,3 +586,24 @@ def test_model_passes_runner_rank_to_native_backend(
     settings = object()
     model.load(settings)
     assert calls == [(settings, 3, 4)]
+
+
+def test_backend_finite_noise_horizon_does_not_shrink_history(tmp_path):
+    from unittest.mock import Mock
+    from PIL import Image
+    from lingbot_world_v1_backend import LingBotBackend
+
+    image = tmp_path / "image.png"
+    Image.new("RGB", (8, 8)).save(image)
+    backend = LingBotBackend.__new__(LingBotBackend)
+    backend._max_chunks = 320
+    backend._rollout = SimpleNamespace(max_chunks=320, context_latents=21, reset=Mock())
+    args = dict(seed=42, anchor_image=image, suffix=".png", intrinsics=np.ones(4), prompt="A lake")
+    backend.reset(**args, noise_chunks=5)
+    assert backend._rollout.max_chunks == 5
+    assert backend._rollout.context_latents == 21
+    backend.reset(**args)
+    assert backend._rollout.max_chunks == 320
+    for invalid in (0, 321, True):
+        with pytest.raises(ValueError):
+            backend.reset(**args, noise_chunks=invalid)

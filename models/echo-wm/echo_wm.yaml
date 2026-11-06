@@ -31,7 +31,8 @@ inference:
   max_chunks: 512
   video_decode_context_latents: 7
   video_decode_tiling: false
-  attention_backend: flash_attention_4
+  # Upstream attention without xformers; flash_attention_4 is faster but not bit-exact.
+  attention_backend: pytorch
   attention_benchmark: true
   warmup_chunks: 1
   profile_cuda: true

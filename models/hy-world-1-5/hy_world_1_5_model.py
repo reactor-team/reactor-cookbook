@@ -18,10 +18,16 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class HYWorld15Anchor:
-    """Encoded reference and seed carried until the world is acknowledged."""
+    """Encoded reference and seed carried until the world is acknowledged.
+
+    ``latent_frames`` is the planned latent length of a finite camera path.
+    Upstream draws the noise for its whole video in one call, so a known
+    length lets the backend draw the same noise; None draws per chunk.
+    """
 
     image: Path | bytes
     seed: int
+    latent_frames: int | None = None
 
 
 @dataclass(frozen=True)
@@ -85,7 +91,10 @@ class HYWorld15Model:
             ) as image:
                 reference = ImageOps.exif_transpose(image).convert("RGB").copy()
             self._backend.reset(
-                image=reference, prompt=input.prompt, seed=input.anchor.seed
+                image=reference,
+                prompt=input.prompt,
+                seed=input.anchor.seed,
+                latent_frames=input.anchor.latent_frames,
             )
             self._world_id = input.world_id
             self._chunk_index = 0

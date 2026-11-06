@@ -17,6 +17,7 @@ class LingbotV2Anchor:
     image: Path | bytes
     intrinsics: np.ndarray
     seed: int
+    noise_chunks: int | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,7 @@ class LingbotV2Model:
                 prompt=input.prompt,
                 seed=input.anchor.seed,
                 intrinsics=input.anchor.intrinsics,
+                noise_chunks=input.anchor.noise_chunks,
             )
             self._world_id = input.world_id
             self._chunk_index = 0

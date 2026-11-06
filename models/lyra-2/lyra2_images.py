@@ -1,7 +1,9 @@
-"""Prepare Lyra's native 768x448 seed pixels on the CPU."""
+"""Prepare the official script's 832x480 seed pixels on the CPU."""
 
 import io
+
 import numpy as np
+from lyra2_backend import HEIGHT, WIDTH
 from PIL import Image
 from reactor_runtime import CommandError, UploadedFile
 
@@ -21,10 +23,17 @@ def prepare_image(upload: UploadedFile) -> np.ndarray:
                 raise ValueError("Unsupported image format")
             if image.width * image.height > 100_000_000:
                 raise ValueError("Image exceeds 100 million pixels")
-            # Area averaging when shrinking, linear interpolation when enlarging.
-            shrinking = image.width >= 768 and image.height >= 448
-            resample = Image.Resampling.BOX if shrinking else Image.Resampling.BILINEAR
-            fitted = image.convert("RGB").resize((768, 448), resample)
-            return np.ascontiguousarray(fitted, dtype=np.uint8)
+        import cv2
+
+        # Match lyra2_custom_traj_inference: OpenCV decode (EXIF-oriented BGR),
+        # RGB conversion, then the DA3 helper's direct INTER_LINEAR resize.
+        bgr = cv2.imdecode(np.frombuffer(upload.data, np.uint8), cv2.IMREAD_COLOR)
+        if bgr is None:
+            raise ValueError("OpenCV cannot decode the image")
+        return cv2.resize(
+            cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB),
+            (WIDTH, HEIGHT),
+            interpolation=cv2.INTER_LINEAR,
+        )
     except (Image.DecompressionBombError, OSError, ValueError) as error:
         raise CommandError("invalid_image", str(error)) from error

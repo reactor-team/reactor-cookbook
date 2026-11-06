@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 
@@ -15,6 +16,48 @@ class MotionConfig:
     fps: float
     translation_meters_per_second: float
     rotation_degrees_per_second: float
+
+
+@dataclass(frozen=True)
+class CameraPath:
+    """Finite native-calibrated camera path and its blocks with shared anchors.
+
+    ``poses`` is the whole calibrated path. A rollout started from it gives
+    the worker the full trajectory up front, as the official ``--camera``
+    input does, so every pose the rollout reads matches that run.
+    """
+
+    chunks: tuple[np.ndarray, ...]
+    poses: np.ndarray
+
+
+def load_camera_path(data: bytes, max_chunks: int, anchor: np.ndarray) -> CameraPath:
+    if len(data) > 2 * 1024 * 1024:
+        raise ValueError("Camera path exceeds 2 MiB")
+    payload = json.loads(data)
+    if not isinstance(payload, dict) or set(payload) != {"poses"}:
+        raise ValueError("Expected JSON containing only poses")
+    poses = np.asarray(payload["poses"], dtype=np.float64)
+    if poses.ndim != 3 or poses.shape[1:] != (4, 4):
+        raise ValueError("poses must have shape [N,4,4]")
+    if len(poses) < 13 or (len(poses) - 1) % 12 or (len(poses) - 1) // 12 > max_chunks:
+        raise ValueError("Pose count must be 12*chunks+1 within the rollout limit")
+    if not np.isfinite(poses).all() or not np.allclose(
+        poses[:, 3], [0, 0, 0, 1], atol=1e-5
+    ):
+        raise ValueError("Poses must be finite homogeneous transforms")
+    rotations = poses[:, :3, :3]
+    if not np.allclose(
+        rotations @ rotations.transpose(0, 2, 1), np.eye(3), atol=1e-4
+    ) or not np.allclose(np.linalg.det(rotations), 1, atol=1e-4):
+        raise ValueError("Pose rotations must be proper orthonormal matrices")
+    # The worker keeps the configured first-frame camera as its image anchor.
+    calibrated = _validate_pose(anchor) @ np.linalg.inv(poses[0]) @ poses
+    calibrated = np.ascontiguousarray(calibrated, dtype=np.float32)
+    return CameraPath(
+        tuple(calibrated[i : i + 13].copy() for i in range(0, len(poses) - 1, 12)),
+        calibrated,
+    )
 
 
 class CameraMotionPlanner:

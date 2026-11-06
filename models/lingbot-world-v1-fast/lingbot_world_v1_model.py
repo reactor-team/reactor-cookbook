@@ -28,12 +28,15 @@ class AnchorImage:
             ignored when ``image`` is a path.
         intrinsics: The camera calibration that pairs with the image.
         seed: The random seed the fresh world is sampled with.
+        noise_chunks: Finite trajectory length for native initial-noise sampling;
+            ``None`` uses the configured interactive horizon without changing KV capacity.
     """
 
     image: Path | bytes
     suffix: str
-    intrinsics: Path
+    intrinsics: Path | np.ndarray
     seed: int
+    noise_chunks: int | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +120,7 @@ class LingbotV1Model:
                 suffix=input.anchor.suffix,
                 intrinsics=input.anchor.intrinsics,
                 prompt=input.prompt,
+                noise_chunks=input.anchor.noise_chunks,
             )
             self._world_id = input.world_id
             self._chunk_index = 0

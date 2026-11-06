@@ -135,7 +135,10 @@ class WorldCrafterBackend:
         with self._lock:
             if input.image is not None:
                 (self._root / "anchor.image").write_bytes(input.image)
-            np.savez(self._root / "poses.npz", local=input.local_poses, world=input.world_poses)
+            if input.path_poses is not None:
+                np.savez(self._root / "poses.npz", path=input.path_poses)
+            else:
+                np.savez(self._root / "poses.npz", local=input.local_poses, world=input.world_poses)
             reply = self._request("generate", world_id=input.world_id,
                                   has_image=input.image is not None, prompt=input.prompt,
                                   seed=input.seed, gravity_align=input.gravity_align)

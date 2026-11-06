@@ -1,6 +1,23 @@
 # Run EVOKE through Reactor Runtime
 
-The adapter uses Reactor Runtime 3.5's native step loop. `evoke.py` owns commands
+## Finite camera paths
+
+After image or video selection, `set_camera_path(trajectory)` accepts a JSON
+upload containing `poses` with shape `[36 * chunks, 4, 4]` at 24 FPS. The
+first pose is the camera of the selected conditioning. The worker treats the
+upload as EVOKE's released launcher treats a pose file
+(`scripts/inference/infer_post_distill.sh` with its `infer_batch.py` defaults).
+It reads the `36 * chunks - 3` poses the rollout uses and smooths them over
+five frames. It then limits each native chunk to 10 degrees and 3 units, on the
+engine's 33-then-36 frame layout. An image world uses the poses in their own
+frame, as the official i2v path does. A video world continues the reference
+track relative to the first pose. Each chunk emits 36 frames, and generation
+stops at the path end. The official script trims the last three frames of a
+finished rollout; a streamed chunk keeps them. `reset` replays the path, and
+selecting new conditioning restores held camera controls. Uploads are limited
+to 16 MiB, and text-only worlds do not accept camera paths.
+
+The adapter uses Reactor Runtime 3.10's native step loop. `evoke.py` owns commands
 and camera planning; `evoke_model.py` owns the persistent inference worker and
 rollout state. Frozen inputs and results carry one native chunk per step and
 acknowledge new conditioning through a world ID.
@@ -33,7 +50,7 @@ license before commercial use.
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model and
-controls its Reactor Runtime 3.5.0 image, while `requirements.txt` lists the
+controls its Reactor Runtime 3.10.0 image, while `requirements.txt` lists the
 adapter's serving dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -171,9 +188,8 @@ mode and filenames, prompt, seed, completed and next chunk, and all six
 camera axes. A newly connected viewer and every completed chunk receive the
 same snapshot.
 
-After 2,048 chunks, the adapter starts a fresh rollout from the active condition
-and emits `rollout_restarted`. This bounds the preallocated pose timeline while
-keeping checkpoints and the worker resident.
+Generation stops after 2,048 chunks and preserves the final state. Use `reset`
+or select new conditioning to start another rollout with the loaded checkpoints.
 
 ## Public source and model assets
 

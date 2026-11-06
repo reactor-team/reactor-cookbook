@@ -53,8 +53,6 @@ class AlayaWorldConfig:
     taehv_source_url: str | None
     taehv_source_revision: str | None
     decode_overlap_latents: int
-    max_spatial_frames: int
-    recent_spatial_frames: int
     max_chunks_per_rollout: int
     strafe_units_per_second: float
     vertical_units_per_second: float
@@ -92,7 +90,6 @@ def read_config(config_path: Path | None, weights_root: Path) -> AlayaWorldConfi
     inputs = _mapping(document.get("inputs"), "inputs")
     motion = _mapping(document.get("motion"), "motion")
     decode = _mapping(document.get("decode"), "decode")
-    memory = _mapping(document.get("memory"), "memory")
     stream = _mapping(document.get("stream", {}), "stream")
     da3_source = _mapping(assets.get("da3_source"), "assets.da3_source")
 
@@ -113,14 +110,6 @@ def read_config(config_path: Path | None, weights_root: Path) -> AlayaWorldConfi
     overlap = int(decode.get("overlap_latents", 6))
     if overlap <= 0:
         raise ValueError("decode.overlap_latents must be positive")
-    max_spatial_frames = int(memory.get("max_spatial_frames", 320))
-    recent_spatial_frames = int(memory.get("recent_spatial_frames", 160))
-    if max_spatial_frames < 10:
-        raise ValueError("memory.max_spatial_frames must be at least 10")
-    if not 1 <= recent_spatial_frames <= max_spatial_frames:
-        raise ValueError(
-            "memory.recent_spatial_frames must be between 1 and max_spatial_frames"
-        )
     max_chunks_per_rollout = int(stream.get("max_chunks_per_rollout", 512))
     if max_chunks_per_rollout < 1:
         raise ValueError("stream.max_chunks_per_rollout must be positive")
@@ -191,8 +180,6 @@ def read_config(config_path: Path | None, weights_root: Path) -> AlayaWorldConfi
             else _revision(taehv_source.get("revision"), "assets.taehv_source.revision")
         ),
         decode_overlap_latents=overlap,
-        max_spatial_frames=max_spatial_frames,
-        recent_spatial_frames=recent_spatial_frames,
         max_chunks_per_rollout=max_chunks_per_rollout,
         strafe_units_per_second=motion_rates["strafe_units_per_second"],
         vertical_units_per_second=motion_rates["vertical_units_per_second"],

@@ -37,7 +37,7 @@ View = Literal[
 
 @dataclass(frozen=True)
 class YumeAnchor:
-    """New world's RGB uint8 image (704,1280,3) or video (33,704,1280,3)."""
+    """New world's unresized RGB uint8 image (H,W,3) or video (33,H,W,3)."""
 
     mode: str
     media: np.ndarray | None

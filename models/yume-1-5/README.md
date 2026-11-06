@@ -7,7 +7,7 @@ keys and update the scene description between generated chunks.
 ## Run
 
 Requires the Reactor CLI, Docker, NVIDIA Container Toolkit and one available
-B200 GPU. This workspace builds from `reactor.yaml` and serves on Runtime 3.6.
+B200 GPU. This workspace builds from `reactor.yaml` and serves on Runtime 3.10.
 
 ```sh
 cd models/yume-1-5
@@ -46,6 +46,9 @@ current seed. Selecting a scene replaces the current world and clears controls.
 These commands require a selected scene. A viewer disconnect releases
 controls while preserving the shared scene.
 
+Movement and view controls use YUME's first-person text conditioning. This
+model has no camera-pose input or geometric third-person orbit control.
+
 ## Output and completion
 
 Each successful step delivers 29 new RGB frames on `main_video`. Playback
@@ -62,6 +65,16 @@ Commands return `scene_queued`, `prompt_changed`, `action_changed` or
 scene, controls, completed count and `limit_reached`. Each generated chunk
 emits `chunk_completed`; the final one is followed by
 `rollout_limit_reached`. Reset or select a new scene to continue.
+
+## Reference numerics
+
+Generation follows the pinned `fastvideo/sample/sample_5b.py` path: the
+control caption is followed directly by the scene text, the DiT runs under
+single-rank FSDP with float32 compute parameters and TF32 matmuls as in its
+`main()`, and frames are rounded to uint8 as its `save_video` does. With the
+same image, prompt, controls and seed, the frames match that script exactly.
+The script itself never seeds; here the seed drives the first chunk's
+`generate(seed=...)` noise and one CUDA generator for later chunks.
 
 ## Assets and recording
 

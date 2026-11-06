@@ -14,14 +14,20 @@ class WorldCrafterInput:
     ``local_poses`` restarts at each chunk's first frame; ``world_poses`` is
     relative to the initial camera and is used for memory retrieval.
     ``image`` is validated original PNG/JPEG/WebP bytes, not resized pixels.
+
+    A camera-path step instead carries ``path_poses``: the uploaded float32
+    ``(33 * (chunk_index + 1), 4, 4)`` global prefix, unaligned. The worker
+    aligns it to gravity and derives local poses exactly as upstream
+    ``inference.py --camera-path`` does; both planned arrays are then None.
     """
     world_id: int
     image: bytes | None
     prompt: str
     seed: int
     gravity_align: bool
-    local_poses: np.ndarray
-    world_poses: np.ndarray
+    local_poses: np.ndarray | None
+    world_poses: np.ndarray | None
+    path_poses: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -77,9 +83,15 @@ class WorldCrafterModel:
         index = 0 if new_world else self._next_chunk
         if index >= self._max_chunks:
             raise RolloutExhausted("World chunk limit reached")
-        expected = (FRAMES * (index + 1), 3, 4)
-        for value in (input.local_poses, input.world_poses):
-            if value.shape != expected or value.dtype != np.float32 or not np.isfinite(value).all():
+        if input.path_poses is not None:
+            expected, values = (FRAMES * (index + 1), 4, 4), (input.path_poses,)
+            if input.local_poses is not None or input.world_poses is not None:
+                raise InvalidPoses("A camera-path step carries only path poses")
+        else:
+            expected, values = (FRAMES * (index + 1), 3, 4), (input.local_poses, input.world_poses)
+        for value in values:
+            if (not isinstance(value, np.ndarray) or value.shape != expected
+                    or value.dtype != np.float32 or not np.isfinite(value).all()):
                 raise InvalidPoses(f"Expected finite float32 poses of shape {expected}")
         result = self.backend.generate(input)
         self._world_id, self._next_chunk = result.world_id, result.chunk_index + 1

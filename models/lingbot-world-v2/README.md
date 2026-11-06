@@ -1,6 +1,6 @@
 # Play LingBot-World-V2 through Reactor Runtime
 
-The adapter uses Reactor Runtime 3.5's native step loop. The application plans
+The adapter uses Reactor Runtime 3.10's native step loop. The application plans
 camera poses in `process_input()`, forwards one chunk to `LingbotV2Model` in
 `generate()`, and publishes video and state updates in `process_output()`.
 The model owns the native causal rollout. Frozen input and result dataclasses
@@ -13,6 +13,33 @@ six-axis camera motion.
 
 The adapter loads an exact tested source revision from Reactor's weights cache
 and calls the upstream causal-fast inference components directly.
+
+## Uploaded camera paths
+
+For reproducible first- or third-person camera motion, upload an anchor with
+`set_image`, then upload JSON and call `set_camera_path(trajectory=upload)`.
+The JSON contains `poses` (an array of 4×4 OpenCV camera-to-world transforms,
+one per RGB frame at 16 FPS) and `intrinsics` (`[fx, fy, cx, cy]`, calibrated
+for 832×480). Coordinates are X right, Y down, Z forward. Uploads are limited
+to 2 MiB and the configured rollout length. Rotation blocks must be rigid.
+
+The command starts a fresh rollout from the selected image, retaining its
+prompt and seed. Its `camera_path_selected` response reports the accepted
+`chunks`, output `frames`, and uploaded `source_frames`. The first output is
+13 frames; each subsequent output is 16 frames. Path resampling rounds down
+to complete chunks, so 49 input poses produce 3 chunks / 45 output frames.
+Generation stops at path end without padding, looping, or resetting history.
+The initial noise horizon of a path rollout is `stream.camera_path_noise_chunks`
+in `lingbot_world_v2.yaml`, at most `stream.max_chunks`. Its default `null`
+allocates exactly the path length; a configured horizon shorter than the path
+is raised to the path length.
+
+`reset` replays the selected path. `set_image` or `random_image` clears it and
+restores interactive camera controls. While a path is selected, `set_camera`
+and `release_camera` return `command_error`; prompt updates remain available.
+`state_update.camera_path_chunks` is zero for interactive camera control and
+reports the finite path length otherwise. No benchmark-specific orbit or
+prompt policy is embedded in this interface: the client supplies its poses.
 
 ## Prerequisites
 
@@ -31,7 +58,7 @@ before running or redistributing the model.
 ## Run
 
 This directory is a `reactor` workspace. Its `reactor.yaml` names the model,
-controls its Reactor Runtime 3.5.0, CUDA and Python image, and points Runtime at
+controls its Reactor Runtime 3.10.0, CUDA and Python image, and points Runtime at
 the model adapter and configuration. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -158,3 +185,12 @@ chunk, one world supports 256 chunks: about 4 minutes and 15 seconds of steady
 
 `reactor.yaml` records `main_video` by default in four-second chunks and allows
 clips up to five minutes. LingBot-World-V2 emits video without audio.
+
+## Stepped evaluation
+
+The workspace uses the released Reactor Runtime 3.10.0. A client can select
+`generation="stepped"` and call `await client.step()` to receive each native
+chunk directly on `main_video`. The same application serves streamed sessions.
+Rebuild the image after updating the Runtime pin. WBench supplies its camera
+path and calibration through `set_camera_path`; no model-specific step command
+or shared capture directory is required.

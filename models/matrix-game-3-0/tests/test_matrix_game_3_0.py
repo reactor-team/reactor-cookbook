@@ -13,7 +13,11 @@ import numpy as np
 import pytest
 from matrix_game_3_0 import MatrixGame30
 from matrix_game_3_0_assets import read_config
-from matrix_game_3_0_backend import MatrixGame30Backend, action_from_controls
+from matrix_game_3_0_backend import (
+    MatrixGame30Backend,
+    action_from_controls,
+    key_length_attention,
+)
 from matrix_game_3_0_model import (
     MatrixGame30Anchor,
     MatrixGame30Input,
@@ -182,6 +186,28 @@ def test_backend_bridges_one_action_to_each_unmodified_iteration(
     assert len(seen_actions) == 2
     assert module.get_current_action is original_action
     assert module.process_video is original_video
+
+
+def test_sdpa_attention_ignores_padded_keys_like_flash_attention() -> None:
+    torch = pytest.importorskip("torch")
+    generator = torch.Generator().manual_seed(0)
+    q = torch.randn(1, 6, 2, 8, generator=generator, dtype=torch.bfloat16)
+    k = torch.randn(1, 6, 2, 8, generator=generator, dtype=torch.bfloat16)
+    v = torch.randn(1, 6, 2, 8, generator=generator, dtype=torch.bfloat16)
+    lengths = torch.tensor([4])
+
+    actual = key_length_attention(q, k, v, k_lens=lengths)
+    k_noise, v_noise = k.clone(), v.clone()
+    k_noise[:, 4:] = 100
+    v_noise[:, 4:] = -100
+    padded = key_length_attention(q, k_noise, v_noise, k_lens=lengths)
+    scores = torch.einsum("bqhc,bkhc->bhqk", q.float(), k[:, :4].float()) / 8**0.5
+    expected = torch.einsum("bhqk,bkhc->bqhc", scores.softmax(-1), v[:, :4].float())
+
+    assert actual.shape == q.shape
+    assert actual.dtype == torch.bfloat16
+    assert torch.equal(actual, padded)
+    torch.testing.assert_close(actual.float(), expected, atol=2e-2, rtol=2e-2)
 
 
 class FakeModel:

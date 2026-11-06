@@ -61,6 +61,11 @@ class SanaWMConfig:
     pi3x_source_revision: str
     scenes: tuple[BuiltInScene, ...]
     seed: int
+    refiner_seed: int
+    upstream_fast_defaults: bool
+    torch_compile: bool
+    torch_compile_mode: str
+    torch_compile_dynamic: bool
     max_chunks: int
     num_cached_blocks: int
     refiner_kv_max_frames: int
@@ -165,6 +170,13 @@ def read_config(config_path: Path | None, weights_root: Path) -> SanaWMConfig:
         pi3x_source_revision=_required_str(pi3x, "source_revision", "assets.pi3x"),
         scenes=tuple(scenes),
         seed=int(inference.get("seed", 42)),
+        refiner_seed=int(inference.get("refiner_seed", 42)),
+        upstream_fast_defaults=bool(inference.get("upstream_fast_defaults", True)),
+        torch_compile=bool(inference.get("torch_compile", True)),
+        torch_compile_mode=str(
+            inference.get("torch_compile_mode", "max-autotune-no-cudagraphs")
+        ),
+        torch_compile_dynamic=bool(inference.get("torch_compile_dynamic", True)),
         max_chunks=max_chunks,
         num_cached_blocks=num_cached_blocks,
         refiner_kv_max_frames=refiner_kv_max_frames,

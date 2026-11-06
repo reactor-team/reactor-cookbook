@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from evoke_camera import CameraMotionPlanner, MotionConfig
+from evoke_camera import CameraMotionPlanner, CameraPath, MotionConfig, load_camera_path
 from evoke_config import EvokeConfig, prepare_runtime, read_config
 from evoke_images import (
     upload_suffix,
@@ -14,10 +14,10 @@ from evoke_images import (
 )
 from evoke_model import EvokeAnchor, EvokeInput, EvokeModel, EvokeResult
 from evoke_types import (
+    CameraPathSelected,
     CommandApplied,
     EvokeOutput,
     EvokeState,
-    RolloutRestarted,
     StateUpdate,
 )
 from reactor_runtime import (
@@ -68,7 +68,7 @@ class Evoke(ReactorApp):
         self._stability_prompt = ""
         self._seed = 42
         self._chunk_index = 0
-        self._replaced_chunks = 0
+        self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
         """Prepare public assets and load EVOKE weights once in its Python 3.10 worker."""
@@ -111,6 +111,7 @@ class Evoke(ReactorApp):
         config = self._require_config()
         self._mode = "i2v"
         self._media = None
+        self._camera_path = None
         self._pose = None
         self._input_source = "none"
         self._input_name = ""
@@ -118,7 +119,6 @@ class Evoke(ReactorApp):
         self.state.prompt = config.stability_prompt
         self.state._world_id = 0
         self.state._applied_world_id = None
-        self._replaced_chunks = 0
         self._seed = config.seed
         self._chunk_index = 0
         self._clear_controls()
@@ -142,8 +142,8 @@ class Evoke(ReactorApp):
         finally:
             self._clear_controls()
             self.state._applied_world_id = None
-            self._replaced_chunks = 0
             self._media = None
+            self._camera_path = None
             self._pose = None
             self._chunk_index = 0
 
@@ -221,6 +221,7 @@ class Evoke(ReactorApp):
         validate_uploaded_image(image)
         self._mode = "i2v"
         self._media = image
+        self._camera_path = None
         self._pose = None
         self._input_source = "uploaded"
         self._input_name = image.name
@@ -296,6 +297,7 @@ class Evoke(ReactorApp):
         validate_uploaded_pose(pose)
         self._mode = "v2v"
         self._media = video
+        self._camera_path = None
         self._pose = pose
         self._input_source = "uploaded"
         self._input_name = video.name
@@ -343,6 +345,7 @@ class Evoke(ReactorApp):
         """Select prompt-only generation and confirm the fresh rollout."""
         value = self._resolve_prompt(prompt)
         self._mode = "t2v"
+        self._camera_path = None
         self._media = None
         self._pose = None
         self._input_source = "none"
@@ -356,7 +359,37 @@ class Evoke(ReactorApp):
         await self._send_state_update()
         return message
 
+    @event(
+        name="set_camera_path",
+        description="Upload a finite camera-to-world path and queue a fresh world from the selected image or video. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `conditioning_required` without image or video conditioning, or `invalid_camera_path` for a malformed path. Generation stops at the path end.",
+    )
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
+            description="JSON poses [36 * chunks, 4, 4] at 24 FPS, up to 16 MiB. Pose zero is the selected conditioning's camera. Like the released launcher, EVOKE smooths the path over five frames and limits each chunk to 10 degrees and 3 units.",
+        ),
+    ) -> CameraPathSelected:
+        if self._mode == "t2v" or self._media is None:
+            raise CommandError(
+                "conditioning_required",
+                "Select image or video conditioning before a camera path.",
+            )
+        try:
+            path = load_camera_path(trajectory.data, self._require_config().max_chunks)
+        except (ValueError, TypeError, OverflowError) as error:
+            raise CommandError("invalid_camera_path", str(error)) from error
+        self._camera_path = path
+        self._request_restart()
+        await self._send_state_update()
+        return CameraPathSelected(chunks=path.chunk_count, frames=path.chunk_count * 36)
+
     async def _set_axis(self, name: str, value: float) -> CommandApplied:
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select new conditioning to return to held camera controls.",
+            )
         if self._mode == "t2v":
             raise CommandError(
                 "camera_unavailable", "EVOKE t2v mode does not consume camera poses."
@@ -533,6 +566,11 @@ class Evoke(ReactorApp):
         planner = self._planner
         if planner is None:
             raise RuntimeError("EVOKE was not loaded")
+        if (
+            self.state._world_id == self.state._applied_world_id
+            and self._chunk_index >= self._require_config().max_chunks
+        ):
+            raise ApplicationError("Rollout is complete. Reset or select new conditioning.")
         anchor = None
         if self.state._world_id != self.state._applied_world_id:
             anchor = EvokeAnchor(
@@ -549,16 +587,25 @@ class Evoke(ReactorApp):
                 source_fps=self._source_fps,
                 source_height=self._source_height,
                 source_width=self._source_width,
+                camera_path=self._camera_path.poses
+                if self._camera_path is not None
+                else None,
             )
         trajectory = None
-        if self._mode != "t2v":
+        if self._camera_path is not None:
+            # The worker received the whole path with the anchor and conditions it as one track.
+            if self._chunk_index >= self._camera_path.chunk_count:
+                raise ApplicationError(
+                    "Camera path is complete. Reset or upload another path."
+                )
+        elif self._mode != "t2v":
             trajectory = planner.plan_chunk(
-                strafe=0.0 if self._replaced_chunks else self.state.strafe,
-                vertical=0.0 if self._replaced_chunks else self.state.vertical,
-                forward=0.0 if self._replaced_chunks else self.state.forward,
-                pitch=0.0 if self._replaced_chunks else self.state.pitch,
-                yaw=0.0 if self._replaced_chunks else self.state.yaw,
-                roll=0.0 if self._replaced_chunks else self.state.roll,
+                strafe=self.state.strafe,
+                vertical=self.state.vertical,
+                forward=self.state.forward,
+                pitch=self.state.pitch,
+                yaw=self.state.yaw,
+                roll=self.state.roll,
                 frame_count=CAMERA_POSES_PER_CHUNK,
             )
         return EvokeInput(self.state._world_id, anchor, self.state.prompt, trajectory)
@@ -572,30 +619,14 @@ class Evoke(ReactorApp):
             # A worker failure cannot be repaired by silently losing the current world.
             raise outcome.error
         result: EvokeResult = outcome.result
-        if self._replaced_chunks:
-            self.output.flush()
-            self._clear_controls()
-            await self.send(
-                RolloutRestarted(
-                    replaced_chunks=self._replaced_chunks,
-                    max_chunks=self._require_config().max_chunks,
-                    seed=result.seed,
-                )
-            )
-            self._replaced_chunks = 0
         self.state._applied_world_id = result.world_id
         self._chunk_index = result.chunk_index
-        if result.complete:
-            self._replaced_chunks = result.chunk_index
-            self.state._world_id += 1
-            self._planner.reset()
         await self.send(self._state_update())
         return EvokeOutput(main_video=result.frames)
 
     def _request_restart(self) -> None:
         self.output.flush()
         self.state._world_id += 1
-        self._replaced_chunks = 0
         if self._planner is not None:
             self._planner.reset()
         self._chunk_index = 0
@@ -619,8 +650,19 @@ class Evoke(ReactorApp):
             pose_name=self._pose_name,
             seed=self._seed,
             completed_chunks=self._chunk_index,
-            next_chunk=self._chunk_index + 1,
+            next_chunk=(
+                None
+                if self._chunk_index >= config.max_chunks
+                or (
+                    self._camera_path is not None
+                    and self._chunk_index >= self._camera_path.chunk_count
+                )
+                else self._chunk_index + 1
+            ),
             max_chunks=config.max_chunks,
+            camera_path_chunks=self._camera_path.chunk_count
+            if self._camera_path is not None
+            else None,
             forward=self.state.forward,
             strafe=self.state.strafe,
             vertical=self.state.vertical,

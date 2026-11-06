@@ -43,8 +43,16 @@ class _Backend:
         self.index = 0
         self.ended = 0
 
-    def reset(self, *, image: Image.Image, prompt: str, seed: int) -> None:
+    def reset(
+        self,
+        *,
+        image: Image.Image,
+        prompt: str,
+        seed: int,
+        latent_frames: int | None = None,
+    ) -> None:
         self.resets.append((prompt, seed))
+        self.latent_frames = latent_frames
         self.index = 0
 
     def generate_chunk(self, camera: Any, prompt: str) -> np.ndarray:
@@ -92,6 +100,7 @@ def test_contract_is_atomic_and_documents_command_results() -> None:
         "reset",
         "set_image",
         "random_image",
+        "set_camera_path",
     }
     assert all("Emits" in command.description for command in contract.commands.values())
     assert all(

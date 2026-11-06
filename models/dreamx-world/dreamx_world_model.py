@@ -47,10 +47,14 @@ class DreamXConfig:
 
 @dataclass(frozen=True)
 class DreamXAnchor:
-    """Image and seed applied at the start of a world."""
+    """Image, seed, and rollout length applied at the start of a world.
+
+    ``chunks`` sizes the rollout's noise, which upstream draws in one call.
+    """
 
     image: Path | bytes
     seed: int
+    chunks: int
 
 
 @dataclass(frozen=True)
@@ -113,7 +117,7 @@ class DreamXModel:
         if input.world_id != self._world_id:
             if input.anchor is None:
                 raise NoAnchor(input.world_id)
-            backend.reset(input.anchor.seed, input.anchor.image)
+            backend.reset(input.anchor.seed, input.anchor.image, input.anchor.chunks)
             self._world_id = input.world_id
             self._chunk_index = 0
         if self._chunk_index >= config.max_chunks_per_rollout:

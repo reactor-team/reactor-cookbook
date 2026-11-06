@@ -305,6 +305,24 @@ def test_model_guards_and_progress():
         engine.generate(input)
 
 
+def test_rollout_length_follows_trajectory_like_upstream_num_frames():
+    from sana_wm_model import SanaAnchor, SanaInput, rollout_chunks
+
+    assert rollout_chunks(0, 512) == 512
+    assert rollout_chunks(25, 512) == 1
+    assert rollout_chunks(265, 512) == 11
+    assert rollout_chunks(288, 512) == 11
+    assert rollout_chunks(24 * 600 + 1, 512) == 512
+
+    model, _ = ready()
+    engine = model._engine
+    poses = np.tile(np.eye(4, dtype=np.float32), (24, 1, 1))
+    engine.generate(SanaInput(1, SanaAnchor(b"image", "Scene", 7, None, 265), poses))
+    assert engine._backend.resets[-1][3]["chunks"] == 11
+    engine.generate(SanaInput(2, SanaAnchor(b"image", "Scene", 7, None, 0), poses))
+    assert engine._backend.resets[-1][3]["chunks"] == 512
+
+
 def test_backend_failure_does_not_advance_model_progress(monkeypatch):
     from sana_wm_model import SanaAnchor, SanaInput
 

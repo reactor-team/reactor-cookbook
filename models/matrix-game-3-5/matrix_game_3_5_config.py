@@ -205,6 +205,8 @@ def _ensure_stateful_patch(source_path: Path) -> None:
     if reverse.returncode == 0:
         return
     forward = _check_git(["-C", str(source_path), "apply", "--check", str(patch)])
+    if forward.returncode != 0 and _restore_patched_files(source_path, patch):
+        forward = _check_git(["-C", str(source_path), "apply", "--check", str(patch)])
     if forward.returncode != 0:
         detail = (
             forward.stderr.strip() or reverse.stderr.strip() or "patch check failed"
@@ -214,6 +216,25 @@ def _ensure_stateful_patch(source_path: Path) -> None:
         )
     logger.info("applying Matrix stateful rollout patch: %s", source_path)
     _run_git(["-C", str(source_path), "apply", str(patch)])
+
+
+def _restore_patched_files(source_path: Path, patch: Path) -> bool:
+    """Revert an earlier version of the patch when it alone modified the checkout.
+
+    Returns whether the files touched by the patch were restored to HEAD.
+    """
+    files = sorted(
+        set(re.findall(r"^diff --git a/(\S+) b/", patch.read_text(), re.MULTILINE))
+    )
+    changed = _check_git(["-C", str(source_path), "diff", "--name-only", "HEAD"])
+    if changed.returncode != 0 or not files:
+        return False
+    modified = set(changed.stdout.split())
+    if not modified or not modified <= set(files):
+        return False
+    logger.info("replacing an earlier Matrix stateful rollout patch: %s", source_path)
+    _run_git(["-C", str(source_path), "checkout", "HEAD", "--", *files])
+    return True
 
 
 def ensure_worker_environment(config: MatrixConfig) -> None:

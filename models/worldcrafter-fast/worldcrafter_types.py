@@ -3,7 +3,7 @@ from collections import deque
 from dataclasses import field
 
 from reactor_runtime import InputState, MessageField, ModelMessage, Output, Video
-from worldcrafter_camera import CameraPlanner
+from worldcrafter_camera import CameraPath, CameraPlanner
 
 
 class WorldCrafterState(InputState):
@@ -18,6 +18,7 @@ class WorldCrafterState(InputState):
     _completed: int = 0
     _inflight: int | None = None
     _planner: CameraPlanner = field(default_factory=CameraPlanner)
+    _camera_path: CameraPath | None = None
 
 
 class WorldCrafterOutput(Output):
@@ -31,11 +32,18 @@ class StateUpdate(ModelMessage):
     completed_chunks: int = MessageField(description="Completed 33-frame chunks in this world.")
     queued_chunks: int = MessageField(description="Number of camera chunks awaiting generation.")
     max_chunks: int = MessageField(description="Maximum chunks per world before reset is required.")
+    camera_path_chunks: int | None = MessageField(default=None, description="Chunks in the uploaded camera path, or null for `move` commands.")
 
 
 class WorldStarted(ModelMessage):
     world_id: int = MessageField(description="New world identity.")
     seed: int = MessageField(description="Seed used for the new world.")
+
+
+class CameraPathSelected(ModelMessage):
+    world_id: int = MessageField(description="New world identity that follows the path.")
+    chunks: int = MessageField(description="Number of 33-frame chunks in the path.")
+    frames: int = MessageField(description="Total output video frames.")
 
 
 class MotionQueued(ModelMessage):

@@ -11,10 +11,10 @@ from reactor_runtime.log import get_logger
 from upstream_backend import InferenceWorkerError
 from worldcrafter_assets import prepare_runtime, read_settings
 from worldcrafter_images import validate_image
-from worldcrafter_camera import ACTIONS, FRAMES, CameraPlanner, validate_motion
+from worldcrafter_camera import ACTIONS, FRAMES, CameraPlanner, load_camera_path, validate_motion
 from worldcrafter_model import WorldCrafterInput, WorldCrafterModel, WorldCrafterResult
 from worldcrafter_types import (
-    ChunkGenerated, MotionQueued, PlaybackChanged, RolloutLimitReached,
+    CameraPathSelected, ChunkGenerated, MotionQueued, PlaybackChanged, RolloutLimitReached,
     StateUpdate, WorldCrafterOutput, WorldCrafterState, WorldStarted,
 )
 
@@ -81,6 +81,7 @@ class WorldCrafter(ReactorApp):
             raise CommandError("invalid_image", "Use a valid PNG, JPEG or WebP, at least 64 pixels per side and at most 20 megapixels.") from exc
         self.state._image, self.state._prompt = validated, prompt.strip()
         self.state._seed, self.state._gravity = seed, gravity_align
+        self.state._camera_path = None
         self._fresh_world()
         await self.send(self._snapshot())
         return WorldStarted(world_id=self.state._world_id, seed=self.state._seed)
@@ -93,6 +94,8 @@ class WorldCrafter(ReactorApp):
         chunks: int = InputField(default=1, ge=1, le=8, description="Number of consecutive chunks."),
     ) -> MotionQueued:
         self._require_image()
+        if self.state._camera_path is not None:
+            raise CommandError("camera_path_active", "Start a world to return to camera motion commands.")
         try:
             validate_motion(action, amount, chunks)
         except ValueError as exc:
@@ -105,6 +108,22 @@ class WorldCrafter(ReactorApp):
         self.state._queue.extend([(action, amount)] * chunks)
         await self.send(self._snapshot())
         return MotionQueued(action=action, chunks=chunks)
+
+    @event(name="set_camera_path", description="Upload a finite camera-to-world path and restart the selected image, prompt and seed along it. Returns `camera_path_selected` and broadcasts `state_update`. Generation stops at the path end; `reset` replays it and `start_world` restores `move`. Fails with `image_required` or `invalid_camera_path`.")
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(moderate=True, description="JSON {\"poses\": [33 * chunks, 4, 4]}, at most 16 MiB: global right/down/forward c2w, one pose per output frame, pose zero at the input image. Gravity alignment follows start_world."),
+    ) -> CameraPathSelected:
+        self._require_image()
+        try:
+            path = await asyncio.to_thread(load_camera_path, trajectory.data, self._max_chunks)
+        except ValueError as exc:
+            raise CommandError("invalid_camera_path", str(exc)) from exc
+        self.state._camera_path = path
+        self._fresh_world()
+        await self.send(self._snapshot())
+        return CameraPathSelected(world_id=self.state._world_id, chunks=path.chunks,
+                                  frames=path.chunks * FRAMES)
 
     @event(name="pause", description="Pause before the next chunk; an in-flight chunk may finish. Returns `playback_changed` and broadcasts `state_update`.")
     async def pause(self) -> PlaybackChanged:
@@ -128,16 +147,23 @@ class WorldCrafter(ReactorApp):
 
     async def process_input(self) -> WorldCrafterInput:
         if self.state._image is None or self.state._paused or not self.state._queue:
+            if self.state._camera_path is not None and not self.state._queue:
+                raise ApplicationError("Camera path is complete. Reset or upload another path.")
             raise ApplicationError("Waiting for an image or camera motion.")
         action, amount = self.state._queue.popleft()
         world_id = self.state._world_id
         self.state._inflight = world_id
-        local, world = self.state._planner.plan(action, amount)
+        local = world = path = None
+        if action == "path":
+            path = self.state._camera_path.poses[:FRAMES * (amount + 1)]
+        else:
+            local, world = self.state._planner.plan(action, amount)
         return WorldCrafterInput(
             world_id=world_id,
             image=self.state._image if world_id != self.state._applied_world_id else None,
             prompt=self.state._prompt, seed=self.state._seed,
             gravity_align=self.state._gravity, local_poses=local, world_poses=world,
+            path_poses=path,
         )
 
     def generate(self, input: WorldCrafterInput) -> WorldCrafterResult:
@@ -162,7 +188,7 @@ class WorldCrafter(ReactorApp):
         result: WorldCrafterResult = outcome.result
         if result.world_id != self.state._world_id:
             return None
-        if self.state._applied_world_id != result.world_id:
+        if self.state._applied_world_id != result.world_id and self.state._camera_path is None:
             self.state._planner.align_after_anchor(result.world_up)
         self.state._applied_world_id = result.world_id
         self.state._completed = result.chunk_index + 1
@@ -185,7 +211,10 @@ class WorldCrafter(ReactorApp):
         self.state._completed = 0
         self.state._paused = False
         self.state._queue.clear()
-        self.state._queue.append(("static", 0.0))
+        if self.state._camera_path is None:
+            self.state._queue.append(("static", 0.0))
+        else:
+            self.state._queue.extend(("path", index) for index in range(self.state._camera_path.chunks))
 
     def _require_image(self):
         if self.state._image is None:
@@ -194,4 +223,6 @@ class WorldCrafter(ReactorApp):
     def _snapshot(self):
         return StateUpdate(world_id=self.state._world_id, image_selected=self.state._image is not None,
                            paused=self.state._paused, completed_chunks=self.state._completed,
-                           queued_chunks=len(self.state._queue), max_chunks=self._max_chunks)
+                           queued_chunks=len(self.state._queue), max_chunks=self._max_chunks,
+                           camera_path_chunks=None if self.state._camera_path is None
+                           else self.state._camera_path.chunks)

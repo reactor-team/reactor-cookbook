@@ -158,8 +158,8 @@ class Zing(ReactorApp):
             moderate=True,
             description=(
                 "Anchor uploaded through Reactor as JPEG, PNG, WebP, or BMP, up to 25 MiB and "
-                "100 million pixels. EXIF orientation is applied, then the image is center-cropped "
-                "to the `main_video` aspect and resized to 1248x704."
+                "100 million pixels. Resized to 1248x704 with one bicubic resize, without EXIF "
+                "orientation or cropping, as upstream does."
             ),
         ),
         prompt: str = InputField(

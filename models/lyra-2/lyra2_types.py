@@ -1,9 +1,9 @@
 """Public Reactor contract for Lyra 2.0 autoregressive video exploration."""
 
 from pathlib import Path
+
 import numpy as np
 from lyra2_camera import Lyra2CameraPlanner
-
 from reactor_runtime import (
     InputField,
     InputState,
@@ -18,6 +18,15 @@ class Lyra2Output(Output):
     """One native 80-frame Lyra 2.0 video chunk."""
 
     main_video: Video
+
+
+class CameraPathSelected(ModelMessage):
+    """Acknowledges the finite trajectory queued from the selected image."""
+
+    chunks: int = MessageField(
+        description="Number of generated chunks, excluding seed calibration."
+    )
+    frames: int = MessageField(description="Total output RGB frames.")
 
 
 class Lyra2State(InputState):
@@ -87,6 +96,14 @@ class StateUpdate(ModelMessage):
     image_name: str | None = MessageField(
         description="Selected seed-image filename, or null before selection."
     )
+    camera_path_chunks: int = MessageField(
+        default=0, description="Finite uploaded path length, or zero for held controls."
+    )
+    camera_path_complete: bool = MessageField(
+        default=False,
+        description="Whether the finite path has completed; reset rewinds it.",
+    )
+
     prompt: str = MessageField(description="Caption queued for the next video segment.")
     active_prompt: str | None = MessageField(
         description="Caption used by the latest completed chunk."
@@ -145,8 +162,10 @@ class CameraChanged(ModelMessage):
     roll: float = MessageField(
         description="Active counterclockwise-to-clockwise roll rate."
     )
-    applies_to_chunk: int = MessageField(
-        description="One-based number of the first chunk generated with these camera values."
+    applies_to_chunk: int | None = MessageField(
+        description=(
+            "One-based first chunk expected to sample this state, or null before image selection."
+        )
     )
 
 

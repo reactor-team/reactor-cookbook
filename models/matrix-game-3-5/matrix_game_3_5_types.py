@@ -27,6 +27,10 @@ class StateUpdate(ModelMessage):
             "generated 12-frame chunk boundary."
         )
     )
+    camera_path_chunks: int = MessageField(
+        default=0,
+        description="Finite uploaded path length, or zero for held-axis controls.",
+    )
     image_source: str = MessageField(
         description=(
             "Source of the active anchor image: `none` while waiting for the first upload, "
@@ -103,6 +107,15 @@ class StateUpdate(ModelMessage):
             "Active counterclockwise-to-clockwise roll in [-1, 1]. Sampled by `next_chunk` and "
             "held until the camera axes are changed or released."
         )
+    )
+
+
+class CameraPathSelected(ModelMessage):
+    """Acknowledges a finite path queued from the selected image."""
+
+    chunks: int = MessageField(description="Native chunks in the path.")
+    frames: int = MessageField(
+        description="Total generated RGB frames, excluding the uploaded anchor."
     )
 
 

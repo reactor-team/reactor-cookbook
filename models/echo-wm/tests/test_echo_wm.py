@@ -189,22 +189,26 @@ def test_reset_prompt_and_upload_each_create_a_world(tmp_path: Path) -> None:
     assert app._chunk_index == 1
 
 
-def test_automatic_restart_preserves_controls_and_emits_final_chunk() -> None:
+def test_rollout_limit_preserves_history_until_explicit_reset() -> None:
     app, engine, messages = _selected_app(max_chunks=2)
     app.state._forward = 0.5
     first = asyncio.run(_step(app))
     second = asyncio.run(_step(app))
     assert first.main_video.shape[0] == 25
     assert second.main_video.shape[0] == 24
-    assert [type(m).__name__ for m in messages[-3:]] == [
+    assert [type(m).__name__ for m in messages[-2:]] == [
         "ChunkCompleted",
-        "AutomaticResetQueued",
         "StateUpdate",
     ]
     assert app._chunk_index == 2
-    assert app._state_update().reset_queued
-    assert app._state_update().next_chunk == 1
+    assert not app._state_update().reset_queued
+    assert app._state_update().next_chunk is None
     assert app.state._forward == 0.5
+    with pytest.raises(ApplicationError, match="complete"):
+        asyncio.run(_step(app))
+    assert len(engine.inputs) == 2
+    assert engine.inputs[0].world_id == engine.inputs[1].world_id
+    asyncio.run(app.reset(seed=42))
     third = asyncio.run(_step(app))
     assert third.main_video.shape[0] == 25
     assert engine.inputs[-1].world_id != engine.inputs[0].world_id
@@ -275,12 +279,14 @@ def test_model_owns_world_counter_and_reset(tmp_path: Path) -> None:
     poses = np.tile(np.eye(4, dtype=np.float32), (3, 1, 1))
     anchor = EchoAnchor(image=b"encoded-image", suffix=".png", seed=7)
     input = EchoInput(
-        world_id=1, anchor=anchor, prompt="room", poses=poses, fov_degrees=70.0
+        world_id=1, anchor=anchor, prompt="room", poses=poses, fov_degrees=70.0,
+        rollout_chunks=2,
     )
     with pytest.raises(NoAnchor):
         engine.generate(replace(input, anchor=None))
     assert backend.starts == []
     first = engine.generate(input)
+    assert backend.starts[0]["chunks"] == 2
     second = engine.generate(
         replace(input, anchor=None, prompt="not applied mid-world", fov_degrees=80.0)
     )
@@ -328,6 +334,7 @@ def test_public_contract_is_atomic_and_audiovisual() -> None:
         "release_camera",
         "reset",
         "set_camera_motion",
+        "set_camera_path",
         "set_fov",
         "set_image",
         "set_prompt",

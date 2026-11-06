@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 
@@ -24,6 +25,52 @@ class CameraChunk:
     """Carry the three camera poses aligned with one causal latent block."""
 
     latent_poses: np.ndarray
+
+
+@dataclass(frozen=True)
+class CameraPath:
+    """Finite RGB-rate camera-to-world path, sampled in native temporal units.
+
+    ``poses`` keeps the uploaded per-frame float32 matrices so the backend can
+    anchor and calibrate them with upstream's own CUDA arithmetic; ``chunks``
+    holds the anchored latent-rate poses of each native step.
+    """
+
+    poses: np.ndarray
+    chunks: np.ndarray
+
+    @property
+    def frames(self) -> int:
+        return len(self.chunks) * 24 + 1
+
+
+def load_camera_path(data: bytes, max_chunks: int) -> CameraPath:
+    """Anchor RGB camera poses and select every eighth pose as upstream does."""
+    if len(data) > 4 * 1024 * 1024:
+        raise ValueError("Camera path exceeds 4 MiB")
+    payload = json.loads(data)
+    if not isinstance(payload, dict) or set(payload) != {"poses"}:
+        raise ValueError("Camera path must contain only poses")
+    poses = np.asarray(payload["poses"], dtype=np.float32)
+    if poses.ndim != 3 or poses.shape[1:] != (4, 4):
+        raise ValueError("poses must have shape [N, 4, 4]")
+    if not 25 <= len(poses) <= max_chunks * 24 + 1 or (len(poses) - 1) % 24:
+        raise ValueError("A path needs 24 * chunks + 1 poses within rollout capacity")
+    if not np.isfinite(poses).all() or not np.allclose(
+        poses[:, 3], [0, 0, 0, 1], atol=1e-5
+    ):
+        raise ValueError("Camera poses must be finite homogeneous transforms")
+    rotations = poses[:, :3, :3]
+    if not np.allclose(
+        rotations @ rotations.transpose(0, 2, 1), np.eye(3), atol=1e-4
+    ) or not np.allclose(np.linalg.det(rotations), 1, atol=1e-4):
+        raise ValueError("Camera poses require proper rotations")
+    # Calibration remains in the backend, shared with native interactive controls.
+    anchored = np.linalg.inv(poses[0]) @ poses[::8]
+    return CameraPath(
+        poses=np.ascontiguousarray(poses),
+        chunks=np.ascontiguousarray(anchored[1:].reshape(-1, 3, 4, 4)),
+    )
 
 
 def _rotation_x(angle: float) -> np.ndarray:

@@ -56,7 +56,7 @@ def result(world=1, chunk=0):
 
 def test_schema_surface():
     contract = ModelContract.of(WorldCrafter)
-    assert set(contract.commands) == {"start_world", "move", "pause", "resume", "reset"}
+    assert set(contract.commands) == {"start_world", "move", "set_camera_path", "pause", "resume", "reset"}
 
 
 def test_playout_follows_generation_time():

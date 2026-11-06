@@ -27,10 +27,14 @@ VIEW_TEXT: dict[View, str] = {
 
 
 def conditioned_prompt(prompt: str, movement: Movement, view: View) -> str:
-    """Encode controls in the caption format used to train and sample YUME."""
+    """Encode controls in the caption format used to train and sample YUME.
+
+    sample_5b.py appends the scene text directly to a caption_re.txt line
+    (`line.rstrip("\\n") + response`), so no separator follows the final period.
+    """
     distance = 0 if movement == "none" else 4
     rotation = 0 if view == "none" else 4
-    return " ".join(
+    controls = " ".join(
         (
             "First-person perspective.",
             MOVEMENT_TEXT[movement],
@@ -38,6 +42,6 @@ def conditioned_prompt(prompt: str, movement: Movement, view: View) -> str:
             f"Actual distance moved:{distance} at 100 meters per second.",
             f"Angular change rate (turn speed):{rotation}.",
             f"View rotation speed:{rotation}.",
-            prompt.strip(),
         )
     )
+    return controls + prompt.strip()

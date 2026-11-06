@@ -1,7 +1,7 @@
 $schema: reactor/v2
 model:
   name: worldcrafter-fast
-  version: v0.1.1
+  version: v0.2.0
   description: Explore an image with camera-controlled video and persistent scene memory.
   resources:
     gpu:
@@ -27,7 +27,7 @@ runtime:
       preset: veryfast
       crf: 23
 build:
-  runtime_version: "3.8.3"
+  runtime_version: "3.10.0"
   python_requirements: requirements.txt
   python_indexes:
     - https://pypi.org/simple

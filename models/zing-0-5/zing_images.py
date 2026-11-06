@@ -1,11 +1,11 @@
-"""Decode and center-fit Zing image conditions once on the CPU."""
+"""Decode and resize Zing image conditions once on the CPU, as upstream does."""
 
 from __future__ import annotations
 
 import io
 
 import numpy as np
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
 from reactor_runtime import CommandError, UploadedFile
 
 _MAX_BYTES = 25 * 1024 * 1024
@@ -30,11 +30,12 @@ def prepare_image(
                     "image_dimensions",
                     "The image must contain at most 100 million pixels.",
                 )
-            rgb = ImageOps.exif_transpose(image).convert("RGB")
-            return np.array(
-                ImageOps.fit(rgb, (width, height), method=Image.Resampling.BICUBIC),
-                dtype=np.uint8,
+            # Upstream MessageProcessor.process: convert, then one bicubic resize to
+            # the output size. No EXIF transpose and no crop, so the pixels match.
+            rgb = image.convert("RGB").resize(
+                (width, height), Image.Resampling.BICUBIC
             )
+            return np.asarray(rgb, dtype=np.uint8).copy()
     except (
         Image.DecompressionBombError,
         ValueError,

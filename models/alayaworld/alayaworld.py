@@ -13,13 +13,19 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 from alayaworld_assets import (
     AlayaWorldConfig,
     read_config,
     scene_image_path,
     scene_prompt_path,
 )
-from alayaworld_camera import CameraMotionPlanner, MotionConfig
+from alayaworld_camera import (
+    CameraMotionPlanner,
+    CameraPath,
+    MotionConfig,
+    load_camera_path,
+)
 from alayaworld_images import validate_uploaded_image
 from alayaworld_model import (
     FPS,
@@ -32,6 +38,7 @@ from alayaworld_types import (
     AlayaWorldOutput,
     AlayaWorldState,
     CameraMotionChanged,
+    CameraPathSelected,
     ImageSelected,
     PromptQueued,
     RolloutResetQueued,
@@ -79,6 +86,8 @@ class AlayaWorld(ReactorApp):
         self._camera: CameraMotionPlanner | None = None
         self._frames_wanted = 0
         self._pending_camera: CameraMotionPlanner | None = None
+        self._camera_path: CameraPath | None = None
+        self._path_initial_pose = np.eye(4, dtype=np.float32)
 
     def load(self, config_path: Path | None) -> None:
         """Load the native model and retain its interaction configuration."""
@@ -97,6 +106,7 @@ class AlayaWorld(ReactorApp):
         self.state._applied_world_id = None
         self._seed = config.seed
         self._selected_input = None
+        self._camera_path = None
         self.engine.reset()
         self._frames_wanted = 0
         self._pending_camera = None
@@ -113,6 +123,7 @@ class AlayaWorld(ReactorApp):
         self.state._world_id = 0
         self.state._applied_world_id = None
         self._selected_input = None
+        self._camera_path = None
         self.engine.reset()
         self._frames_wanted = 0
         self._pending_camera = None
@@ -190,6 +201,7 @@ class AlayaWorld(ReactorApp):
     ) -> CameraMotionChanged:
         """Queue forward motion and return the complete camera state."""
         self._require_selected_image()
+        self._require_held_camera()
         self.state.forward = forward
         message = self._camera_motion_changed()
         await self._send_state_update()
@@ -217,6 +229,7 @@ class AlayaWorld(ReactorApp):
     ) -> CameraMotionChanged:
         """Queue strafe motion and return the complete camera state."""
         self._require_selected_image()
+        self._require_held_camera()
         self.state.strafe = strafe
         message = self._camera_motion_changed()
         await self._send_state_update()
@@ -244,6 +257,7 @@ class AlayaWorld(ReactorApp):
     ) -> CameraMotionChanged:
         """Queue vertical motion and return the complete camera state."""
         self._require_selected_image()
+        self._require_held_camera()
         self.state.vertical = vertical
         message = self._camera_motion_changed()
         await self._send_state_update()
@@ -271,6 +285,7 @@ class AlayaWorld(ReactorApp):
     ) -> CameraMotionChanged:
         """Queue pitch motion and return the complete camera state."""
         self._require_selected_image()
+        self._require_held_camera()
         self.state.pitch = pitch
         message = self._camera_motion_changed()
         await self._send_state_update()
@@ -298,6 +313,7 @@ class AlayaWorld(ReactorApp):
     ) -> CameraMotionChanged:
         """Queue yaw motion and return the complete camera state."""
         self._require_selected_image()
+        self._require_held_camera()
         self.state.yaw = yaw
         message = self._camera_motion_changed()
         await self._send_state_update()
@@ -325,6 +341,7 @@ class AlayaWorld(ReactorApp):
     ) -> CameraMotionChanged:
         """Queue roll motion and return the complete camera state."""
         self._require_selected_image()
+        self._require_held_camera()
         self.state.roll = roll
         message = self._camera_motion_changed()
         await self._send_state_update()
@@ -401,6 +418,7 @@ class AlayaWorld(ReactorApp):
         """Validate uploaded image bytes and select them for the next rollout."""
         validate_uploaded_image(image)
         self._selected_input = image
+        self._camera_path = None
         self.state.prompt = (
             prompt.strip() or self.state.prompt.strip() or _UPLOAD_DEFAULT_PROMPT
         )
@@ -438,6 +456,7 @@ class AlayaWorld(ReactorApp):
         ]
         selected = secrets.choice(candidates or list(config.random_inputs))
         self._selected_input = selected
+        self._camera_path = None
         prompt = scene_prompt_path(selected).read_text(encoding="utf-8").strip()
         if not prompt:
             raise CommandError(
@@ -456,6 +475,31 @@ class AlayaWorld(ReactorApp):
         await self._send_state_update()
         return message
 
+    @event(
+        name="set_camera_path",
+        description="Upload a finite camera-to-world path and queue a fresh world from the selected image. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path. Generation stops at the path end.",
+    )
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
+            description="JSON poses [32 * chunks + 8, 4, 4] at 24 FPS, up to 8 MiB. Pose zero anchors the image, followed by the generated timeline and seven look-ahead poses.",
+        ),
+    ) -> CameraPathSelected:
+        self._require_selected_image()
+        try:
+            path = load_camera_path(
+                trajectory.data, self._config.max_chunks_per_rollout
+            )
+        except (ValueError, TypeError, OverflowError) as error:
+            raise CommandError("invalid_camera_path", str(error)) from error
+        self._camera_path = path
+        self._clear_camera_controls()
+        self.state._world_id += 1
+        self.output.flush()
+        await self._send_state_update()
+        return CameraPathSelected(chunks=path.chunks, frames=path.chunks * 32)
+
     async def process_input(self) -> AlayaInput:
         """Resolve the anchor and plan the next native camera window."""
         if self._selected_input is None:
@@ -463,6 +507,8 @@ class AlayaWorld(ReactorApp):
         if self._config is None:
             raise RuntimeError("AlayaWorld model was not loaded")
         new_world = self.state._world_id != self.state._applied_world_id
+        if not new_world and self._ar_index >= self._config.max_chunks_per_rollout:
+            raise ApplicationError("Rollout is complete. Reset or select another image.")
         image = None
         trajectory = None
         if new_world:
@@ -470,6 +516,14 @@ class AlayaWorld(ReactorApp):
                 self._selected_input.data
                 if isinstance(self._selected_input, UploadedFile)
                 else self._selected_input
+            )
+        elif self._camera_path is not None:
+            if self._ar_index >= self._camera_path.chunks:
+                raise ApplicationError(
+                    "Camera path is complete. Reset or upload another path."
+                )
+            trajectory = self._camera_path.window(
+                self._ar_index, self._path_initial_pose, self._frames_wanted
             )
         else:
             if self._camera is None:
@@ -508,6 +562,7 @@ class AlayaWorld(ReactorApp):
             raise outcome.error
         result: AlayaResult = outcome.result
         if result.initial_pose is not None:
+            self._path_initial_pose = result.initial_pose.copy()
             config = self._config
             self._camera = CameraMotionPlanner(
                 result.initial_pose,
@@ -536,17 +591,6 @@ class AlayaWorld(ReactorApp):
             frames=int(result.frames.shape[0]),
             seconds=round(outcome.elapsed, 3),
         )
-        if result.completed_chunks >= self._config.max_chunks_per_rollout:
-            self._clear_camera_controls()
-            self.state._world_id += 1
-            await self.send(
-                RolloutResetQueued(
-                    trigger="automatic_chunk_limit",
-                    seed=self._seed,
-                    completed_chunks=result.completed_chunks,
-                    applies_to_chunk=1,
-                )
-            )
         await self._send_state_update()
         return AlayaWorldOutput(main_video=result.frames)
 
@@ -573,8 +617,25 @@ class AlayaWorld(ReactorApp):
             seed=self._seed,
             generating=self._reset_in_flight or self._chunk_in_flight,
             completed_chunks=self._ar_index,
-            next_chunk=None if selected is None else self._next_control_chunk(),
+            next_chunk=(
+                None
+                if selected is None
+                or (
+                    config is not None
+                    and self._ar_index >= config.max_chunks_per_rollout
+                    and self.state._world_id == self.state._applied_world_id
+                )
+                or (
+                    self._camera_path is not None
+                    and self._ar_index >= self._camera_path.chunks
+                    and self.state._world_id == self.state._applied_world_id
+                )
+                else self._next_control_chunk()
+            ),
             max_chunks=config.max_chunks_per_rollout if config is not None else 0,
+            camera_path_chunks=self._camera_path.chunks
+            if self._camera_path is not None
+            else None,
         )
 
     async def _send_state_update(self) -> None:
@@ -612,6 +673,14 @@ class AlayaWorld(ReactorApp):
         self.state.pitch = 0.0
         self.state.yaw = 0.0
         self.state.roll = 0.0
+
+    def _require_held_camera(self) -> None:
+        """Prevent held controls from silently overriding a finite path."""
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select a new image to return to held camera controls.",
+            )
 
     def _require_selected_image(self) -> None:
         """Require a rollout origin before accepting world controls."""

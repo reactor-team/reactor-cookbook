@@ -25,7 +25,7 @@ from lingbot_world_v2_backend import (
     STEADY_CHUNK_FRAMES,
     TEMPORAL_STRIDE,
 )
-from lingbot_world_v2_camera import CameraMotionPlanner
+from lingbot_world_v2_camera import CameraMotionPlanner, CameraPath, load_camera_path
 from lingbot_world_v2_images import load_scene_camera, validate_uploaded_image
 from lingbot_world_v2_model import (
     LingbotV2Anchor,
@@ -35,6 +35,7 @@ from lingbot_world_v2_model import (
 )
 from lingbot_world_v2_types import (
     CameraMotionChanged,
+    CameraPathSelected,
     ChunkCompleted,
     ImageSelected,
     LingBotWorldV2Output,
@@ -80,6 +81,7 @@ class LingBotWorldV2(ReactorApp):
         self._seed = 0
         self._chunk_index = 0
         self._limit_reached = False
+        self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
         """Prepare public assets and load LingBot weights once at startup.
@@ -109,6 +111,7 @@ class LingBotWorldV2(ReactorApp):
     def on_session_started(self) -> None:
         """Initialize an empty shared world before its first viewer connects."""
         config = self._require_loaded()
+        self._camera_path = None
         self.state.prompt = ""
         self.state._applied_world_id = None
         self._clear_camera()
@@ -122,6 +125,7 @@ class LingBotWorldV2(ReactorApp):
     def on_session_ended(self) -> None:
         """Release causal rollout state when the shared session ends."""
         self._clear_camera()
+        self._camera_path = None
         self.state._applied_world_id = None
         self._selected_input = None
         self._image_source = "none"
@@ -225,6 +229,11 @@ class LingBotWorldV2(ReactorApp):
         """Set all camera axes and report the complete held state."""
         self._require_selected()
         self._require_available()
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select an image again to return to held-axis control.",
+            )
         self.state._forward = forward
         self.state._strafe = strafe
         self.state._vertical = vertical
@@ -248,6 +257,11 @@ class LingBotWorldV2(ReactorApp):
         """Release all camera motion and report the neutral held state."""
         self._require_selected()
         self._require_available()
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select an image again to return to held-axis control.",
+            )
         self._clear_camera()
         message = self._camera_changed()
         await self.send(self._state_update())
@@ -289,6 +303,45 @@ class LingBotWorldV2(ReactorApp):
         return message
 
     @event(
+        name="set_camera_path",
+        description=(
+            "Select an uploaded finite OpenCV camera-to-world path and queue a fresh rollout "
+            "from the selected image. JSON contains poses [N,4,4] at 16 FPS and fixed "
+            "intrinsics [fx,fy,cx,cy] calibrated for 832x480. Maximum upload 2 MiB. "
+            "Native resampling rounds down to complete chunks: first emits 13 frames, "
+            "later chunks 16. Generation stops at path end. Reset replays the path; "
+            "image selection clears it. Emits `camera_path_selected` and broadcasts `state_update`. "
+            "Fails with `image_required` before image selection or `invalid_camera_path` for a "
+            "malformed path."
+        ),
+    )
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
+            description="Uploaded JSON with poses and intrinsics; finite rigid OpenCV C2W transforms.",
+        ),
+    ) -> CameraPathSelected:
+        self._require_selected()
+        config = self._require_loaded()
+        try:
+            path = load_camera_path(
+                trajectory.data,
+                max_chunks=config.max_chunks,
+                chunk_latents=config.chunk_latents,
+            )
+        except ValueError as error:
+            raise CommandError("invalid_camera_path", str(error)) from error
+        self._camera_path = path
+        self._request_reset()
+        await self.send(self._state_update())
+        return CameraPathSelected(
+            chunks=len(path.chunks),
+            frames=path.output_frames,
+            source_frames=path.source_frames,
+        )
+
+    @event(
         name="set_image",
         description=(
             "Select an uploaded anchor and queue a fresh rollout with continuous generation. "
@@ -323,6 +376,7 @@ class LingBotWorldV2(ReactorApp):
             raise CommandError("invalid_image", str(error)) from error
         config = self._require_loaded()
         self._selected_input = image
+        self._camera_path = None
         self._image_source = "uploaded"
         self.state.prompt = (
             prompt.strip() or self.state.prompt.strip() or config.upload_default_prompt
@@ -356,6 +410,7 @@ class LingBotWorldV2(ReactorApp):
         candidates = [scene for scene in config.scenes if scene != self._selected_input]
         scene = secrets.choice(candidates or list(config.scenes))
         self._selected_input = scene
+        self._camera_path = None
         self._image_source = "built_in"
         self.state.prompt = scene.prompt
         self._request_reset()
@@ -390,14 +445,31 @@ class LingBotWorldV2(ReactorApp):
                 initial_pose = np.eye(4, dtype=np.float32)
                 intrinsics = np.asarray(config.upload_intrinsics, dtype=np.float32)
             anchor = LingbotV2Anchor(
-                image=image, seed=self._seed, intrinsics=intrinsics
+                image=image,
+                seed=self._seed,
+                intrinsics=self._camera_path.intrinsics
+                if self._camera_path is not None
+                else intrinsics,
+                noise_chunks=max(
+                    len(self._camera_path.chunks),
+                    config.camera_path_noise_chunks or 0,
+                )
+                if self._camera_path is not None
+                else None,
             )
             planner.reset(initial_pose)
-        relative_poses = planner.plan_chunk(
-            **self._camera_controls(),
-            latent_frames=config.chunk_latents,
-            temporal_stride=TEMPORAL_STRIDE,
-        )
+        if self._camera_path is not None:
+            if self._chunk_index >= len(self._camera_path.chunks):
+                raise ApplicationError(
+                    "Camera path complete; reset or select another path."
+                )
+            relative_poses = self._camera_path.chunks[self._chunk_index].copy()
+        else:
+            relative_poses = planner.plan_chunk(
+                **self._camera_controls(),
+                latent_frames=config.chunk_latents,
+                temporal_stride=TEMPORAL_STRIDE,
+            )
         return LingbotV2Input(
             world_id=self.state._world_id,
             anchor=anchor,
@@ -419,7 +491,10 @@ class LingBotWorldV2(ReactorApp):
         self._chunk_index = result.chunk_index
         config = self._require_loaded()
         controls = self._camera_controls()
-        if result.complete:
+        path_complete = self._camera_path is not None and self._chunk_index >= len(
+            self._camera_path.chunks
+        )
+        if result.complete or path_complete:
             self._limit_reached = True
             self._clear_camera()
         await self.send(
@@ -434,7 +509,10 @@ class LingBotWorldV2(ReactorApp):
         if self._limit_reached:
             await self.send(
                 RolloutLimitReached(
-                    completed_chunks=self._chunk_index, max_chunks=config.max_chunks
+                    completed_chunks=self._chunk_index,
+                    max_chunks=len(self._camera_path.chunks)
+                    if self._camera_path is not None
+                    else config.max_chunks,
                 )
             )
         await self.send(self._state_update())
@@ -500,7 +578,13 @@ class LingBotWorldV2(ReactorApp):
     def _state_update(self) -> StateUpdate:
         """Return a complete snapshot of shared client-visible state."""
         config = self._config
-        max_chunks = config.max_chunks if config is not None else 0
+        max_chunks = (
+            len(self._camera_path.chunks)
+            if self._camera_path is not None
+            else config.max_chunks
+            if config is not None
+            else 0
+        )
         selected = self._selected_input
         if isinstance(selected, BuiltInScene):
             image_name = selected.image.name
@@ -513,6 +597,9 @@ class LingBotWorldV2(ReactorApp):
         if next_chunk is not None:
             next_frames = FIRST_CHUNK_FRAMES if next_chunk == 1 else STEADY_CHUNK_FRAMES
         return StateUpdate(
+            camera_path_chunks=len(self._camera_path.chunks)
+            if self._camera_path is not None
+            else 0,
             prompt=self.state.prompt or None,
             image_source=self._image_source,
             image_name=image_name,

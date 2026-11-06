@@ -39,10 +39,10 @@ index c49d548..a44776a 100644
          estimator = None
          gc.collect()
 diff --git a/examples/wanvideo/pipeline/mosaic/causal_rollout.py b/examples/wanvideo/pipeline/mosaic/causal_rollout.py
-index dec64ed..76115e6 100644
+index dec64ed..c6b7df0 100644
 --- a/examples/wanvideo/pipeline/mosaic/causal_rollout.py
 +++ b/examples/wanvideo/pipeline/mosaic/causal_rollout.py
-@@ -71,6 +71,37 @@ def _causal_kv_cache_copy(cache_list):
+@@ -71,6 +71,142 @@ def _causal_kv_cache_copy(cache_list):
          )
      return out
  
@@ -77,10 +77,115 @@ index dec64ed..76115e6 100644
 +    for target, source in zip(target_views, source_views):
 +        target.index_copy_(1, index, source)
 +
++
++class _InteractiveVideoDecoder:
++    """Decode the rollout chunk by chunk exactly as one decode of its history.
++
++    ``run_distilled_inference`` writes ``result.mp4`` from a single VAE decode
++    of ``[C0] + every generated latent``. The Wan2.2 decoder consumes one
++    latent per step with a causal cache, so carrying each spatial tile's cache
++    across chunks yields the same frames without re-decoding the history.
++    """
++
++    def __init__(self, pipe, device, tiled, tile_size=(30, 52), tile_stride=(15, 26)):
++        from diffsynth.models.wan_video_vae import VideoVAE38_, count_conv3d
++
++        if not isinstance(pipe.vae.model, VideoVAE38_):
++            raise RuntimeError("interactive decode requires the Wan2.2 VAE")
++        self._pipe = pipe
++        self._device = device
++        self._tiled = bool(tiled)
++        self._tile_size = tile_size
++        self._tile_stride = tile_stride
++        self._conv_count = count_conv3d(pipe.vae.model.decoder)
++        self._tasks = None
++        self._caches = None
++
++    def decode(self, latents):
++        """Return uint8 frames for new latents; the first call includes C0."""
++        from diffsynth.models.wan_video_vae import unpatchify
++
++        vae = self._pipe.vae
++        model = vae.model
++        if latents.ndim == 4:
++            latents = latents.unsqueeze(0)
++        # Mirror _decode_latents_to_numpy_frames and WanVideoVAE.decode.
++        hidden = latents.to(device=self._device, dtype=self._pipe.torch_dtype).to("cpu")
++        _, _, T, H, W = hidden.shape
++        first = self._tasks is None
++        if first:
++            if self._tiled:
++                size_h, size_w = self._tile_size
++                stride_h, stride_w = self._tile_stride
++                self._tasks = []
++                for h in range(0, H, stride_h):
++                    if h - stride_h >= 0 and h - stride_h + size_h >= H:
++                        continue
++                    for w in range(0, W, stride_w):
++                        if w - stride_w >= 0 and w - stride_w + size_w >= W:
++                            continue
++                        self._tasks.append((h, h + size_h, w, w + size_w))
++            else:
++                self._tasks = [(0, H, 0, W)]
++            self._caches = [[None] * self._conv_count for _ in self._tasks]
++        self._pipe.load_models_to_device(["vae"])
++        factor = vae.upsampling_factor
++        out_t = T * 4 - 3 if first else T * 4
++        values = weight = None
++        if self._tiled:
++            shape = (1, 1, out_t, H * factor, W * factor)
++            weight = torch.zeros(shape, dtype=hidden.dtype, device="cpu")
++            values = torch.zeros((1, 3, *shape[2:]), dtype=hidden.dtype, device="cpu")
++        for index, (h, h_, w, w_) in enumerate(self._tasks):
++            z = hidden[:, :, :, h:h_, w:w_].to(self._device)
++            scale = [value.to(dtype=z.dtype, device=z.device) for value in vae.scale]
++            z = z / scale[1].view(1, model.z_dim, 1, 1, 1) + scale[0].view(
++                1, model.z_dim, 1, 1, 1
++            )
++            x = model.conv2(z)
++            cache = self._caches[index]
++            parts = []
++            for step in range(T):
++                part, cache, _ = model.decoder(
++                    x[:, :, step : step + 1, :, :],
++                    feat_cache=cache,
++                    feat_idx=[0],
++                    first_chunk=first and step == 0,
++                )
++                parts.append(part)
++            self._caches[index] = cache
++            video = unpatchify(torch.cat(parts, 2), patch_size=2)
++            if not self._tiled:
++                values = video.clamp_(-1, 1)
++                break
++            video = video.to("cpu")
++            mask = vae.build_mask(
++                video,
++                is_bound=(h == 0, h_ >= H, w == 0, w_ >= W),
++                border_width=(
++                    (self._tile_size[0] - self._tile_stride[0]) * factor,
++                    (self._tile_size[1] - self._tile_stride[1]) * factor,
++                ),
++            ).to(dtype=hidden.dtype, device="cpu")
++            target_h, target_w = h * factor, w * factor
++            values[
++                :, :, :, target_h : target_h + video.shape[3], target_w : target_w + video.shape[4]
++            ] += video * mask
++            weight[
++                :, :, :, target_h : target_h + video.shape[3], target_w : target_w + video.shape[4]
++            ] += mask
++        if self._tiled:
++            values = values / weight
++            values = values.clamp_(-1, 1)
++        self._pipe.load_models_to_device([])
++        decoded = values[0].float().permute(1, 2, 3, 0)
++        frames = ((decoded + 1.0) * 127.5).clamp(0, 255).to("cpu").numpy().astype(np.uint8)
++        return frames[1:] if first else frames
++
  def _causal_kv_concat_caches(left, right):
      """Concatenate two KV cache lists at frame granularity without mutation."""
      if not left:
-@@ -318,6 +349,7 @@ def _run_causal_kv_rollout(
+@@ -318,6 +454,7 @@ def _run_causal_kv_rollout(
      use_mosaic,
      batch_idx,
      accelerator=None,
@@ -88,7 +193,7 @@ index dec64ed..76115e6 100644
  ):
      """Run Stage3 few-step generation with a bounded causal KV cache.
  
-@@ -337,6 +369,10 @@ def _run_causal_kv_rollout(
+@@ -337,6 +474,10 @@ def _run_causal_kv_rollout(
      chunks_per_window = latent_window_size // cs
      ccc = int(getattr(args, "causal_context_chunks", 0) or 0) or chunks_per_window
      total_chunks = num_validation_blocks * chunks_per_window
@@ -99,7 +204,7 @@ index dec64ed..76115e6 100644
      total_n = total_chunks * cs
      fixed_initial_anchor = bool(
          getattr(args, "causal_validation_fixed_initial_anchor", False)
-@@ -503,6 +539,9 @@ def _run_causal_kv_rollout(
+@@ -503,6 +644,9 @@ def _run_causal_kv_rollout(
          noisy_extr_parts.append(camb["noisy_latent_indices_prope_extrinsic"])
      full_noisy_intr = torch.cat(noisy_intr_parts, dim=0)[: total_n * 4]
      full_noisy_extr = torch.cat(noisy_extr_parts, dim=0)[: total_n * 4]
@@ -109,7 +214,7 @@ index dec64ed..76115e6 100644
      full_noisy_intr, full_noisy_extr = _apply_causal_validation_camera_time_scale(
          full_noisy_intr,
          full_noisy_extr,
-@@ -524,20 +563,30 @@ def _run_causal_kv_rollout(
+@@ -524,21 +668,32 @@ def _run_causal_kv_rollout(
                  flush=True,
              )
      data["_causal_validation_section_prompts"] = tuple(section_prompts)
@@ -148,9 +253,11 @@ index dec64ed..76115e6 100644
 +        )
 +    }
      context = section_contexts[0]
++    interactive_decoder = None
  
      dynamic_context_pool = None
-@@ -1350,6 +1399,69 @@ def _run_causal_kv_rollout(
+     dynamic_context_intr = None
+@@ -1350,6 +1505,69 @@ def _run_causal_kv_rollout(
              _noisy_camera_frame(idx)
              for idx in range(1 + i * cs, 1 + i * cs + cs)
          ]
@@ -220,26 +327,21 @@ index dec64ed..76115e6 100644
          # M_i: ONLY the current chunk's mosaic (1:1 with N_i), not accumulated.
          # Holes in M_i are masked out of N_i's keys inside model_fn_causal_kv.
          m_i = m_pos = m_fr = None
-@@ -2227,7 +2339,9 @@ def _run_causal_kv_rollout(
-             and not memory_disabled_after_c0_failure
-         )
-         needs_generated_decode = bool(
--            dynamic_context_needs_decode or generated_memory_has_consumer
-+            interactive_session is not None
-+            or dynamic_context_needs_decode
-+            or generated_memory_has_consumer
-         )
-         generated_frames = None
-         if needs_generated_decode:
-@@ -2400,6 +2514,30 @@ def _run_causal_kv_rollout(
+@@ -2400,6 +2618,36 @@ def _run_causal_kv_rollout(
              )
              _publish_pending_generated_memory()
  
 +        if interactive_session is not None:
-+            if generated_frames is None:
-+                raise RuntimeError(
-+                    f"interactive rollout did not decode generated chunk={i}."
++            if interactive_decoder is None:
++                interactive_decoder = _InteractiveVideoDecoder(
++                    pipe, device, vae_decode_tiled
 +                )
++                chunk_latents = torch.cat(
++                    [initial_c0.detach().cpu(), latents.detach().cpu()], dim=2
++                )
++            else:
++                chunk_latents = latents.detach().cpu()
++            output_frames = interactive_decoder.decode(chunk_latents)
 +            generated_context_entries = (
 +                len(dynamic_context_pool.generated_entries)
 +                if dynamic_context_pool is not None
@@ -253,7 +355,7 @@ index dec64ed..76115e6 100644
 +                f"patch_memory_rgb={int(published_rgb_count)}",
 +                flush=True,
 +            )
-+            interactive_session.publish_chunk(int(i), generated_frames)
++            interactive_session.publish_chunk(int(i), output_frames)
 +            if len(all_clean) > 2:
 +                del all_clean[:-2]
 +            if len(all_mosaic) > 2:

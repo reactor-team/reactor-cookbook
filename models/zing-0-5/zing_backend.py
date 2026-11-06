@@ -39,7 +39,7 @@ class ZingBackend:
         self.prompt = ""
         self.latents: list[torch.Tensor] = []
         self.pixel_frames_emitted = 0
-        self.generator: torch.Generator | None = None
+        self.noise: torch.Tensor | None = None
 
     @torch.inference_mode()
     def reset(self, *, image: np.ndarray | None, prompt: str, seed: int) -> None:
@@ -48,7 +48,16 @@ class ZingBackend:
         np.random.seed(seed)
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
-        self.generator = torch.Generator(device=self.device).manual_seed(seed)
+        # Upstream draws every block's initial noise in one randn_like over the
+        # whole rollout from the default CUDA generator, and the scheduler's
+        # re-noising follows from the same generator. Draw the configured
+        # horizon the same way; block k reads latent frames [start, end).
+        horizon = 1 + self.config.inference.frames_per_block * (
+            self.adapter.max_chunks if image is not None else self.adapter.max_chunks - 1
+        )
+        self.noise = torch.randn(
+            self._latent_shape(horizon), device=self.device, dtype=torch.bfloat16
+        )
         self.cache = self.pipeline.generator.make_kv_cache()
         self.context = self._encode_prompt(prompt)
         self.prompt = prompt
@@ -65,26 +74,27 @@ class ZingBackend:
     def generate_chunk(self, *, prompt: str, pressed_keys: Iterable[str]) -> np.ndarray:
         from zing_v0_5.scheduler import DmdScheduler
 
-        if self.cache is None or self.context is None or self.generator is None:
+        if self.cache is None or self.context is None or self.noise is None:
             raise RuntimeError("Zing rollout has not been initialized")
         prompt_switch = prompt != self.prompt
         if prompt_switch:
             self.context = self._encode_prompt(prompt)
             self.prompt = prompt
+        start = sum(int(latent.shape[1]) for latent in self.latents)
         latent_frames = (
             1 if not self.latents else self.config.inference.frames_per_block
         )
-        shape = (
-            1,
-            latent_frames,
-            self.config.vae.z_dim,
-            self.adapter.height // self.config.vae.spatial_scale,
-            self.adapter.width // self.config.vae.spatial_scale,
+        current = self.noise[:, start : start + latent_frames].clone()
+        if current.shape[1] != latent_frames:
+            raise RuntimeError("Zing rollout exceeded its noise horizon")
+        shape = current.shape
+        # Upstream gives latent frame 0 an all-zero action window; key windows
+        # start with the first block after it.
+        action = (
+            self._zero_action(1)
+            if not self.latents
+            else self._action(pressed_keys, latent_frames)
         )
-        current = torch.randn(
-            shape, generator=self.generator, device=self.device, dtype=torch.bfloat16
-        )
-        action = self._action(pressed_keys, latent_frames)
         token_count = (
             latent_frames
             * (shape[3] // self.config.generator.patch_size[1])
@@ -114,9 +124,18 @@ class ZingBackend:
         self.cache = None
         self.context = None
         self.latents = []
-        self.generator = None
+        self.noise = None
         self.pixel_frames_emitted = 0
         torch.cuda.empty_cache()
+
+    def _latent_shape(self, frames: int) -> tuple[int, int, int, int, int]:
+        return (
+            1,
+            frames,
+            self.config.vae.z_dim,
+            self.adapter.height // self.config.vae.spatial_scale,
+            self.adapter.width // self.config.vae.spatial_scale,
+        )
 
     def _encode_prompt(self, prompt: str) -> tuple[torch.Tensor, torch.Tensor]:
         context, lengths = self.pipeline.text_encoder.encode([prompt])
@@ -124,7 +143,10 @@ class ZingBackend:
 
     def _encode_image(self, pixels: np.ndarray) -> torch.Tensor:
         frames = torch.from_numpy(pixels).permute(2, 0, 1).unsqueeze(0).unsqueeze(2)
-        return self.pipeline.vae.encode(frames).to(self.device, dtype=torch.bfloat16)
+        # Upstream stores the reference in its float16 clean-latent buffer
+        # before the bfloat16 cast; keep that rounding.
+        latent = self.pipeline.vae.encode(frames).to(dtype=torch.float16)
+        return latent.to(self.device, dtype=torch.bfloat16)
 
     def _action(self, pressed: Iterable[str], frames: int) -> torch.Tensor:
         values = torch.tensor(

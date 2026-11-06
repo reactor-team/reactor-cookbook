@@ -73,6 +73,7 @@ def make_model():
     app._config = SimpleNamespace(
         seed=42,
         max_chunks=20,
+        camera_path_noise_chunks=None,
         chunk_latents=4,
         upload_intrinsics=(1, 1, 0.5, 0.5),
         upload_default_prompt="A peaceful landscape.",
@@ -213,6 +214,7 @@ def test_model_owns_native_reset_count_limit_and_prompt_changes():
         prompt="Garden",
         seed=42,
         intrinsics=anchor.intrinsics,
+        noise_chunks=None,
     )
     assert backend.generate_chunk.call_args.kwargs["relative_poses"] is input.poses
     with pytest.raises(RolloutExhausted):
@@ -294,8 +296,22 @@ def test_config_paths_are_explicit_and_native_settings_are_preserved(
     assert config.source_path == tmp_path / "lingbot-world-v2"
     assert config.checkpoint_path == tmp_path / "lingbot-world-v2-14b-causal-fast"
     assert config.chunk_latents == 4
-    assert config.timesteps == (0, 179, 358, 679)
+    assert config.timesteps == (0, 250, 500, 750)
     assert (config.local_attention_frames, config.attention_sink_frames) == (18, 6)
     assert config.max_chunks == 256
+    assert config.camera_path_noise_chunks is None
     standalone = read_config(path)
     assert standalone.source_path == path.resolve().parent / "lingbot-world-v2"
+
+
+@pytest.mark.parametrize("noise", [0, 257])
+def test_config_rejects_a_noise_horizon_outside_the_rollout_limit(tmp_path, noise):
+    source = (Path(__file__).parents[1] / "lingbot_world_v2.yaml").read_text()
+    path = tmp_path / "lingbot_world_v2.yaml"
+    path.write_text(
+        source.replace(
+            "camera_path_noise_chunks: null", f"camera_path_noise_chunks: {noise}"
+        )
+    )
+    with pytest.raises(ValueError, match="camera_path_noise_chunks"):
+        read_config(path, tmp_path)

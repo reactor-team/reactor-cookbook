@@ -1,6 +1,6 @@
 # HY-World 1.5 example
 
-The adapter uses Reactor Runtime 3.5's native step loop. `hy_world_1_5.py`
+The adapter uses Reactor Runtime 3.10's native step loop. `hy_world_1_5.py`
 owns commands and camera planning; `hy_world_1_5_model.py` owns inference and
 causal state. Frozen inputs and results carry one native chunk per step, with
 a world ID acknowledging when a new reference has been applied.
@@ -25,7 +25,7 @@ example. Either command starts continuous generation from the first chunk.
 ## Run
 
 This directory is a `reactor` workspace. Its `reactor.yaml` declares the model,
-runtime entry point, Reactor Runtime 3.5.0, CUDA and Python versions, system
+runtime entry point, Reactor Runtime 3.10.0, CUDA and Python versions, system
 packages, and Python requirements. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -183,6 +183,25 @@ Uploads are limited to 25 MiB and 100 million decoded pixels. The adapter
 verifies the declared media type, actual JPEG/PNG/WebP/BMP codec, dimensions,
 and decodability before starting a fresh rollout. EXIF orientation is applied
 before the upstream image-conditioning path prepares its 832x480 input.
+
+## Finite camera paths
+
+After selecting an image, `set_camera_path` accepts a JSON upload containing
+`viewmats` (N × 4 × 4 world-to-camera matrices), `intrinsics` (N × 3 × 3 normalized
+camera matrices), and `actions` (N native integer labels in 0–80). Each row is
+one latent time step; N must be divisible by four. The path queues a fresh world
+and produces N / 4 chunks: 13 frames initially, then 16 per chunk.
+`reset` replays the path; selecting an image restores live camera controls.
+The `camera_path_selected` response reports the exact chunk and frame budget.
+
+A camera path is sampled the way upstream's offline `pipe(...)` call (and
+WBench's `examples/hy_worldplay/generate_navigation.py`) samples the same
+video: path values stay float64 for memory selection, the noise for all N
+latents is drawn in one call from the seeded CUDA generator, and frames are
+truncated to uint8 like upstream `save_video`. Live controls draw noise one
+chunk at a time because their length is unknown. Like upstream, the
+geometric-memory point cloud comes from the unseeded global CPU generator, so
+memory selection after the first 20 latents can vary between processes.
 
 ## Autoregressive memory and long sessions
 

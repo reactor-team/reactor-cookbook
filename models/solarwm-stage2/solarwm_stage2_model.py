@@ -9,11 +9,16 @@ import numpy as np
 
 @dataclass(frozen=True)
 class SolarWMAnchor:
-    """Prepared uint8 RGB (480,864,3) image and new-world conditions."""
+    """Prepared float32 (3,480,864) anchor in [-1,1] and new-world conditions.
+
+    ``chunks`` is the world's rollout horizon. Upstream draws the initial noise
+    of the whole horizon before the first chunk, so it fixes every chunk's noise.
+    """
 
     image: np.ndarray
     prompt: str
     seed: int
+    chunks: int
 
 
 @dataclass(frozen=True)
@@ -65,7 +70,10 @@ class SolarWMModel:
             if input.anchor is None:
                 raise NoAnchor("a fresh world requires an anchor")
             self.backend.reset(
-                input.anchor.seed, input.anchor.image, input.anchor.prompt
+                input.anchor.seed,
+                input.anchor.image,
+                input.anchor.prompt,
+                input.anchor.chunks,
             )
             self.world_id = input.world_id
             self._complete = False

@@ -5,9 +5,22 @@ from __future__ import annotations
 import importlib.util
 import math
 import sys
+from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 from sana_wm_assets import SanaWMConfig
+
+
+def _load_module(name: str, path: Path) -> ModuleType:
+    """Import one dependency-light upstream file without its package."""
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot import {name} from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class SanaCameraPlanner:
@@ -15,14 +28,14 @@ class SanaCameraPlanner:
 
     def __init__(self, config: SanaWMConfig) -> None:
         self._config = config
-        name = "_sana_native_camera_control"
-        path = config.source_path / "inference_video_scripts/wm/camera_control.py"
-        spec = importlib.util.spec_from_file_location(name, path)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot import camera controls from {path}")
-        self._camera = importlib.util.module_from_spec(spec)
-        sys.modules[name] = self._camera
-        spec.loader.exec_module(self._camera)
+        self._camera = _load_module(
+            "_sana_native_camera_control",
+            config.source_path / "inference_video_scripts/wm/camera_control.py",
+        )
+        # Torch-only upstream helper used by `prepare_camera` to relativize poses.
+        self._cam_utils = _load_module(
+            "_sana_native_cam_utils", config.source_path / "diffusion/utils/cam_utils.py"
+        )
         self.reset(None)
 
     def reset(self, trajectory: np.ndarray | None) -> None:
@@ -32,13 +45,18 @@ class SanaCameraPlanner:
         self._velocity = self._camera.VelocityState()
         self._last_controls: set[str] = set()
         self._trajectory = (
-            None
-            if trajectory is None
-            else np.matmul(
-                np.linalg.inv(trajectory[0]).astype(np.float32)[None], trajectory
-            ).astype(np.float32)
+            None if trajectory is None else self._relative_trajectory(trajectory)
         )
         self._cursor = 1
+
+    def _relative_trajectory(self, trajectory: np.ndarray) -> np.ndarray:
+        """Relativize poses to frame 0 with upstream `prepare_camera`'s float32 ops."""
+        import torch
+
+        poses = torch.from_numpy(np.asarray(trajectory, dtype=np.float32)).float()
+        first_inv = self._cam_utils.get_pose_inverse(poses[0:1]).squeeze(0)
+        relative = torch.matmul(first_inv, poses[1:])
+        return torch.cat([torch.eye(4).unsqueeze(0), relative], dim=0).numpy()
 
     def plan_chunk(self, controls: set[str]) -> np.ndarray | None:
         if self._trajectory is not None:
