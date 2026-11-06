@@ -74,11 +74,12 @@ class SanaStreamingBackend:
         self._chunk_module = importlib.import_module("diffusion.utils.chunk_utils")
         self._pyrallis = importlib.import_module("pyrallis")
         self._transforms = importlib.import_module("torchvision.transforms")
-        # Upstream's streaming entry point applies these backend settings before
-        # Pi3X or any model runs; TF32 matmuls and the SDPA selection change numerics.
-        importlib.import_module(
-            "inference_video_scripts.wm.inference_sana_wm_streaming"
-        )._apply_fast_defaults()
+        if config.upstream_fast_defaults:
+            # Upstream's streaming entry point applies these backend settings before
+            # Pi3X or any model runs; TF32 matmuls and the SDPA selection change numerics.
+            importlib.import_module(
+                "inference_video_scripts.wm.inference_sana_wm_streaming"
+            )._apply_fast_defaults()
 
         streaming_root, text_encoder_root = resolve_model_assets(config)
         self._install_pinned_text_encoder(text_encoder_root)
@@ -104,7 +105,13 @@ class SanaStreamingBackend:
         )
         self._base_forward_long = self._pipeline.model.forward_long
         if config.torch_compile:
-            self._compile_like_upstream()
+            # Upstream never compiles the causal VAE: it corrupts the decoder cache.
+            refiner = self._pipeline.refiner
+            refiner.transformer = self._torch.compile(
+                refiner.transformer,
+                mode=config.torch_compile_mode,
+                dynamic=config.torch_compile_dynamic,
+            )
 
         self._rollout_chunks = config.max_chunks
         self._last_good_frame: np.ndarray | None = None
@@ -505,30 +512,6 @@ class SanaStreamingBackend:
             elif not uniform[index]:
                 self._last_good_frame = frames[index]
         return frames
-
-    def _compile_like_upstream(self) -> None:
-        """Compile the refiner transformer with upstream's default streaming settings."""
-        import os
-
-        mode = os.environ.get(
-            "SANA_WM_TORCH_COMPILE_MODE", "max-autotune-no-cudagraphs"
-        ).strip()
-        dynamic = os.environ.get("SANA_WM_TORCH_COMPILE_DYNAMIC", "1").strip().lower()
-        targets = {
-            item.strip().lower()
-            for item in os.environ.get("SANA_WM_TORCH_COMPILE_TARGETS", "refiner")
-            .replace("+", ",")
-            .split(",")
-            if item.strip()
-        }
-        # Upstream never compiles the causal VAE: it corrupts the decoder cache.
-        if "refiner" in targets:
-            refiner = self._pipeline.refiner
-            refiner.transformer = self._torch.compile(
-                refiner.transformer,
-                mode=mode,
-                dynamic=dynamic not in {"0", "false", "no", "off"},
-            )
 
     def _write_camera_conditioning(self, chunk_index: int) -> None:
         """Populate the current Stage-1 slice with upstream ray and Plücker features."""

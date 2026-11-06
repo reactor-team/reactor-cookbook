@@ -132,9 +132,10 @@ so a rollout driven by `set_camera_trajectory` spans the trajectory's whole
 controls keep the 512-chunk bound. The session seed is upstream's `--seed`;
 the refiner keeps upstream's separate `--refiner_seed` (`inference.refiner_seed`,
 42). Startup applies upstream's backend settings (TF32 matmuls, SDPA selection,
-cuDNN benchmark) and compiles the refiner transformer as upstream does
-(`inference.torch_compile`; `SANA_WM_TORCH_COMPILE_*` override it), so the first
-chunk after startup includes the compile warmup. Frames are quantized with
+cuDNN benchmark; `inference.upstream_fast_defaults`) and compiles the refiner
+transformer as upstream does (`inference.torch_compile`, `torch_compile_mode`
+and `torch_compile_dynamic`), so the first chunk after startup includes the
+compile warmup. Frames are quantized with
 upstream's bfloat16 `(x + 1) * 127.5` truncation.
 
 Each rollout is bounded at 512 chunks. Reaching the bound broadcasts a reset,
