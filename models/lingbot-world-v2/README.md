@@ -29,9 +29,10 @@ prompt and seed. Its `camera_path_selected` response reports the accepted
 13 frames; each subsequent output is 16 frames. Path resampling rounds down
 to complete chunks, so 49 input poses produce 3 chunks / 45 output frames.
 Generation stops at path end without padding, looping, or resetting history.
-The optional `set_camera_path(noise_chunks=...)` argument selects an initial
-noise horizon at least as long as the path and at most the configured rollout
-limit. Its default `-1` allocates exactly the path length.
+The initial noise horizon of a path rollout is `stream.camera_path_noise_chunks`
+in `lingbot_world_v2.yaml`, at most `stream.max_chunks`. Its default `null`
+allocates exactly the path length; a configured horizon shorter than the path
+is raised to the path length.
 
 `reset` replays the selected path. `set_image` or `random_image` clears it and
 restores interactive camera controls. While a path is selected, `set_camera`

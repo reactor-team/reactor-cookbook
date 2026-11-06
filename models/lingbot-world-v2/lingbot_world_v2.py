@@ -82,7 +82,6 @@ class LingBotWorldV2(ReactorApp):
         self._chunk_index = 0
         self._limit_reached = False
         self._camera_path: CameraPath | None = None
-        self._camera_noise_chunks: int | None = None
 
     def load(self, config_path: Path | None) -> None:
         """Prepare public assets and load LingBot weights once at startup.
@@ -113,7 +112,6 @@ class LingBotWorldV2(ReactorApp):
         """Initialize an empty shared world before its first viewer connects."""
         config = self._require_loaded()
         self._camera_path = None
-        self._camera_noise_chunks = None
         self.state.prompt = ""
         self.state._applied_world_id = None
         self._clear_camera()
@@ -128,7 +126,6 @@ class LingBotWorldV2(ReactorApp):
         """Release causal rollout state when the shared session ends."""
         self._clear_camera()
         self._camera_path = None
-        self._camera_noise_chunks = None
         self.state._applied_world_id = None
         self._selected_input = None
         self._image_source = "none"
@@ -314,9 +311,8 @@ class LingBotWorldV2(ReactorApp):
             "Native resampling rounds down to complete chunks: first emits 13 frames, "
             "later chunks 16. Generation stops at path end. Reset replays the path; "
             "image selection clears it. Emits `camera_path_selected` and broadcasts `state_update`. "
-            "Fails with `image_required` before image selection, `invalid_camera_path` for a "
-            "malformed path, or `invalid_noise_chunks` for a noise horizon that does not "
-            "cover the path within the rollout limit."
+            "Fails with `image_required` before image selection or `invalid_camera_path` for a "
+            "malformed path."
         ),
     )
     async def set_camera_path(
@@ -324,12 +320,6 @@ class LingBotWorldV2(ReactorApp):
         trajectory: UploadedFile = InputField(  # noqa: B008 - schema field declaration
             moderate=True,
             description="Uploaded JSON with poses and intrinsics; finite rigid OpenCV C2W transforms.",
-        ),
-        noise_chunks: int = InputField(
-            default=-1,
-            ge=-1,
-            le=256,
-            description="Initial noise horizon in native chunks; -1 uses the camera path length.",
         ),
     ) -> CameraPathSelected:
         self._require_selected()
@@ -342,16 +332,7 @@ class LingBotWorldV2(ReactorApp):
             )
         except ValueError as error:
             raise CommandError("invalid_camera_path", str(error)) from error
-        if (
-            noise_chunks != -1
-            and not len(path.chunks) <= noise_chunks <= config.max_chunks
-        ):
-            raise CommandError(
-                "invalid_noise_chunks",
-                "Noise horizon must cover the camera path within the rollout limit",
-            )
         self._camera_path = path
-        self._camera_noise_chunks = None if noise_chunks == -1 else noise_chunks
         self._request_reset()
         await self.send(self._state_update())
         return CameraPathSelected(
@@ -396,7 +377,6 @@ class LingBotWorldV2(ReactorApp):
         config = self._require_loaded()
         self._selected_input = image
         self._camera_path = None
-        self._camera_noise_chunks = None
         self._image_source = "uploaded"
         self.state.prompt = (
             prompt.strip() or self.state.prompt.strip() or config.upload_default_prompt
@@ -431,7 +411,6 @@ class LingBotWorldV2(ReactorApp):
         scene = secrets.choice(candidates or list(config.scenes))
         self._selected_input = scene
         self._camera_path = None
-        self._camera_noise_chunks = None
         self._image_source = "built_in"
         self.state.prompt = scene.prompt
         self._request_reset()
@@ -471,8 +450,9 @@ class LingBotWorldV2(ReactorApp):
                 intrinsics=self._camera_path.intrinsics
                 if self._camera_path is not None
                 else intrinsics,
-                noise_chunks=(
-                    self._camera_noise_chunks or len(self._camera_path.chunks)
+                noise_chunks=max(
+                    len(self._camera_path.chunks),
+                    config.camera_path_noise_chunks or 0,
                 )
                 if self._camera_path is not None
                 else None,

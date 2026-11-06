@@ -31,8 +31,7 @@ def test_three_chunks_stop_and_reset_replays():
         app.set_camera_path(
             UploadedFile(
                 name="path.json", mime_type="application/json", data=path_data()
-            ),
-            noise_chunks=-1,
+            )
         )
     )
     assert (selected.chunks, selected.frames, selected.source_frames) == (3, 45, 49)
@@ -63,32 +62,20 @@ def test_three_chunks_stop_and_reset_replays():
     assert app._camera_path is None
 
 
-def test_explicit_noise_horizon_keeps_native_path_and_replays_on_reset():
+@pytest.mark.parametrize("configured, expected", [(None, 3), (2, 3), (12, 12)])
+def test_configured_noise_horizon_covers_the_path_and_replays_on_reset(
+    configured, expected
+):
     app = make_model()
+    app._config.camera_path_noise_chunks = configured
     upload_path = UploadedFile(
         name="path.json", mime_type="application/json", data=path_data()
     )
-    asyncio.run(app.set_camera_path(upload_path, noise_chunks=12))
+    asyncio.run(app.set_camera_path(upload_path))
     first, _, _ = step(app)
-    assert first.anchor.noise_chunks == 12
+    assert first.anchor.noise_chunks == expected
     asyncio.run(app.reset(seed=42))
-    assert asyncio.run(app.process_input()).anchor.noise_chunks == 12
-    asyncio.run(app.set_image(upload(), prompt="A garden."))
-    asyncio.run(app.set_camera_path(upload_path, noise_chunks=-1))
-    assert asyncio.run(app.process_input()).anchor.noise_chunks == 3
-
-
-@pytest.mark.parametrize("noise", [0, 1, 2, 257])
-def test_noise_horizon_rejection_preserves_selected_camera_path(noise):
-    app = make_model()
-    upload_path = UploadedFile(
-        name="path.json", mime_type="application/json", data=path_data()
-    )
-    asyncio.run(app.set_camera_path(upload_path, noise_chunks=-1))
-    original = app._camera_path
-    with pytest.raises(CommandError):
-        asyncio.run(app.set_camera_path(upload_path, noise_chunks=noise))
-    assert app._camera_path is original
+    assert asyncio.run(app.process_input()).anchor.noise_chunks == expected
 
 
 @pytest.mark.parametrize(
@@ -127,8 +114,7 @@ def test_invalid_path_does_not_replace_selection(change):
             app.set_camera_path(
                 UploadedFile(
                     name="bad.json", mime_type="application/json", data=payload
-                ),
-                noise_chunks=-1,
+                )
             )
         )
     assert app._camera_path is None

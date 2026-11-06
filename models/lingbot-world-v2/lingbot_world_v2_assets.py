@@ -63,6 +63,7 @@ class LingBotConfig:
     local_attention_frames: int
     attention_sink_frames: int
     max_chunks: int
+    camera_path_noise_chunks: int | None
     rotation_degrees_per_second: float
     upload_intrinsics: tuple[float, float, float, float]
 
@@ -135,6 +136,13 @@ def read_config(
         raise ValueError(
             "stream.max_chunks must be between 1 and the native limit of 256"
         )
+    camera_path_noise_chunks = stream.get("camera_path_noise_chunks")
+    if camera_path_noise_chunks is not None:
+        camera_path_noise_chunks = int(camera_path_noise_chunks)
+        if not 1 <= camera_path_noise_chunks <= max_chunks:
+            raise ValueError(
+                "stream.camera_path_noise_chunks must be between 1 and stream.max_chunks"
+            )
     max_area = int(inference.get("max_area", 480 * 832))
     if max_area <= 0:
         raise ValueError("inference.max_area must be positive")
@@ -190,6 +198,7 @@ def read_config(
         local_attention_frames=local_attention_frames,
         attention_sink_frames=attention_sink_frames,
         max_chunks=max_chunks,
+        camera_path_noise_chunks=camera_path_noise_chunks,
         rotation_degrees_per_second=rotation_speed,
         upload_intrinsics=intrinsics_values,
     )

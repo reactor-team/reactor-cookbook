@@ -74,6 +74,9 @@ inference:
 stream:
   # Wan's released temporal RoPE table has 1024 positions: 256 chunks of four latents.
   max_chunks: 256
+  # Initial noise horizon of a camera-path rollout, in chunks. null allocates
+  # exactly the path length; a longer horizon is used only when it covers the path.
+  camera_path_noise_chunks: null
 
 motion:
   rotation_degrees_per_second: 45.0
