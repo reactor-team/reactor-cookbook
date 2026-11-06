@@ -1,0 +1,29 @@
+# Read by streamdiffusionv2_assets.read_config (source, wan, checkpoint) and by
+# StreamDiffusionV2Model.load (checkpoint.path, model). Paths resolve under runtime.weights_path.
+
+source:
+  path: StreamDiffusionV2
+  url: https://github.com/chenfengxu714/StreamDiffusionV2.git
+  revision: 6961a5cf2045d1dda05a04ef229698bdc04e873a
+
+wan:
+  # Text encoder (umT5-XXL), VAE and base DiT config the student is built on; downloaded on first start.
+  repo_id: Wan-AI/Wan2.1-T2V-1.3B
+  revision: 37ec512624d61f7aa208f7ea8140a131f93afc9a
+  path: wan_models/Wan2.1-T2V-1.3B
+
+checkpoint:
+  # The StreamDiffusionV2 1.3B causal DMD student (video-to-video); downloaded on first start.
+  repo_id: jerryfeng/StreamDiffusionV2
+  revision: 2373eb2b39278b3a1aa174964a724ee78ead96f0
+  path: ckpts/wan_causal_dmd_v2v
+  bytes: 5676282858   # model.pt; startup refuses another file
+
+model:
+  source_config: configs/wan_causal_dmd_v2v.yaml   # under the source checkout
+  model_type: T2V-1.3B
+  step: 2              # denoising steps: timesteps 700 and 500
+  height: 480
+  width: 832
+  t_refresh: 50        # latent frames before RoPE positions wrap (run_stream_batch)
+  warmup_steps: 8      # throwaway chunks at load, through both prompt paths
