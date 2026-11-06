@@ -1,0 +1,36 @@
+$schema: reactor/v2
+
+model:
+  name: history-forcing
+  version: v0.1.0
+  description: Continuous History-Forcing video with live text prompts.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    cpu:
+      request: "4"
+      limit: "16"
+    memory:
+      request: 32Gi
+      limit: 96Gi
+
+runtime:
+  import: history_forcing:HistoryForcing
+  config: history_forcing.yaml
+  weights_path: ~/.cache/reactor_registry/history-forcing
+
+build:
+  runtime_version: "3.11.2"
+  python_requirements: requirements.txt
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  system_packages:
+    - git
+    - build-essential
+  run:
+    - git clone https://github.com/ziplab/History-Forcing.git /opt/history-forcing && git -C /opt/history-forcing checkout 9d69c1e5da2beb219e635f4400b8cb494759ba06
+    - pip install --no-cache-dir --no-build-isolation flash-attn==2.8.3
+  runtime_env:
+    TOKENIZERS_PARALLELISM: "false"
+    PYTORCH_ALLOC_CONF: "expandable_segments:True"
