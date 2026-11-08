@@ -1,0 +1,24 @@
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
+numpy
+PyYAML
+huggingface-hub==0.36.0
+
+# Released DMD inference stack; no training teachers or evaluation models.
+torch==2.8.0
+torchvision==0.23.0
+diffusers==0.37.1
+transformers==4.51.3
+accelerate
+omegaconf
+einops
+ftfy
+easydict
+sentencepiece
+tqdm
+
+# Build the upstream FlashAttention 2 kernel.
+ninja
+packaging
+setuptools
+wheel

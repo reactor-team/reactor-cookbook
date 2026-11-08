@@ -1,0 +1,7 @@
+__pycache__
+.pytest_cache
+.ruff_cache
+tests
+assets
+demo/node_modules
+demo/dist
