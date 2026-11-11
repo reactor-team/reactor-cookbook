@@ -78,8 +78,8 @@ CASES = {
     ),
 }
 
-# Praxis-1 replies to robot state with the pending chunk and gates every later
-# chunk on set_executed_step: (model, tracks, {field: row width}).
+# Praxis-1 sends its first chunk once it has robot state, and every later
+# chunk after set_executed_step: (model, tracks, {field: row width}).
 PRAXIS_CASES = {
     "praxis_droid": (
         "praxis-1-droid",
@@ -139,7 +139,7 @@ class FirstActionsTests(unittest.TestCase):
             if praxis:
                 if command == "set_executed_step":
                     pending.update(step=payload["executed_step"] + 1, emitted=False)
-                elif command == trigger and not pending["emitted"]:
+                if command in (trigger, "set_executed_step") and not pending["emitted"]:
                     pending["emitted"] = True
                     envelope = praxis_chunk(fields, pending["step"], failure)
             elif command in ("get_checkpoint", "select_checkpoint"):

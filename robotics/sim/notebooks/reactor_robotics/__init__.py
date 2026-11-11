@@ -13,12 +13,6 @@ is the map.
 | :class:`~reactor_robotics.dreamzero.DreamZeroClient` | ``dreamzero`` | free-running, ignores chunks from old frames | ``(24, 8)`` absolute joints |
 | :class:`~reactor_robotics.xr1_robocasa365.Xr1Robocasa365Client` | ``xr1-robocasa365`` | lock-step, echo-gated from the first chunk | ``(16, 60)`` packed, first 12 live |
 
-Praxis-1 (``praxis-1-droid``, ``praxis-1-yam``) has no client class:
-:mod:`~reactor_robotics.praxis` provides track names, geometry and
-``robot_state_json`` encoders, and the first-action scripts drive
-:class:`~reactor_robotics.session.ReactorSession` directly. It is lock-step and
-echo-gated after the first chunk, returning absolute end-effector poses.
-
 ``xwam`` is the reference implementation of the generic robot-policy contract
 (``robot-policy-client-contract.md``); the other five each depart from it, and
 each client's module docstring states how.
@@ -57,13 +51,6 @@ from .lingbot_va import (
     VIEWS as LINGBOT_VA_VIEWS,
     LingbotVaClient,
     LingbotVaPrediction,
-)
-from .praxis import (
-    DROID_TRACKS as PRAXIS_DROID_TRACKS,
-    YAM_TRACKS as PRAXIS_YAM_TRACKS,
-    check_chunk as check_praxis_chunk,
-    encode_droid_state as encode_praxis_droid_state,
-    encode_yam_state as encode_praxis_yam_state,
 )
 from .session import (
     DEFAULT_API_URL,
@@ -106,8 +93,6 @@ __all__ = [
     "LINGBOT_VA_VIEWS",
     "LingbotVaClient",
     "LingbotVaPrediction",
-    "PRAXIS_DROID_TRACKS",
-    "PRAXIS_YAM_TRACKS",
     "ReactorSession",
     "RepeatingFrameTrack",
     "XR1_ROBOCASA365_ACTION_SHAPE",
@@ -119,9 +104,6 @@ __all__ = [
     "XwamClient",
     "XwamPrediction",
     "api_url",
-    "check_praxis_chunk",
     "describe_api_key",
-    "encode_praxis_droid_state",
-    "encode_praxis_yam_state",
     "require_api_key",
 ]

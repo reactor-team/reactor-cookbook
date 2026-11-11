@@ -36,9 +36,7 @@ Source: [Cosmos](./first_cosmos_actions.py),
 [Praxis-1 YAM](./first_praxis_yam_actions.py).
 
 The Praxis-1 examples request the first chunk (`step: 0`, 21 rows), echo
-`set_executed_step`, and check the next chunk (`step: 1`, 24 rows). Their
-[helpers](./reactor_robotics/praxis.py) define the track names, frame sizes,
-and `robot_state_json` encoders for both endpoints.
+`set_executed_step`, and check the next chunk (`step: 1`, 24 rows).
 
 The models use different state fields and inference protocols. Do not change
 only the model slug in another policy's example. The model reference describes
