@@ -56,6 +56,8 @@ class DocumentationConsistencyTest(unittest.TestCase):
             "reactor/cosmos-nano-policy-droid": "first_cosmos_actions.py",
             "reactor/dreamzero": "first_dreamzero_droid_actions.py",
             "reactor/flux3-action-droid": "first_flux_actions.py",
+            "reactor/praxis-1-droid": "first_praxis_droid_actions.py",
+            "reactor/praxis-1-yam": "first_praxis_yam_actions.py",
         }.items():
             with self.subTest(model=model):
                 self.assertTrue((ROOT / script).is_file())
