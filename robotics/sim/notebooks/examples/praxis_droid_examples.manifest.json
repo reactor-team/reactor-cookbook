@@ -1,0 +1,99 @@
+{
+  "recorded_utc": "2026-11-11T20:06:26Z",
+  "model": "reactor/praxis-1-droid",
+  "task": "Put the red block in the bowl.",
+  "frames": "SYNTHETIC (deterministic, synthetic_observation()), 512x288, views ['exterior', 'wrist']",
+  "pose_frame": "fr3_hand",
+  "rows": [
+    21,
+    24,
+    24,
+    24,
+    24
+  ],
+  "n_examples": 5,
+  "passes": 3,
+  "ready_seconds": 3.9,
+  "out_bytes": 24540,
+  "recorded_run": [
+    {
+      "i": 0,
+      "step": 0,
+      "rows": 21,
+      "latency_ms": 111.7,
+      "anchor_m": 0.00485,
+      "dxyz_m": 0.01031,
+      "ortho": 0.0
+    },
+    {
+      "i": 1,
+      "step": 1,
+      "rows": 24,
+      "latency_ms": 257.7,
+      "anchor_m": 0.01227,
+      "dxyz_m": 0.0185,
+      "ortho": 0.0
+    },
+    {
+      "i": 2,
+      "step": 2,
+      "rows": 24,
+      "latency_ms": 246.2,
+      "anchor_m": 0.00762,
+      "dxyz_m": 0.01135,
+      "ortho": 0.0
+    },
+    {
+      "i": 3,
+      "step": 3,
+      "rows": 24,
+      "latency_ms": 250.6,
+      "anchor_m": 0.0041,
+      "dxyz_m": 0.01574,
+      "ortho": 0.0
+    },
+    {
+      "i": 4,
+      "step": 4,
+      "rows": 24,
+      "latency_ms": 245.0,
+      "anchor_m": 0.00554,
+      "dxyz_m": 0.01538,
+      "ortho": 0.0
+    }
+  ],
+  "bands": {
+    "l2": {
+      "n_samples": 15,
+      "mean": 0.6540428212505576,
+      "std": 0.2983724250444959,
+      "band_mean_plus_3sigma": 1.5491600963840453
+    },
+    "anchor_m": {
+      "n_samples": 15,
+      "mean": 0.008970594675590585,
+      "std": 0.0034166320031096824,
+      "band_mean_plus_3sigma": 0.019220490684919635
+    },
+    "dxyz_m": {
+      "n_samples": 15,
+      "mean": 0.013163707156976064,
+      "std": 0.0024875500858570904,
+      "band_mean_plus_3sigma": 0.020626357414547335
+    },
+    "ortho": {
+      "n_samples": 15,
+      "mean": 9.413878966727888e-08,
+      "std": 3.919260506418359e-09,
+      "band_mean_plus_3sigma": 1.0589657118653396e-07
+    }
+  },
+  "latency_summary_ms": {
+    "gate": "set_executed_step -> next chunk",
+    "p50": 247.1,
+    "min": 244.2,
+    "max": 257.7,
+    "n": 12,
+    "chunk_ms": 1600.0
+  }
+}

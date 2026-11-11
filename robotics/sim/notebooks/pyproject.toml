@@ -1,7 +1,7 @@
 [project]
 name = "reactor-robotics-notebooks"
 version = "0.1.0"
-description = "Quickstart scripts + minimal clients for Reactor-served robotics policies (xwam, lingbot-va, groot-n17, cosmos-nano-policy-droid, dreamzero, xr1-robocasa365)"
+description = "Quickstart scripts + minimal clients for Reactor-served robotics policies (xwam, lingbot-va, groot-n17, cosmos-nano-policy-droid, dreamzero, xr1-robocasa365, praxis-1)"
 requires-python = ">=3.10"
 
 dependencies = [

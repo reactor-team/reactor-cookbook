@@ -42,8 +42,9 @@ The models use different state fields and inference protocols. Do not change
 only the model slug in another policy's example. The model reference describes
 camera names, action units, prediction horizon, and execution rules.
 
-For recorded-observation replay, see the [Cosmos guide](./cosmos_droid_quickstart.md)
-and [DreamZero guide](./dreamzero_quickstart.md). The
+For recorded-observation replay, see the [Cosmos guide](./cosmos_droid_quickstart.md),
+[DreamZero guide](./dreamzero_quickstart.md), and
+[Praxis-1 guide](./praxis_quickstart.md) (DROID and YAM). The
 [FLUX Action client](../../flux3-action-droid) supports synthetic or user-supplied
 NPZ inputs and checkpoint selection.
 

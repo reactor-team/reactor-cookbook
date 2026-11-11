@@ -27,6 +27,8 @@ MODELS = {
         "xr1_robocasa365_quickstart.md",
         "xr1_robocasa365_quickstart.py",
     ),
+    "praxis-1-droid": ("praxis_quickstart.md", "praxis_quickstart.py"),
+    "praxis-1-yam": ("praxis_quickstart.md", "praxis_quickstart.py"),
     "dreamzero-yam-molmoact2": (
         "dreamzero_yam_bridge.md",
         "dreamzero_yam_bridge.py",
@@ -40,6 +42,8 @@ FIXTURE_ACTIONS = {
     "groot_n17_examples.npz": ("expected_joint_position", (5, 40, 7)),
     "dreamzero_examples.npz": ("expected_actions", (5, 24, 8)),
     "xr1_robocasa365_examples.npz": ("expected_actions", (5, 16, 60)),
+    "praxis_droid_examples.npz": ("expected_poses", (5, 24, 12)),
+    "praxis_yam_examples.npz": ("expected_left_poses", (5, 24, 12)),
 }
 
 
