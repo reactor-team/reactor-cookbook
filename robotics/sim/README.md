@@ -14,9 +14,11 @@ key, Python, and [uv](https://docs.astral.sh/uv/). They do not execute robot mot
 | Cosmos Nano Policy DROID | `reactor/cosmos-nano-policy-droid` | [Cosmos](./notebooks/first_cosmos_actions.py) | [RoboLab gateway](./cosmos-droid) |
 | DreamZero DROID | `reactor/dreamzero` | [DreamZero](./notebooks/first_dreamzero_droid_actions.py) | [RoboLab gateway](./dreamzero) |
 | FLUX Action DROID | `reactor/flux3-action-droid` | [FLUX Action](./notebooks/first_flux_actions.py) | No closed-loop adapter included |
+| Praxis-1 DROID | `reactor/praxis-1-droid` | [Praxis-1 DROID](./notebooks/first_praxis_droid_actions.py) | No closed-loop adapter included |
+| Praxis-1 YAM | `reactor/praxis-1-yam` | [Praxis-1 YAM](./notebooks/first_praxis_yam_actions.py) | No closed-loop adapter included |
 
-These policies share an embodiment, but their input fields and execution
-protocols differ. Follow the [model-specific documentation](https://docs.reactor.inc/robotics/overview).
+Except for Praxis-1 YAM, these policies share the DROID embodiment, but their
+input fields and execution protocols differ. Follow the [model-specific documentation](https://docs.reactor.inc/robotics/overview).
 The [`reactor_robotics` helper directory in Reactor's public cookbook](./notebooks/reactor_robotics)
 documents the shared session wrapper; it is separate from the Python SDK.
 
@@ -29,7 +31,9 @@ installing the gateway alone does not install the simulator.
 
 FLUX Action has a [client for synthetic or NPZ inputs](../flux3-action-droid).
 Connecting it to a simulator requires your own adapter; receiving an action
-chunk does not establish closed-loop task success.
+chunk does not establish closed-loop task success. The same applies to
+Praxis-1: use its [DROID](https://docs.reactor.inc/robotics/praxis/droid/integration)
+or [YAM](https://docs.reactor.inc/robotics/praxis/yam/integration) integration guide.
 
 ## Setup
 

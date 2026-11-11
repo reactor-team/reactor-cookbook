@@ -4,7 +4,7 @@ Examples for hosted robot policies and action-conditioned simulation.
 
 ## Policy inference
 
-These quickstarts cover DROID policies.
+These quickstarts cover DROID and YAM policies.
 Reactor receives camera observations, measured robot state, and a task, then
 returns predicted actions. Your client owns the simulator or robot controller.
 
@@ -13,6 +13,8 @@ returns predicted actions. Your client owns the simulator or robot controller.
 | Cosmos Nano | DROID | [Cosmos quickstart](https://docs.reactor.inc/robotics/cosmos/nano-policy-droid/quickstart) |
 | DreamZero | DROID | [DreamZero quickstart](https://docs.reactor.inc/robotics/dreamzero/droid/quickstart) |
 | FLUX Action | DROID | [FLUX Action quickstart](https://docs.reactor.inc/robotics/flux-action/droid/quickstart) |
+| Praxis-1 | DROID | [Praxis-1 DROID quickstart](https://docs.reactor.inc/robotics/praxis/droid/quickstart) |
+| Praxis-1 | YAM (bimanual) | [Praxis-1 YAM quickstart](https://docs.reactor.inc/robotics/praxis/yam/quickstart) |
 
 Start with the [first-action scripts](./sim/notebooks): an API key is enough;
 you do not need a local GPU, simulator, or model weights. Synthetic observations

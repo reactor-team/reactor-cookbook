@@ -170,7 +170,8 @@ confirm only the intended surface moved.
 
 Public robotics docs consume `robotics/sim/notebooks/reactor_robotics` and the
 `cosmos-droid` and `dreamzero` simulator packages. The launch-facing READMEs
-cover Cosmos Nano, DreamZero, and FLUX Action on DROID under policy inference.
+cover Cosmos Nano, DreamZero, and FLUX Action on DROID, and Praxis-1 on DROID
+and YAM, under policy inference.
 Preserve Cosmos3 Nano Sim Bimanual and Transfer under a separate action-conditioned
 simulation section, including their examples and all targets linked by the docs.
 Keep other policy examples available in source without recommending them as

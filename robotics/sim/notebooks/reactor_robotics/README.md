@@ -71,6 +71,8 @@ interchangeable by changing a slug. Read the matching implementation and guide.
 
 The [FLUX Action first-action example](../first_flux_actions.py) uses
 `ReactorSession` directly and implements that model's request/reply protocol.
+The Praxis-1 [DROID](../first_praxis_droid_actions.py) and
+[YAM](../first_praxis_yam_actions.py) examples do the same.
 Model helpers have their own result types. Generic `ReactorSession` does not
 normalize actions or execute them.
 

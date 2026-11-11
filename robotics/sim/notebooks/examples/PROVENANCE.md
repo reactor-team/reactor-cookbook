@@ -19,6 +19,8 @@ things. Each notebook claims only what its model's determinism supports.
 | `groot_n17_examples.npz` | **Recorded** against the live deployment | **Real** FR3 rig captures | Invariants + two calibrated physical bands (anchor, per-step) + an L2 band, reported only | Unseeded; the absolute-anchoring gives a tight, meaningful gate |
 | `cosmos_droid_examples.npz` | **Recorded** against the live deployment | Synthetic | Invariants + two calibrated physical bands (anchor, per-step) + an L2 band, reported only | Unseeded; same policy as `groot-n17` |
 | `xr1_robocasa365_examples.npz` | **Recorded** against the live deployment | Synthetic | Invariants + per-column motion bands + an L2 band, reported only | Unseeded; packed relative-action layout has no absolute anchor |
+| `praxis_droid_examples.npz` | **Recorded** against the live deployment | Synthetic | Invariants + two calibrated physical bands (anchor, per-step, in meters) + an L2 band, reported only | Unseeded; absolute end-effector targets give a meaningful anchor |
+| `praxis_yam_examples.npz` | **Recorded** against the live deployment | Synthetic | Same as `praxis_droid_examples.npz`, over both arms | Same |
 
 Only `xwam` gets a numeric parity gate, because only `xwam` is seeded and only
 `xwam` has reference outputs from another stack. Everywhere else a numeric gate
@@ -820,3 +822,76 @@ non-increasing echo yields no chunk, a 25 s idle does not drop the session, and
 Re-running the script re-records the chunks and re-calibrates both bands. It
 opens 5 sessions, so it needs the dev deployment free for a few minutes; a busy
 deployment answers `429 no available capacity` and the script retries.
+
+---
+
+## `praxis_droid_examples.npz` and `praxis_yam_examples.npz` — 24 540 and 38 504 bytes, 5 examples each
+
+```
+sha256 38c5346e9a34b60069c07790bd84928039bc97a256c0f583e7d1042054516340  praxis_droid_examples.npz
+sha256 ed2585cddae4a463ac4ee9094e694b666e8504d052d5d3883f4ba6b1133dca30  praxis_yam_examples.npz
+```
+
+Recorded **2026-11-11T20:06Z** (DROID) and **20:07Z** (YAM) against
+`reactor/praxis-1-droid` and `reactor/praxis-1-yam` on PROD
+(`https://api.reactor.inc`), READY in 3.9 s and 3.6 s, launch day:
+
+```sh
+REACTOR_API_KEY=... uv run python examples/record_praxis_examples.py --embodiment droid
+REACTOR_API_KEY=... uv run python examples/record_praxis_examples.py --embodiment yam
+```
+
+### The frames are synthetic
+
+`synthetic_observation(spec, i)` in [`../praxis_quickstart.py`](../praxis_quickstart.py)
+draws a deterministic tabletop scene per camera, with the object moving
+across the exterior or top view and growing in the wrist views. The state is a
+25-row history of a constant-velocity reach ending at the current pose, with
+the grippers open. It is a pure function of `i`, so re-running regenerates the
+same inputs. The recorded chunks are a protocol and invariant fixture, not a
+demonstration of task behaviour: no simulator adapter exists for Praxis-1 yet.
+
+Each observation is held for about 1.9 s before its state and trigger are
+sent, so every camera's 25-frame window contains only that observation.
+
+### What was recorded
+
+One episode of 5 chunks per embodiment: the first chunk with no echo, then
+four chunks each released by `set_executed_step`. Two more passes of the same
+observations, each started with `reset_context`, calibrate the bands. Every
+pass returned 21 rows and then 24.
+
+| example | step | rows | DROID anchor | DROID latency | YAM anchor | YAM latency |
+|---|---|---|---|---|---|---|
+| 0 | 0 | 21 | 4.9 mm | 111.7 ms | 4.4 mm | 52.9 ms |
+| 1 | 1 | 24 | 12.3 mm | 257.7 ms | 9.8 mm | 438.3 ms |
+| 2 | 2 | 24 | 7.6 mm | 246.2 ms | 8.5 mm | 354.4 ms |
+| 3 | 3 | 24 | 4.1 mm | 250.6 ms | 5.2 mm | 369.8 ms |
+| 4 | 4 | 24 | 5.5 mm | 245.0 ms | 8.1 mm | 259.0 ms |
+
+Example 0's latency runs from the state to the first chunk. The others run
+from the echo to the next chunk: over all three passes (n = 12) the p50 was
+247.1 ms on DROID and 269.5 ms on YAM, against 1600 ms of motion per chunk.
+
+### Calibrated bands (mean + 3σ over 3 passes, n = 15)
+
+| Band | DROID mean | std | band | YAM mean | std | band |
+|---|---|---|---|---|---|---|
+| row-0 anchor (m), worst arm | 0.0090 | 0.0034 | **0.0192** | 0.0095 | 0.0041 | **0.0218** |
+| adjacent-row position change (m) | 0.0132 | 0.0025 | **0.0206** | 0.0075 | 0.0013 | **0.0113** |
+| run-to-run L2 of the poses | 0.654 | 0.298 | **1.549**, reported only | 0.624 | 0.219 | **1.281**, reported only |
+
+The rotation blocks were orthonormal to about 1e-7 on every chunk. The
+quickstart checks them against a fixed 0.001 instead of a calibrated band,
+because that spread is float precision rather than model behaviour.
+
+The model is unseeded, so the L2 band is its own run-to-run spread and is a
+drift signal, reported without gating. A 3σ bound from 15 samples will be
+grazed occasionally by construction.
+
+### Re-recording
+
+Re-running the script re-records the chunks and re-calibrates the bands. It
+opens one session per embodiment. Do it after any change to the deployment,
+and update the tables above.
+

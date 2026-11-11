@@ -78,10 +78,45 @@ CASES = {
     ),
 }
 
+# Praxis-1 sends its first chunk once it has robot state, and every later
+# chunk after set_executed_step: (model, tracks, {field: row width}).
+PRAXIS_CASES = {
+    "praxis_droid": (
+        "praxis-1-droid",
+        ("exterior", "wrist"),
+        {"poses": 12, "grips": 0},
+    ),
+    "praxis_yam": (
+        "praxis-1-yam",
+        ("top", "wrist_left", "wrist_right"),
+        {"left_poses": 12, "left_grips": 0, "right_poses": 12, "right_grips": 0},
+    ),
+}
+PRAXIS_TRIGGER = "set_robot_state_json"
+
+
+def praxis_chunk(fields, step, failure):
+    rows = 21 if step == 0 else 24
+    data = {"step": float(step), "timestamps": [i / 15 for i in range(rows)]}
+    for name, width in fields.items():
+        arr = np.zeros((rows, width) if width else (rows,))
+        if failure == "shape":
+            arr = arr[:1]
+        if failure == "nan":
+            arr.flat[0] = np.nan
+        data[name] = arr.tolist()
+    return {"type": "action_prediction", "data": data}
+
 
 class FirstActionsTests(unittest.TestCase):
     def exercise(self, name, failure=None):
-        model, tracks, trigger, field, shape = CASES[name]
+        praxis = name in PRAXIS_CASES
+        if praxis:
+            model, tracks, fields = PRAXIS_CASES[name]
+            trigger, field, shape = PRAXIS_TRIGGER, None, None
+            pending = {"step": 0, "emitted": False}
+        else:
+            model, tracks, trigger, field, shape = CASES[name]
         sdk = Reactor("reactor/" + model, api_key="offline-test")
         sdk._require_handle = Mock()
         sdk._async_op = AsyncMock(return_value=None)
@@ -101,7 +136,13 @@ class FirstActionsTests(unittest.TestCase):
             if failure == "command":
                 raise RuntimeError("command failed")
             envelope = None
-            if command in ("get_checkpoint", "select_checkpoint"):
+            if praxis:
+                if command == "set_executed_step":
+                    pending.update(step=payload["executed_step"] + 1, emitted=False)
+                if command in (trigger, "set_executed_step") and not pending["emitted"]:
+                    pending["emitted"] = True
+                    envelope = praxis_chunk(fields, pending["step"], failure)
+            elif command in ("get_checkpoint", "select_checkpoint"):
                 envelope = {
                     "type": "checkpoint_selected",
                     "data": {
@@ -172,7 +213,7 @@ class FirstActionsTests(unittest.TestCase):
             sdk.close()
 
     def test_first_actions_and_failure_cleanup(self):
-        for name in CASES:
+        for name in [*CASES, *PRAXIS_CASES]:
             for failure in (None, "shape", "nan", "connect", "command"):
                 with self.subTest(model=name, failure=failure):
                     self.exercise(name, failure)
