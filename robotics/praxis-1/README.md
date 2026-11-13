@@ -105,7 +105,7 @@ the same 15 Hz execution and the same chunks.
 | Stamps | Every frame and state row, from `time_micros()` | None |
 | Expected `join` | `capture_time` | `newest` |
 | Call round trip, median, 12 robots under load | 211 ms | 304 ms (about 90 ms more) |
-| From the end of a chunk to the next, one robot | about 110–185 ms | about 360–730 ms, with encoding |
+| From the end of a chunk to the next, one robot | about 170–280 ms | about 370–730 ms, with encoding |
 | Video per call | none (streamed) | about 60–130 KB with real camera frames |
 
 **Choose streamed** for the lowest latency. The video is already on the model
