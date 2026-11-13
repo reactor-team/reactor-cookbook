@@ -19,6 +19,12 @@ command row). :class:`PraxisClient` runs the loop at 15 Hz:
 
 Frames and state reach the model on different channels. The shared stamp is the
 only thing that pairs them; see the README.
+
+:class:`SteppedPraxisClient` drives the same robot in a stepped session
+instead. Nothing streams and nothing is stamped: after each chunk, one
+``Reactor.step`` carries the chunk's frames of every camera (H.264, one stream
+per camera) together with the state and the step echo, so frames and state
+arrive as one unit.
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ from itertools import pairwise
 from typing import Any, Protocol
 
 import numpy as np
-from reactor_sdk import Reactor, ReactorStatus, time_micros
+from reactor_sdk import EncodedFrame, Reactor, ReactorStatus, time_micros
 
 log = logging.getLogger("praxis")
 
@@ -140,6 +146,8 @@ class Chunk:
     #: How the call paired frames and state (``session_status.join``), when
     #: polled for this chunk; see JOIN_MEANINGS.
     join: str | None = None
+    #: Stepped sessions only: the encoded video the call carried, in bytes.
+    sent_bytes: int = 0
 
 
 class Robot(Protocol):
@@ -161,7 +169,7 @@ class Robot(Protocol):
 
 @dataclass(frozen=True)
 class _Row:
-    time_us: int
+    time_us: int | None  # None in a stepped session, which sends no stamps
     state: Mapping[str, ArmState]
 
 
@@ -170,6 +178,9 @@ class PraxisClient:
 
     Use it as an async context manager, then call :meth:`run_episode`.
     """
+
+    #: The ``join`` every call should report; anything else is logged.
+    expected_join: str | None = "capture_time"
 
     def __init__(
         self,
@@ -207,6 +218,7 @@ class PraxisClient:
             api_url=api_url
             or os.environ.get("REACTOR_API_URL")
             or "https://api.reactor.inc",
+            **self._session_options(),
         )
         self.tracks: dict[str, Any] = {}
         self.history: deque[_Row] = deque(maxlen=STACK)
@@ -219,6 +231,10 @@ class PraxisClient:
         self._deadline = 0.0
 
     # -- session ------------------------------------------------------------------
+
+    def _session_options(self) -> dict[str, Any]:
+        """Extra ``Reactor`` arguments; a streamed session needs none."""
+        return {}
 
     async def __aenter__(self) -> PraxisClient:  # noqa: PYI034 - Python 3.10
         loop = asyncio.get_running_loop()
@@ -385,12 +401,192 @@ class PraxisClient:
         self.status = dict((reply or {}).get("data") or {})
         join = str(self.status.get("join", ""))
         chunk.join = join
-        if join and join != "capture_time":
+        if join and self.expected_join and join != self.expected_join:
             log.warning(
-                "join=%r, not 'capture_time': %s",
+                "join=%r, not %r: %s",
                 join,
+                self.expected_join,
                 JOIN_MEANINGS.get(join, "unknown value"),
             )
+
+
+class PredictionFailed(RuntimeError):
+    """A stepped call that produced no chunk. Start a new episode to go on."""
+
+    def __init__(self, step: int, code: str, reason: str) -> None:
+        super().__init__(f"step {step}: {code}: {reason}")
+        self.step, self.code, self.reason = step, code, reason
+
+
+class SteppedPraxisClient(PraxisClient):
+    """The same loop in a stepped session: one ``Reactor.step`` per chunk.
+
+    The robot still executes one row per 15 Hz tick, and every tick is still
+    observed, but nothing streams. The client keeps each tick's frames; after
+    the chunk it encodes them, one H.264 stream per camera, and sends them in
+    the same call as the state and the step echo. Frames and state arrive
+    together, so no stamps are needed: the call sends no ``time_us``, and the
+    model pairs the last 25 state rows with the 25 newest frames.
+
+    The call carries 25 frames per camera at episode start, then the frames of
+    the rows executed since the previous call: 21 after an episode's first
+    chunk, 24 after the others.
+    """
+
+    expected_join = None  # "newest" is normal here: each call carries its frames
+
+    def __init__(self, robot: Robot, embodiment: Embodiment, **kwargs: Any) -> None:
+        super().__init__(robot, embodiment, **kwargs)
+        self.frames: dict[str, list[np.ndarray]] = {}
+
+    def _session_options(self) -> dict[str, Any]:
+        return {"generation": "stepped", "step_timeout": self.chunk_timeout_s}
+
+    async def run_episode(self, task: str, chunks: int) -> list[Chunk]:
+        """Run one episode of ``chunks`` chunks and return them.
+
+        As in :meth:`PraxisClient.run_episode`: the robot holds still for 25
+        ticks, then each chunk is executed row by row at 15 Hz. The last chunk is
+        executed but not echoed; the next episode starts with ``reset_context``.
+        """
+        if chunks < 1:
+            raise ValueError("chunks must be positive")
+        await self.reactor.send_command("set_task", {"task": task})
+        self.history.clear()
+        self.frames = {name: [] for name in self.embodiment.cameras}
+        self._deadline = time.monotonic()
+        for _ in range(STACK):  # episode start: 25 ticks of the start pose
+            await self._tick()
+            self._observe(record=True)
+        if self._episodes > 0:
+            # As in a streamed session: the reset drops the wait for the last
+            # chunk's echo, and the next call starts a new context.
+            reply = await self.reactor.send_command("reset_context", {})
+            data = (reply or {}).get("data") or {}
+            self._next_step = int(data.get("next_step", self._next_step))
+        self._episodes += 1
+
+        done: list[Chunk] = []
+        executed: int | None = None
+        for _ in range(chunks):
+            chunk = await self._step(executed)
+            done.append(chunk)
+            poll = None
+            if self.status_every and (self._chunks - 1) % self.status_every == 0:
+                poll = asyncio.create_task(self._poll_status(chunk))
+            self._deadline = time.monotonic()  # the chunk's row 0 starts now
+            for row in chunk.rows:
+                self.robot.execute(row)
+                await self._tick()
+                self._observe(record=True)
+            executed = chunk.step
+            if poll is not None:
+                await poll
+        return done
+
+    def _observe(self, *, record: bool = True) -> None:
+        """One tick's observation: keep every camera's frame and the state row.
+        Nothing is sent and nothing is stamped."""
+        if not record:
+            return
+        frames = self.robot.read_cameras()
+        state = dict(self.robot.read_arm_state())
+        if set(state) != set(self.embodiment.arms):
+            raise ValueError(f"read_arm_state must return {self.embodiment.arms}")
+        for name in self.embodiment.cameras:
+            frame = np.array(frames[name], order="C")  # a copy: drivers reuse buffers
+            self.embodiment.check_frame(name, frame)
+            self.frames[name].append(frame)
+        self.history.append(_Row(None, state))
+
+    async def _step(self, executed: int | None) -> Chunk:
+        """Send the frames kept since the previous call, the last 25 state rows
+        and (after the first chunk) the step echo, in one call; return the chunk
+        it produces."""
+        started = time.perf_counter()
+        state: dict[str, Any] = {
+            "robot_state_json": state_json(self.embodiment, list(self.history))
+        }
+        if executed is not None:
+            state["executed_step"] = executed
+        frames = self.frames
+        self.frames = {name: [] for name in self.embodiment.cameras}
+        media = await asyncio.to_thread(
+            lambda: {name: encode_h264(f) for name, f in frames.items()}
+        )
+        result = await self.reactor.step(state=state, media=media)
+        if result.error is not None:
+            raise PredictionFailed(self._next_step, "step_failed", str(result.error))
+        give_up = started + self.chunk_timeout_s
+        while True:
+            timeout = give_up - time.perf_counter()
+            try:
+                message = await asyncio.wait_for(self._messages.get(), max(0, timeout))
+            except asyncio.TimeoutError:
+                raise TimeoutError(
+                    f"No action_prediction for step {self._next_step}"
+                ) from None
+            data = message.get("data") or {}
+            if message["type"] == "prediction_failed":
+                # Nothing retries a stepped call by itself: stop the episode.
+                raise PredictionFailed(
+                    int(data.get("step", self._next_step)),
+                    str(data.get("code", "")),
+                    str(data.get("reason", "")),
+                )
+            if int(data.get("step", -1)) < self._next_step:
+                continue  # a stale chunk from before a reset
+            chunk = parse_chunk(self.embodiment, data)
+            self._next_step = chunk.step + 1
+            self._chunks += 1
+            chunk.latency_ms = (time.perf_counter() - started) * 1000
+            chunk.sent_bytes = sum(len(f.data) for v in media.values() for f in v)
+            return chunk
+
+
+def encode_h264(frames: Sequence[np.ndarray]) -> list[EncodedFrame]:
+    """One camera's frames of one call as an H.264 stream that starts at a
+    keyframe: one ``EncodedFrame`` per frame, in order.
+
+    Raw frames would make a call about 22 MB; encoded, it is about 60-130 KB.
+    Needs PyAV (``av``), which bundles the x264 encoder.
+    """
+    try:
+        import av
+    except ImportError as exc:  # streamed sessions do not need it
+        raise ImportError(
+            "Stepped sessions encode video with PyAV: pip install av"
+        ) from exc
+    if not frames:
+        raise ValueError("no frames to encode")
+    height, width = frames[0].shape[:2]
+    if width % 2 or height % 2:
+        raise ValueError(f"H.264 needs an even width and height, not {width}x{height}")
+    if any(f.shape != frames[0].shape for f in frames):
+        raise ValueError("every frame of one camera in one call must be the same size")
+    codec = av.CodecContext.create("libx264", "w")
+    codec.width, codec.height, codec.pix_fmt = width, height, "yuv420p"
+    # No B-frames and no lookahead, so each frame comes out as one packet, in
+    # order; one GOP longer than the call, so the first frame is the only
+    # keyframe.
+    codec.options = {
+        "preset": "ultrafast",
+        "tune": "zerolatency",
+        "crf": "23",
+        "bf": "0",
+    }
+    codec.gop_size = len(frames) + 1
+    packets = []
+    for i, frame in enumerate(frames):
+        video = av.VideoFrame.from_ndarray(frame, format="rgb24").reformat(
+            format="yuv420p"
+        )
+        video.pts = i
+        packets += codec.encode(video)
+    packets += codec.encode(None)
+    if len(packets) != len(frames):
+        raise RuntimeError(f"{len(frames)} frames encoded to {len(packets)} packets")
+    return [EncodedFrame(bytes(p), width=width, height=height) for p in packets]
 
 
 JOIN_MEANINGS = {
@@ -401,14 +597,24 @@ JOIN_MEANINGS = {
     "newest": "no frame within 1 s of time_us: the stamps are not on the "
     "time_micros() clock (or a frame was pushed without capture_time_us)",
 }
+#: The same values in a stepped session, where the call sends no ``time_us``.
+STEPPED_JOIN_MEANINGS = {
+    "newest": "expected in a stepped session: each call carries its own frames and "
+    "state, and the last 25 rows were paired with the call's 25 newest frames",
+}
 
 
 def state_json(embodiment: Embodiment, rows: Sequence[_Row]) -> str:
-    """``robot_state_json`` for the given rows, oldest first."""
+    """``robot_state_json`` for the given rows, oldest first. It carries
+    ``time_us`` when the rows are stamped (streamed), and none when no row is
+    (stepped)."""
     if len(rows) < STACK:
         raise ValueError(f"need {STACK} rows, have {len(rows)}")
     times = [row.time_us for row in rows]
-    if any(b <= a for a, b in pairwise(times)):
+    stamped = [t for t in times if t is not None]
+    if stamped and len(stamped) != len(times):
+        raise ValueError("stamp every row or none")
+    if any(b <= a for a, b in pairwise(stamped)):
         raise ValueError("time_us must be strictly ascending")
 
     def arm(name: str) -> dict[str, list]:
@@ -424,7 +630,8 @@ def state_json(embodiment: Embodiment, rows: Sequence[_Row]) -> str:
         doc: dict[str, Any] = arm(embodiment.arms[0])
     else:
         doc = {name: arm(name) for name in embodiment.arms}
-    doc["time_us"] = times
+    if stamped:
+        doc["time_us"] = stamped
     text = json.dumps(doc, separators=(",", ":"))
     if len(text) > embodiment.max_state_chars:
         raise ValueError(f"robot_state_json is {len(text)} characters, over the limit")

@@ -12,8 +12,9 @@ the model frames that are 1–4 ticks away from the state it is planning from.
 
 Both run at **15 Hz**. You implement a small `Robot` interface (read the
 cameras, read the arm state, execute one command row); `PraxisClient` runs the
-loop. `main.py` runs it against a synthetic robot so you can check the
-protocol before you connect hardware.
+loop. `SteppedPraxisClient` runs the same loop in a stepped session (see
+[Streamed or stepped](#streamed-or-stepped)). `main.py` runs either against a
+synthetic robot so you can check the protocol before you connect hardware.
 
 ## Run the demo
 
@@ -54,6 +55,91 @@ episode=0 step=1 rows=24 latency=<ms> join=capture_time first arm xyz=[...]
 
 The output checks the protocol, not task quality: the images are synthetic and
 the robot does not move.
+
+## Streamed or stepped
+
+The client talks to the model in one of two ways. Both use the same `Robot`,
+the same 15 Hz execution and the same chunks.
+
+| | Streamed (`PraxisClient`) | Stepped (`SteppedPraxisClient`) |
+| --- | --- | --- |
+| Cameras | Video tracks, streamed all the time | The chunk's frames, sent with the call |
+| State and echo | Two commands after each chunk | In the same call as the frames |
+| Stamps | Every frame and state row, from `time_micros()` | None |
+| Expected `join` | `capture_time` | `newest` |
+| Latency | Lowest | About 90 ms more at the median |
+
+**Choose streamed** for the lowest latency. The video is already on the model
+when the chunk ends, so a call carries only the state. In exchange, the client
+must stamp every frame and state row with the same capture time (see
+[The stamping rule](#the-stamping-rule)).
+
+**Choose stepped** for the simplest correct client. After each chunk, one
+`Reactor.step` carries the chunk's frames of every camera, the last 25 state
+rows and the step echo. Frames and state arrive together, so nothing is
+stamped and nothing can drift apart. The cost is latency: the chunk's video is
+encoded and uploaded with the call.
+
+```sh
+uv run python main.py --robot droid                  # streamed (default)
+uv run python main.py --robot droid --mode stepped
+uv run python main.py --robot yam --mode stepped
+```
+
+In code, swap the class; the rest is the same:
+
+```python
+async with SteppedPraxisClient(MyRobot(), DROID, pose_frame="fr3_hand") as client:
+    await client.run_episode("Put the red block in the bowl.", chunks=20)
+```
+
+### How a stepped call works
+
+```text
+connect (generation="stepped"), publish every camera, set_pose_frame (DROID), set_task
+repeat 25 ticks: observe (keep each camera's frame and the state row)   # robot still
+step(state=25 rows, media=25 frames per camera)          -> action_prediction step 0
+for each chunk:
+    for each row: execute(row); wait one tick; observe
+    step(state=25 rows + executed_step, media=the chunk's frames) -> step n+1
+```
+
+- `state` holds `robot_state_json` with the last 25 rows and no `time_us`.
+  After the first call it also holds `executed_step`, the step just executed.
+- `media` holds, per camera, one frame per row since the previous call: 25 at
+  episode start, then 21 after the first chunk and 24 after the others. The
+  model pairs the last 25 state rows with the 25 newest frames.
+- Each camera's frames go as one H.264 stream that starts at a keyframe, one
+  `EncodedFrame` per frame. Raw frames would make a call about 22 MB; encoded,
+  it is about 60–130 KB. `encode_h264` does this with
+  [PyAV](https://github.com/PyAV-Org/PyAV).
+- The chunk arrives as an `action_prediction` message, as in a streamed
+  session. A new episode sends `reset_context` before its first call.
+
+Do not send `time_us` in a stepped session. Stamps pair a state row with frames
+that carry the same `capture_time_us`; the stepped frames carry none, so the
+model would wait 0.5 s per call for frames that never come.
+
+A stepped call is not retried by itself. If it fails, `run_episode` raises
+`PredictionFailed`; start a new episode to go on.
+
+The demo prints the encoded video each call carried:
+
+```text
+episode=0 step=0 rows=21 latency=<ms> bytes=<n> join=newest first arm xyz=[...]
+```
+
+Here `latency` runs from the end of the chunk, so it includes encoding and
+uploading the video.
+
+### What `join` means in each mode
+
+- **Streamed:** `join` says how the model matched the streamed frames to the
+  state rows. Expect `capture_time`; anything else is logged as a warning (see
+  [`join` values](#join-values)).
+- **Stepped:** expect `newest`. Each call carries its own frames, so the model
+  pairs the last 25 rows with that call's newest frames. This is correct, and
+  the client does not warn about it.
 
 ## The stamping rule
 
@@ -219,4 +305,8 @@ The tests replace the SDK with a fake session that pairs frames and state by
 stamp the way the model does. They check that every sent row has frames with
 its stamp on every camera, that row 0 is the previous call's current row, that
 the state precedes the echo, the YAM state layout, the episode reset and the
-`join` warning. They do not check task quality, latency or a hosted session.
+`join` warning. For stepped sessions, a second fake decodes each call's video.
+Those tests check that the state has no `time_us`, the step echo, the frame
+count per camera (25, then one per executed row), that each camera's stream
+starts at a keyframe and decodes to the frames observed, and that `newest` is
+not warned. They do not check task quality, latency or a hosted session.

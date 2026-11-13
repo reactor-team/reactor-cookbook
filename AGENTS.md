@@ -190,11 +190,15 @@ The public documentation's first-action examples use synthetic inputs and must
 not acquire a dependency on recorded robot captures or private repositories.
 
 `robotics/praxis-1/` is the reference client for Praxis-1 DROID and YAM
-(`reactor/praxis-1-droid`, `reactor/praxis-1-yam`). It stamps every camera
-frame and the matching state row with one `reactor_sdk.time_micros()` reading
-per tick (`capture_time_us` and `time_us`). Keep that rule when editing it: the
-model pairs frames with state rows by those stamps. Its offline tests run in
-the robotics CI matrix; a live run needs `REACTOR_API_KEY`.
+(`reactor/praxis-1-droid`, `reactor/praxis-1-yam`). Its streamed client
+(`PraxisClient`) stamps every camera frame and the matching state row with one
+`reactor_sdk.time_micros()` reading per tick (`capture_time_us` and `time_us`).
+Keep that rule when editing it: the model pairs frames with state rows by those
+stamps. Its stepped client (`SteppedPraxisClient`) sends each chunk's frames
+(H.264 per camera), state and step echo in one `Reactor.step` and sends no
+`time_us`; `join: newest` is expected there and must not be warned about.
+Its offline tests run in the robotics CI matrix; a live run needs
+`REACTOR_API_KEY`.
 
 The Cosmos simulation clients live in `robotics/simulation/`. Transfer's
 `test_preparation.py` runs in the robotics CI matrix without credentials or GPUs;

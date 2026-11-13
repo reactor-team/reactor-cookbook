@@ -3,7 +3,8 @@
 
 The synthetic robot streams moving test images and reports a static pose. It
 checks the protocol (stamping, the 25-row state, the step handshake), not task
-quality.
+quality. ``--mode stepped`` runs the same loop in a stepped session: one call
+per chunk that carries the chunk's video, the state and the step echo.
 """
 
 from __future__ import annotations
@@ -19,10 +20,12 @@ from praxis_client import (
     DROID,
     EMBODIMENTS,
     JOIN_MEANINGS,
+    STEPPED_JOIN_MEANINGS,
     ArmState,
     CommandRow,
     Embodiment,
     PraxisClient,
+    SteppedPraxisClient,
 )
 
 #: A plausible start pose per arm: [x, y, z, qw, qx, qy, qz], gripper open.
@@ -75,8 +78,13 @@ class SyntheticRobot:
 async def run(args: argparse.Namespace) -> None:
     embodiment = EMBODIMENTS[args.robot]
     robot = SyntheticRobot(embodiment)
-    print(f"Synthetic robot on {args.model or embodiment.model} (not task quality)")
-    async with PraxisClient(
+    stepped = args.mode == "stepped"
+    client_class = SteppedPraxisClient if stepped else PraxisClient
+    print(
+        f"Synthetic robot on {args.model or embodiment.model}, {args.mode} "
+        "(not task quality)"
+    )
+    async with client_class(
         robot,
         embodiment,
         model=args.model,
@@ -90,19 +98,27 @@ async def run(args: argparse.Namespace) -> None:
             for chunk in chunks:
                 first = chunk.rows[0].targets
                 arm = next(iter(first))
+                sent = f" bytes={chunk.sent_bytes}" if stepped else ""
                 print(
                     f"episode={episode} step={chunk.step} rows={len(chunk.rows)} "
-                    f"latency={chunk.latency_ms:.0f} ms join={chunk.join or '?'} "
+                    f"latency={chunk.latency_ms:.0f} ms{sent} join={chunk.join or '?'} "
                     f"first {arm} xyz={np.round(first[arm].position, 3).tolist()}"
                 )
     print(f"Executed {len(robot.executed)} rows; session closed")
+    meanings = STEPPED_JOIN_MEANINGS if stepped else JOIN_MEANINGS
     for join in sorted(joins):
-        print(f"join={join}: {JOIN_MEANINGS.get(join, 'unknown value')}")
+        print(f"join={join}: {meanings.get(join, 'unknown value')}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--robot", choices=sorted(EMBODIMENTS), default="droid")
+    parser.add_argument(
+        "--mode",
+        choices=("streamed", "stepped"),
+        default="streamed",
+        help="streamed: stamped video tracks; stepped: one call per chunk",
+    )
     parser.add_argument("--model", help="owner/name; default reactor/praxis-1-<robot>")
     parser.add_argument("--task", default="Put the red block in the bowl.")
     parser.add_argument("--chunks", type=int, default=4, help="chunks per episode")
