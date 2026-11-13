@@ -23,6 +23,14 @@ For a closed loop, see the [simulator integrations](./sim). The
 and replaying your own NPZ observations. Use each model's guide for its camera
 names, state layout, action units, and execution protocol.
 
+### Praxis-1 closed loop
+
+The [Praxis-1 client](./praxis-1) drives `reactor/praxis-1-droid` (one Franka
+arm) and `reactor/praxis-1-yam` (two YAM arms) in a 15 Hz closed loop. You
+implement a small robot interface; the client stamps every camera frame and
+state row with one capture time, sends the executed rows, and echoes each
+chunk's step. Its demo runs against a synthetic robot with an API key only.
+
 ## Action-conditioned simulation
 
 [Cosmos3 Nano Sim Bimanual](./simulation/cosmos-bimanual) takes an AgiBot scene

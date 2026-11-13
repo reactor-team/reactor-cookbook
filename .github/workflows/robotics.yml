@@ -43,6 +43,9 @@ jobs:
           - path: robotics/flux3-action-droid/client-python
             python: '3.12'
             check: python -m unittest discover -s tests -v
+          - path: robotics/praxis-1
+            python: '3.12'
+            check: python -m unittest discover -s tests -v && python -m py_compile main.py praxis_client.py
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
