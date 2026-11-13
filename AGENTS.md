@@ -170,7 +170,8 @@ confirm only the intended surface moved.
 
 Public robotics docs consume `robotics/sim/notebooks/reactor_robotics` and the
 `cosmos-droid` and `dreamzero` simulator packages. The launch-facing READMEs
-cover Cosmos Nano, DreamZero, and FLUX Action on DROID under policy inference.
+cover Cosmos Nano, DreamZero, and FLUX Action on DROID, and Praxis-1 on DROID
+and YAM, under policy inference.
 Preserve Cosmos3 Nano Sim Bimanual and Transfer under a separate action-conditioned
 simulation section, including their examples and all targets linked by the docs.
 Keep other policy examples available in source without recommending them as
@@ -194,9 +195,13 @@ not acquire a dependency on recorded robot captures or private repositories.
 (`PraxisClient`) stamps every camera frame and the matching state row with one
 `reactor_sdk.time_micros()` reading per tick (`capture_time_us` and `time_us`).
 Keep that rule when editing it: the model pairs frames with state rows by those
-stamps. Its stepped client (`SteppedPraxisClient`) sends each chunk's frames
-(H.264 per camera), state and step echo in one `Reactor.step` and sends no
-`time_us`; `join: newest` is expected there and must not be warned about.
+stamps. The model keeps 50 frames per camera, so the streamed client stops
+streaming after `MAX_WAIT_FRAMES` (17) ticks of a wait for a chunk; more would
+push the frame of the next call's row 0 out of the window. Its stepped client
+(`SteppedPraxisClient`) sends each chunk's frames (H.264 per camera), state and
+step echo in one `Reactor.step` and sends no `time_us`; `join: newest` is
+expected there and must not be warned about. Both call `Robot.hold()` when an
+episode ends, on any error, and on exit.
 Its offline tests run in the robotics CI matrix; a live run needs
 `REACTOR_API_KEY`.
 
