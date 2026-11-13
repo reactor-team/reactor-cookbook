@@ -34,6 +34,12 @@ START_POSES = {
     "left": ArmState([0.30, 0.25, 0.20, 1.0, 0.0, 0.0, 0.0], 0.0),
     "right": ArmState([0.30, -0.25, 0.20, 1.0, 0.0, 0.0, 0.0], 0.0),
 }
+#: A default task per robot. YAM's has the form of its training captions, with
+#: no closing period; the model reads the task verbatim.
+TASKS = {
+    "droid": "Put the red block in the bowl.",
+    "yam": "Pick up the pen from the center of the table, then place the pen in the bag",
+}
 
 
 class SyntheticRobot:
@@ -41,7 +47,7 @@ class SyntheticRobot:
 
     Each camera shows a gradient with a square that moves one step per read, so
     consecutive frames differ. The arms hold their start pose; ``execute``
-    records the commands instead of moving.
+    records the commands instead of moving, and ``hold`` counts its calls.
     """
 
     def __init__(self, embodiment: Embodiment) -> None:
@@ -56,6 +62,7 @@ class SyntheticRobot:
         ).astype(np.uint8)
         self.reads = 0
         self.executed: list[CommandRow] = []
+        self.holds = 0
 
     def read_cameras(self) -> Mapping[str, np.ndarray]:
         self.reads += 1
@@ -74,12 +81,16 @@ class SyntheticRobot:
     def execute(self, row: CommandRow) -> None:
         self.executed.append(row)
 
+    def hold(self) -> None:
+        self.holds += 1
+
 
 async def run(args: argparse.Namespace) -> None:
     embodiment = EMBODIMENTS[args.robot]
     robot = SyntheticRobot(embodiment)
     stepped = args.mode == "stepped"
     client_class = SteppedPraxisClient if stepped else PraxisClient
+    task = args.task or TASKS[args.robot]
     print(
         f"Synthetic robot on {args.model or embodiment.model}, {args.mode} "
         "(not task quality)"
@@ -93,7 +104,7 @@ async def run(args: argparse.Namespace) -> None:
     ) as client:
         joins: set[str] = set()
         for episode in range(args.episodes):
-            chunks = await client.run_episode(args.task, args.chunks)
+            chunks = await client.run_episode(task, args.chunks)
             joins.update(c.join for c in chunks if c.join)
             for chunk in chunks:
                 first = chunk.rows[0].targets
@@ -120,7 +131,9 @@ def main() -> None:
         help="streamed: stamped video tracks; stepped: one call per chunk",
     )
     parser.add_argument("--model", help="owner/name; default reactor/praxis-1-<robot>")
-    parser.add_argument("--task", default="Put the red block in the bowl.")
+    parser.add_argument(
+        "--task", help="default: a task in the form the robot's model was trained on"
+    )
     parser.add_argument("--chunks", type=int, default=4, help="chunks per episode")
     parser.add_argument("--episodes", type=int, default=1)
     parser.add_argument(

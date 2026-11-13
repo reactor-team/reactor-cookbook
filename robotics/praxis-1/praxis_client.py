@@ -8,7 +8,7 @@ Two hosted models share one protocol:
   ``wrist_right``.
 
 You implement :class:`Robot` (read the cameras, read the arm state, execute one
-command row). :class:`PraxisClient` runs the loop at 15 Hz:
+command row, hold still). :class:`PraxisClient` runs the loop at 15 Hz:
 
 1. Every tick, read ``t = reactor_sdk.time_micros()`` once, capture every camera
    and the arm state, push each frame with ``capture_time_us=t``, and keep the
@@ -48,9 +48,27 @@ log = logging.getLogger("praxis")
 
 #: Control rate of both models, and of every list in the protocol.
 FPS = 15
-#: State rows (and frames per camera) per policy call: the previous call's
-#: current row, then the 24 rows executed since.
+#: State rows (and frames per camera) per policy call. After a 24-row chunk:
+#: the previous call's current row, then the 24 rows executed since. After an
+#: episode's first chunk (21 rows): the last 4 start rows, then the 21 rows.
 STACK = 25
+#: Frames the model keeps per camera: twice a call. The frames of a call's 25
+#: rows, and every frame streamed between two of them, must fit in it.
+WINDOW = 2 * STACK
+#: Seconds the model waits for the frames of a call's rows (late video) before
+#: it pairs each row with its nearest frames instead (``join: nearest``).
+JOIN_WAIT_S = 0.5
+#: Frames streamed per camera while waiting for one chunk. A streamed frame lies
+#: between two of the next call's rows, so 25 rows + these + the frames that can
+#: arrive during the model's join wait must fit in the window. If they do not,
+#: the frame of the call's row 0 is evicted and the call falls back to
+#: ``nearest``. 50 - 25 - 8 = 17 frames: 1.1 s of a wait is streamed, then the
+#: cameras pause until the chunk arrives.
+MAX_WAIT_FRAMES = WINDOW - STACK - math.ceil(JOIN_WAIT_S * FPS)
+#: ``prediction_failed`` codes that a retry with the same input cannot fix.
+PERMANENT_FAILURES = frozenset(
+    {"task_too_long", "too_large", "invalid_input", "rejected"}
+)
 
 
 @dataclass(frozen=True)
@@ -66,10 +84,17 @@ class Embodiment:
     max_side: int | None
     #: ``max_length`` of ``robot_state_json`` in the model's contract.
     max_state_chars: int
+    #: YAM only: the (height, width) tile every view must fit to (see
+    #: :func:`fit_tiles`), or ``None`` when any aspect is accepted.
+    tile: tuple[int, int] | None = None
 
     def check_frame(self, name: str, frame: np.ndarray) -> None:
+        """One frame's type and size limit."""
         if frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3:
-            raise ValueError(f"{name}: expected an (H, W, 3) uint8 RGB frame")
+            raise ValueError(
+                f"{name}: expected an (H, W, 3) uint8 RGB frame, not "
+                f"{frame.dtype} {frame.shape}"
+            )
         height, width = frame.shape[:2]
         if self.max_size and (width > self.max_size[0] or height > self.max_size[1]):
             raise ValueError(
@@ -81,6 +106,63 @@ class Embodiment:
                 f"{name}: {width}x{height} is over {self.max_side} px on its longer "
                 "side; scale it down with the aspect kept"
             )
+
+    def check_frames(
+        self, frames: Mapping[str, np.ndarray], *, even: bool = False
+    ) -> None:
+        """One tick's frames: every camera, each within the limit, and (YAM) the
+        three views at an aspect the model serves. ``even``: the width and height
+        must be even (H.264, in a stepped session)."""
+        missing = [name for name in self.cameras if name not in frames]
+        if missing:
+            raise ValueError(
+                f"read_cameras must return {self.cameras}; missing {missing}"
+            )
+        for name in self.cameras:
+            frame = frames[name]
+            self.check_frame(name, frame)
+            height, width = frame.shape[:2]
+            if even and (width % 2 or height % 2):
+                raise ValueError(
+                    f"{name}: {width}x{height}; a stepped session encodes H.264, "
+                    "which needs an even width and height"
+                )
+        if self.tile is not None:
+            sizes = [frames[name].shape[:2] for name in self.cameras]
+            tiles = fit_tiles(sizes, self.max_side or max(self.tile), TILE_PATCH)
+            if any(t != self.tile for t in tiles):
+                views = ", ".join(
+                    f"{n} {w}x{h}" for n, (h, w) in zip(self.cameras, sizes)
+                )
+                raise ValueError(
+                    f"{views}: the model serves 16:10 views (for example 1920x1200 "
+                    f"scaled to 416x260), which fit its {self.tile[1]}x{self.tile[0]} "
+                    "tile; crop each view to 16:10 before scaling, do not stretch it"
+                )
+
+
+#: The model's spatial patch: a YAM view is trimmed to a multiple of it.
+TILE_PATCH = 32
+
+
+def fit_tiles(
+    sizes: Sequence[tuple[int, int]], max_side: int, patch: int = TILE_PATCH
+) -> list[tuple[int, int]]:
+    """The (height, width) tile each (height, width) view of one YAM tick becomes,
+    as the model makes them: each view scaled down to fit ``max_side`` with its
+    aspect kept, the taller ones scaled to the smallest of those heights, then
+    each trimmed to the ``patch`` grid. The model refuses a call (code
+    ``invalid_input``) unless every tile is its 256x416 tile."""
+    fitted = [
+        (min(h, max_side, h * max_side // w), min(w, max_side, w * max_side // h))
+        for h, w in sizes
+    ]
+    common = min(h for h, _ in fitted)
+    resized = [
+        (common, w * common // h) if rh > common else (rh, rw)
+        for (h, w), (rh, rw) in zip(sizes, fitted)
+    ]
+    return [(rh // patch * patch, rw // patch * patch) for rh, rw in resized]
 
 
 DROID = Embodiment(
@@ -98,6 +180,7 @@ YAM = Embodiment(
     max_size=None,
     max_side=416,
     max_state_chars=32_000,
+    tile=(256, 416),
 )
 EMBODIMENTS = {"droid": DROID, "yam": YAM}
 
@@ -141,7 +224,10 @@ class CommandRow:
 class Chunk:
     step: int
     rows: list[CommandRow]
-    #: From the request that triggered the chunk to its arrival.
+    #: From the last observed row before the call (the end of the previous chunk,
+    #: or of the 25 start ticks) to the chunk's arrival: the time the robot
+    #: waited. Includes sending the state (streamed) or encoding and sending the
+    #: frames (stepped).
     latency_ms: float = 0.0
     #: How the call paired frames and state (``session_status.join``), when
     #: polled for this chunk; see JOIN_MEANINGS.
@@ -163,7 +249,16 @@ class Robot(Protocol):
         ...
 
     def execute(self, row: CommandRow) -> None:
-        """Start moving toward this row's targets. Called once per tick."""
+        """Set this row's targets as the arm's absolute target. Called once per
+        tick. The arm holds the last row's target while the client waits for the
+        next chunk, and after an error, so the target must be safe to hold
+        indefinitely: never command a velocity here."""
+        ...
+
+    def hold(self) -> None:
+        """Hold the arm still: set its current measured pose as the target, or
+        stop it safely. Called after every episode, on any error during one, and
+        when the client exits; it may be called more than once."""
         ...
 
 
@@ -171,6 +266,16 @@ class Robot(Protocol):
 class _Row:
     time_us: int | None  # None in a stepped session, which sends no stamps
     state: Mapping[str, ArmState]
+
+
+class PredictionFailed(RuntimeError):
+    """A chunk the model cannot compute: any failure of a stepped call, or a
+    streamed failure that a retry cannot fix (:data:`PERMANENT_FAILURES`). Fix
+    the cause, then start a new episode."""
+
+    def __init__(self, step: int, code: str, reason: str) -> None:
+        super().__init__(f"step {step}: {code}: {reason}")
+        self.step, self.code, self.reason = step, code, reason
 
 
 class PraxisClient:
@@ -181,6 +286,10 @@ class PraxisClient:
 
     #: The ``join`` every call should report; anything else is logged.
     expected_join: str | None = "capture_time"
+    #: Whether every frame needs an even width and height (H.264).
+    even_frames = False
+    #: Seconds to wait for an unfinished status poll before the next state.
+    status_wait_s = 0.2
 
     def __init__(
         self,
@@ -200,7 +309,7 @@ class PraxisClient:
         if not key:
             raise RuntimeError("Set REACTOR_API_KEY to a key with access to this model")
         if pose_frame is not None and embodiment is not DROID:
-            raise ValueError("pose_frame applies to praxis-1-droid only")
+            raise ValueError("pose_frame applies to reactor/praxis-1-droid only")
         model = model or embodiment.model
         if "/" not in model:
             raise ValueError(f"Name the model as owner/name, not {model!r}")
@@ -237,6 +346,9 @@ class PraxisClient:
         return {}
 
     async def __aenter__(self) -> PraxisClient:  # noqa: PYI034 - Python 3.10
+        # Check the cameras once before connecting, so a frame the model would
+        # refuse stops here, before a session starts or the arm moves.
+        self.embodiment.check_frames(self.robot.read_cameras(), even=self.even_frames)
         loop = asyncio.get_running_loop()
         ready = asyncio.Event()
 
@@ -267,8 +379,30 @@ class PraxisClient:
             await self.reactor.disconnect()
             raise
 
-    async def __aexit__(self, *exc_info: object) -> None:
-        await self.reactor.disconnect()
+    async def __aexit__(
+        self, exc_type: object, exc: BaseException | None, tb: object
+    ) -> None:
+        try:
+            self._hold(exc)
+        finally:
+            await self.reactor.disconnect()
+
+    def _hold(self, exc: BaseException | None) -> None:
+        """``robot.hold()``; a failure to hold never hides the error ``exc``."""
+        try:
+            self.robot.hold()
+        except Exception:
+            if exc is None:
+                raise
+            log.exception("hold() failed while stopping on %r", exc)
+
+    async def _drain(self) -> None:
+        """Drop the messages received so far: a late chunk or failure of a call
+        the client gave up on must not be taken for the next one."""
+        await asyncio.sleep(0)  # deliver what the SDK has already handed over
+        while not self._messages.empty():
+            message = self._messages.get_nowait()
+            log.info("dropped a stale %s", message.get("type"))
 
     # -- the loop -----------------------------------------------------------------
 
@@ -276,23 +410,35 @@ class PraxisClient:
         """Run one episode of ``chunks`` chunks and return them.
 
         The robot holds still for the first 25 ticks, so the first call has 25
-        real frames and rows. Each chunk is executed row by row at 15 Hz. The last
-        chunk of the episode is executed but not echoed; the next episode starts
-        with ``reset_context``.
+        real frames and rows: bring it to its start pose, at rest, before you
+        call this. Each chunk is executed row by row at 15 Hz. The last chunk of
+        the episode is executed but not echoed; the next episode starts with
+        ``reset_context``. The robot holds (``robot.hold()``) when the episode
+        ends, and on any error.
         """
         if chunks < 1:
             raise ValueError("chunks must be positive")
+        try:
+            done = await self._episode(task, chunks)
+        except BaseException as exc:
+            self._hold(exc)
+            raise
+        self._hold(None)
+        return done
+
+    async def _episode(self, task: str, chunks: int) -> list[Chunk]:
         await self.reactor.send_command("set_task", {"task": task})
         self.history.clear()
         self._deadline = time.monotonic()
         for _ in range(STACK):  # episode start: 25 ticks of the start pose
             await self._tick()
             self._observe(record=True)
+        sent = time.perf_counter()  # latency runs from the last observed row
         await self._send_state()
-        sent = time.perf_counter()
         if self._episodes > 0:
             # The session is still waiting for the last chunk's echo; a reset drops
             # that wait and starts a new context from the state just sent.
+            await self._drain()
             reply = await self.reactor.send_command("reset_context", {})
             data = (reply or {}).get("data") or {}
             self._next_step = int(data.get("next_step", self._next_step))
@@ -302,23 +448,39 @@ class PraxisClient:
         for n in range(chunks):
             chunk = await self._next_chunk(sent)
             done.append(chunk)
-            poll = None
-            if self.status_every and (self._chunks - 1) % self.status_every == 0:
-                # Runs while the chunk executes; reports this chunk's call.
-                poll = asyncio.create_task(self._poll_status(chunk))
-            for row in chunk.rows:
-                self.robot.execute(row)
-                await self._tick()  # the row has had one tick to act...
-                self._observe(record=True)  # ...then this is the state it reached
+            poll = self._start_poll(chunk)  # runs while the chunk executes
+            try:
+                for row in chunk.rows:
+                    self.robot.execute(row)
+                    await self._tick()  # the row has had one tick to act...
+                    self._observe(record=True)  # ...then this is the state it reached
+                sent = time.perf_counter()
+                await self._finish_poll(poll)
+            finally:
+                if poll is not None:
+                    poll.cancel()  # only an error leaves it running
             if n < chunks - 1:
                 await self._send_state()
                 await self.reactor.send_command(
                     "set_executed_step", {"executed_step": chunk.step}
                 )
-                sent = time.perf_counter()
-            if poll is not None:
-                await poll
         return done
+
+    def _start_poll(self, chunk: Chunk) -> asyncio.Task | None:
+        """Poll ``get_status`` for ``chunk``'s call every ``status_every`` chunks."""
+        if self.status_every and (self._chunks - 1) % self.status_every == 0:
+            return asyncio.create_task(self._poll_status(chunk))
+        return None
+
+    async def _finish_poll(self, poll: asyncio.Task | None) -> None:
+        """Let the poll finish before the next call, so it reports this chunk's
+        call and not the next one; give up on it after ``status_wait_s``."""
+        if poll is None:
+            return
+        try:
+            await asyncio.wait_for(poll, self.status_wait_s)
+        except asyncio.TimeoutError:
+            log.warning("get_status did not answer during the chunk; skipped")
 
     async def _tick(self) -> None:
         """Sleep until the next 15 Hz tick. Scheduling uses ``time.monotonic``;
@@ -336,9 +498,9 @@ class PraxisClient:
         t = time_micros()  # read ONCE, on the engine's clock (not time.time())
         frames = self.robot.read_cameras()
         state = dict(self.robot.read_arm_state()) if record else None
+        self.embodiment.check_frames(frames)
         for name in self.embodiment.cameras:
             frame = np.ascontiguousarray(frames[name])
-            self.embodiment.check_frame(name, frame)
             self.tracks[name].push_frame(frame, capture_time_us=t)
         if state is not None:
             if set(state) != set(self.embodiment.arms):
@@ -346,40 +508,45 @@ class PraxisClient:
             self.history.append(_Row(t, state))
 
     async def _send_state(self) -> None:
-        """Send the last 25 rows: the previous call's current row, then the rows
-        executed since (or, at episode start, the 25 still ticks)."""
+        """Send the last 25 rows: at episode start the 25 still ticks; after the
+        episode's first chunk the last 4 still ticks and the 21 rows executed;
+        after the others the previous call's current row and the 24 executed."""
         text = state_json(self.embodiment, list(self.history))
         await self.reactor.send_command(
             "set_robot_state_json", {"robot_state_json": text}
         )
 
     async def _next_chunk(self, sent: float) -> Chunk:
-        """Wait for the next ``action_prediction``. Cameras keep streaming while
-        waiting (stamped, not recorded): the model pairs frames to state rows by
-        stamp, so the extra frames are skipped."""
+        """Wait for the next ``action_prediction``. The cameras keep streaming
+        for the first ``MAX_WAIT_FRAMES`` ticks of the wait (stamped, not
+        recorded): the model pairs frames to state rows by stamp, so the extra
+        frames are skipped. A longer wait would push the frame of the next
+        call's row 0 out of the model's window, so the cameras then pause."""
         self._deadline = time.monotonic()
         give_up = sent + self.chunk_timeout_s
+        streamed = 0
         while True:
             if time.perf_counter() > give_up:
-                raise TimeoutError(f"No action_prediction for step {self._next_step}")
+                raise await self._timeout_error()
             next_tick = self._deadline + self.tick_s
             timeout = max(0.0, next_tick - time.monotonic())
             try:
                 message = await asyncio.wait_for(self._messages.get(), timeout)
             except asyncio.TimeoutError:
                 self._deadline = max(next_tick, time.monotonic() - self.tick_s)
-                if self.stream_while_waiting:
+                if self.stream_while_waiting and streamed < MAX_WAIT_FRAMES:
                     self._observe(record=False)
+                    streamed += 1
                 continue
             data = message.get("data") or {}
             if message["type"] == "prediction_failed":
-                # The session retries by itself; its next chunk opens a new episode.
-                log.warning(
-                    "prediction_failed step=%s code=%s: %s",
-                    data.get("step"),
-                    data.get("code"),
-                    data.get("reason"),
-                )
+                step = int(data.get("step", self._next_step))
+                code, reason = str(data.get("code", "")), str(data.get("reason", ""))
+                if code in PERMANENT_FAILURES:
+                    raise PredictionFailed(step, code, reason)
+                # busy or timeout: the session retries by itself after 0.5 s, and
+                # its next chunk opens a new context.
+                log.warning("prediction_failed step=%s code=%s: %s", step, code, reason)
                 continue
             if int(data.get("step", -1)) < self._next_step:
                 continue  # a stale chunk from before a reset
@@ -389,6 +556,22 @@ class PraxisClient:
             self._deadline = time.monotonic()  # the chunk's row 0 starts now
             chunk.latency_ms = (time.perf_counter() - sent) * 1000
             return chunk
+
+    async def _timeout_error(self) -> TimeoutError:
+        """The error for a chunk that did not come, with what the session says it
+        is waiting for (``get_status``)."""
+        try:
+            reply = await asyncio.wait_for(
+                self.reactor.send_command("get_status", {}), 5
+            )
+            self.status = dict((reply or {}).get("data") or {})
+            waiting = self.status.get("waiting_for") or "nothing (it is computing)"
+        except Exception as exc:  # noqa: BLE001 - the timeout is the error to raise
+            waiting = f"unknown (get_status failed: {exc!r})"
+        return TimeoutError(
+            f"No action_prediction for step {self._next_step} within "
+            f"{self.chunk_timeout_s:g} s; the session is waiting for: {waiting}"
+        )
 
     async def _poll_status(self, chunk: Chunk) -> None:
         """``get_status`` reports how the last call (``chunk``'s) paired frames
@@ -410,14 +593,6 @@ class PraxisClient:
             )
 
 
-class PredictionFailed(RuntimeError):
-    """A stepped call that produced no chunk. Start a new episode to go on."""
-
-    def __init__(self, step: int, code: str, reason: str) -> None:
-        super().__init__(f"step {step}: {code}: {reason}")
-        self.step, self.code, self.reason = step, code, reason
-
-
 class SteppedPraxisClient(PraxisClient):
     """The same loop in a stepped session: one ``Reactor.step`` per chunk.
 
@@ -434,6 +609,7 @@ class SteppedPraxisClient(PraxisClient):
     """
 
     expected_join = None  # "newest" is normal here: each call carries its frames
+    even_frames = True
 
     def __init__(self, robot: Robot, embodiment: Embodiment, **kwargs: Any) -> None:
         super().__init__(robot, embodiment, **kwargs)
@@ -442,15 +618,10 @@ class SteppedPraxisClient(PraxisClient):
     def _session_options(self) -> dict[str, Any]:
         return {"generation": "stepped", "step_timeout": self.chunk_timeout_s}
 
-    async def run_episode(self, task: str, chunks: int) -> list[Chunk]:
-        """Run one episode of ``chunks`` chunks and return them.
-
-        As in :meth:`PraxisClient.run_episode`: the robot holds still for 25
-        ticks, then each chunk is executed row by row at 15 Hz. The last chunk is
-        executed but not echoed; the next episode starts with ``reset_context``.
-        """
-        if chunks < 1:
-            raise ValueError("chunks must be positive")
+    async def _episode(self, task: str, chunks: int) -> list[Chunk]:
+        """As in a streamed session: the robot holds still for 25 ticks, then
+        each chunk is executed row by row at 15 Hz. The last chunk is executed
+        but not echoed; the next episode starts with ``reset_context``."""
         await self.reactor.send_command("set_task", {"task": task})
         self.history.clear()
         self.frames = {name: [] for name in self.embodiment.cameras}
@@ -458,6 +629,7 @@ class SteppedPraxisClient(PraxisClient):
         for _ in range(STACK):  # episode start: 25 ticks of the start pose
             await self._tick()
             self._observe(record=True)
+        sent = time.perf_counter()  # latency runs from the last observed row
         if self._episodes > 0:
             # As in a streamed session: the reset drops the wait for the last
             # chunk's echo, and the next call starts a new context.
@@ -469,19 +641,21 @@ class SteppedPraxisClient(PraxisClient):
         done: list[Chunk] = []
         executed: int | None = None
         for _ in range(chunks):
-            chunk = await self._step(executed)
+            chunk = await self._step(executed, sent)
             done.append(chunk)
-            poll = None
-            if self.status_every and (self._chunks - 1) % self.status_every == 0:
-                poll = asyncio.create_task(self._poll_status(chunk))
-            self._deadline = time.monotonic()  # the chunk's row 0 starts now
-            for row in chunk.rows:
-                self.robot.execute(row)
-                await self._tick()
-                self._observe(record=True)
+            poll = self._start_poll(chunk)  # runs while the chunk executes
+            try:
+                self._deadline = time.monotonic()  # the chunk's row 0 starts now
+                for row in chunk.rows:
+                    self.robot.execute(row)
+                    await self._tick()
+                    self._observe(record=True)
+                sent = time.perf_counter()
+                await self._finish_poll(poll)
+            finally:
+                if poll is not None:
+                    poll.cancel()  # only an error leaves it running
             executed = chunk.step
-            if poll is not None:
-                await poll
         return done
 
     def _observe(self, *, record: bool = True) -> None:
@@ -493,17 +667,18 @@ class SteppedPraxisClient(PraxisClient):
         state = dict(self.robot.read_arm_state())
         if set(state) != set(self.embodiment.arms):
             raise ValueError(f"read_arm_state must return {self.embodiment.arms}")
+        self.embodiment.check_frames(frames, even=True)
         for name in self.embodiment.cameras:
-            frame = np.array(frames[name], order="C")  # a copy: drivers reuse buffers
-            self.embodiment.check_frame(name, frame)
-            self.frames[name].append(frame)
+            # A copy: drivers reuse buffers.
+            self.frames[name].append(np.array(frames[name], order="C"))
         self.history.append(_Row(None, state))
 
-    async def _step(self, executed: int | None) -> Chunk:
+    async def _step(self, executed: int | None, sent: float) -> Chunk:
         """Send the frames kept since the previous call, the last 25 state rows
         and (after the first chunk) the step echo, in one call; return the chunk
-        it produces."""
-        started = time.perf_counter()
+        it produces. A stepped session computes only inside ``step()``, so any
+        message received before it is stale (a call the client gave up on)."""
+        await self._drain()
         state: dict[str, Any] = {
             "robot_state_json": state_json(self.embodiment, list(self.history))
         }
@@ -514,18 +689,17 @@ class SteppedPraxisClient(PraxisClient):
         media = await asyncio.to_thread(
             lambda: {name: encode_h264(f) for name, f in frames.items()}
         )
+        # A refused call raises StepRefusedError here (nothing was applied).
         result = await self.reactor.step(state=state, media=media)
         if result.error is not None:
             raise PredictionFailed(self._next_step, "step_failed", str(result.error))
-        give_up = started + self.chunk_timeout_s
+        give_up = sent + self.chunk_timeout_s
         while True:
             timeout = give_up - time.perf_counter()
             try:
                 message = await asyncio.wait_for(self._messages.get(), max(0, timeout))
             except asyncio.TimeoutError:
-                raise TimeoutError(
-                    f"No action_prediction for step {self._next_step}"
-                ) from None
+                raise await self._timeout_error() from None
             data = message.get("data") or {}
             if message["type"] == "prediction_failed":
                 # Nothing retries a stepped call by itself: stop the episode.
@@ -539,7 +713,7 @@ class SteppedPraxisClient(PraxisClient):
             chunk = parse_chunk(self.embodiment, data)
             self._next_step = chunk.step + 1
             self._chunks += 1
-            chunk.latency_ms = (time.perf_counter() - started) * 1000
+            chunk.latency_ms = (time.perf_counter() - sent) * 1000
             chunk.sent_bytes = sum(len(f.data) for v in media.values() for f in v)
             return chunk
 
@@ -621,10 +795,12 @@ def state_json(embodiment: Embodiment, rows: Sequence[_Row]) -> str:
         poses = [[float(v) for v in row.state[name].ee_pose] for row in rows]
         if any(len(p) != 7 or not all(map(math.isfinite, p)) for p in poses):
             raise ValueError(f"{name}: ee_pose must be 7 finite numbers")
-        return {
-            "ee_pose": poses,
-            "grip": [float(row.state[name].grip) for row in rows],
-        }
+        if any(math.hypot(*p[3:]) <= 1e-6 for p in poses):
+            raise ValueError(f"{name}: ee_pose quaternion [qw, qx, qy, qz] is zero")
+        grips = [float(row.state[name].grip) for row in rows]
+        if not all(map(math.isfinite, grips)):
+            raise ValueError(f"{name}: grip must be finite")
+        return {"ee_pose": poses, "grip": grips}
 
     if len(embodiment.arms) == 1:
         doc: dict[str, Any] = arm(embodiment.arms[0])
