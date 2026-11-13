@@ -1,0 +1,8 @@
+[project]
+name = "praxis-1-client"
+version = "0.1.0"
+description = "Closed-loop reference client for the Praxis-1 DROID and YAM policies on Reactor"
+requires-python = ">=3.10"
+dependencies = ["reactor-sdk>=1.14.0,<2", "numpy>=1.26", "av>=14"]
+
+# The lockfile preserves the dependencies this client was checked with.

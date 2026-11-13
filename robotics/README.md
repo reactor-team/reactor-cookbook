@@ -4,7 +4,7 @@ Examples for hosted robot policies and action-conditioned simulation.
 
 ## Policy inference
 
-These quickstarts cover DROID policies.
+These quickstarts cover DROID and YAM policies.
 Reactor receives camera observations, measured robot state, and a task, then
 returns predicted actions. Your client owns the simulator or robot controller.
 
@@ -13,6 +13,8 @@ returns predicted actions. Your client owns the simulator or robot controller.
 | Cosmos Nano | DROID | [Cosmos quickstart](https://docs.reactor.inc/robotics/cosmos/nano-policy-droid/quickstart) |
 | DreamZero | DROID | [DreamZero quickstart](https://docs.reactor.inc/robotics/dreamzero/droid/quickstart) |
 | FLUX Action | DROID | [FLUX Action quickstart](https://docs.reactor.inc/robotics/flux-action/droid/quickstart) |
+| Praxis-1 | DROID | [Praxis-1 DROID quickstart](https://docs.reactor.inc/robotics/praxis/droid/quickstart) |
+| Praxis-1 | YAM | [Praxis-1 YAM quickstart](https://docs.reactor.inc/robotics/praxis/yam/quickstart) |
 
 Start with the [first-action scripts](./sim/notebooks): an API key is enough;
 you do not need a local GPU, simulator, or model weights. Synthetic observations
@@ -22,6 +24,16 @@ For a closed loop, see the [simulator integrations](./sim). The
 [FLUX Action client](./flux3-action-droid) also supports checkpoint selection
 and replaying your own NPZ observations. Use each model's guide for its camera
 names, state layout, action units, and execution protocol.
+
+### Praxis-1 closed loop
+
+The [Praxis-1 client](./praxis-1) drives `reactor/praxis-1-droid` (one Franka
+arm) and `reactor/praxis-1-yam` (two YAM arms) in a 15 Hz closed loop. You
+implement a small robot interface; the client stamps every camera frame and
+state row with one capture time, sends the executed rows, and echoes each
+chunk's step. `--mode stepped` runs the same loop in a stepped session instead:
+one call per chunk carries its frames, the state and the echo, with no stamps.
+Its demo runs against a synthetic robot with an API key only.
 
 ## Action-conditioned simulation
 
