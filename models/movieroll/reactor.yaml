@@ -1,0 +1,40 @@
+$schema: reactor/v2
+
+model:
+  name: movieroll
+  version: v0.1.0
+  description: MovieRoll-Distilled streaming text/image video with live event prompts.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 4
+    cpu:
+      request: "8"
+      limit: "32"
+    memory:
+      request: 64Gi
+      limit: 192Gi
+
+runtime:
+  import: movieroll_app:MovieRoll
+  config: movieroll.yaml
+  weights_path: ~/.cache/reactor_registry/movieroll
+
+build:
+  runtime_version: "3.11.7"
+  python_requirements: requirements.txt
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  build_env:
+    UV_INDEX_STRATEGY: unsafe-best-match
+    MAX_JOBS: "16"
+  system_packages: [git, build-essential]
+  run:
+    - --mount=type=bind,source=.,target=/port python /port/movieroll_assets.py --checkout /opt/movieroll
+    - pip install --no-cache-dir --no-build-isolation flash-attn==2.8.3.post2
+    # FA2 wheels also contain flash_attn/cute; restore the selected FA4 files last.
+    - pip install --no-cache-dir --no-deps --force-reinstall flash-attn-4==4.0.0b39
+  runtime_env:
+    OMP_NUM_THREADS: "1"
+    TOKENIZERS_PARALLELISM: "false"
+    PYTORCH_ALLOC_CONF: "expandable_segments:True"

@@ -1,0 +1,6 @@
+source_path: /opt/movieroll
+gpu_count: 4
+# Exact native history used by event midpoint selection; removed on Stop.
+# Put this on a local data volume for long sessions, separately from weights.
+session_path: /tmp/movieroll-sessions
+history_gib: 16
