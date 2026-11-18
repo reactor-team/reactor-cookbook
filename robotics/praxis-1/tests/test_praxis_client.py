@@ -716,6 +716,36 @@ class SteppedClientTest(unittest.TestCase):
         self.assertEqual(pending, [], "a task outlived the session")
         return reactor, robot, results
 
+    def test_yam_rtc_calls_while_moving_and_sends_the_plan(self):
+        reactor, robot, [chunks] = self.run_client(
+            YAM, chunks=4, robot=EchoRobot(YAM), schedule="rtc", rtc_stride=12
+        )
+        self.assertEqual([c.step for c in chunks], [0, 1, 2, 3])
+        self.assertEqual(reactor.commands.count("step"), 4)
+        first, *rtc = reactor.step_states
+        self.assertNotIn("executed_rows", first)
+        self.assertEqual([s["executed_step"] for s in rtc], [0, 1, 2])
+        for state, plan_of in zip(rtc, chunks):
+            self.assertGreaterEqual(state["executed_rows"], 12)
+            plan = json.loads(state["plan_json"])
+            self.assertGreater(plan["delay_s"], 0)
+            self.assertEqual(set(plan) - {"delay_s"},
+                             {"left_poses", "left_grips", "right_poses", "right_grips"})
+            n = len(plan["left_poses"])
+            self.assertTrue(1 <= n <= 24, n)
+            self.assertEqual(len(plan["left_poses"][0]), 12)
+            self.assertEqual(n, len(plan["right_grips"]))
+        # Each new chunk starts at the ticks between its call and its arrival.
+        for chunk in chunks[1:]:
+            self.assertTrue(0 <= chunk.start_row < len(chunk.rows), chunk.start_row)
+        self.assertTrue(reactor.closed)
+
+    def test_rtc_schedule_is_checked(self):
+        with self.assertRaises(ValueError):
+            SteppedPraxisClient(SyntheticRobot(YAM), YAM, schedule="fast")
+        with self.assertRaises(ValueError):
+            SteppedPraxisClient(SyntheticRobot(YAM), YAM, schedule="rtc", rtc_stride=21)
+
     def test_droid_step_carries_frames_state_and_echo(self):
         reactor, robot, [chunks] = self.run_client(DROID)
         self.assertEqual([c.step for c in chunks], [0, 1, 2])

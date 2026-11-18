@@ -65,6 +65,11 @@ JOIN_WAIT_S = 0.5
 #: ``nearest``. 50 - 25 - 8 = 17 frames: 1.1 s of a wait is streamed, then the
 #: cameras pause until the chunk arrives.
 MAX_WAIT_FRAMES = WINDOW - STACK - math.ceil(JOIN_WAIT_S * FPS)
+#: Real-time chunking (``schedule="rtc"``): rows between two calls, Runway's default. It must stay
+#: below the 21 rows of an episode's first chunk, so a chunk outlasts the next call.
+RTC_STRIDE = 12
+#: Real-time chunking: the delay estimate is the longest of the last 5 round trips (Runway's rule).
+RTC_DELAY_WINDOW = 5
 #: ``prediction_failed`` codes that a retry with the same input cannot fix.
 PERMANENT_FAILURES = frozenset(
     {"task_too_long", "too_large", "invalid_input", "rejected"}
@@ -234,6 +239,12 @@ class Chunk:
     join: str | None = None
     #: Stepped sessions only: the encoded video the call carried, in bytes.
     sent_bytes: int = 0
+    #: Real-time chunking: the row the robot started the chunk at (the ticks between the call's
+    #: observation and the chunk's arrival), the plan rows the model kept
+    #: (``session_status.rtc_prefix_rows``) and the gap it joined (``rtc_junction_cm``).
+    start_row: int = 0
+    prefix_rows: int | None = None
+    junction_cm: float | None = None
 
 
 class Robot(Protocol):
@@ -584,6 +595,9 @@ class PraxisClient:
         self.status = dict((reply or {}).get("data") or {})
         join = str(self.status.get("join", ""))
         chunk.join = join
+        if int(self.status.get("rtc_prefix_rows", -1)) >= 0:
+            chunk.prefix_rows = int(self.status["rtc_prefix_rows"])
+            chunk.junction_cm = float(self.status.get("rtc_junction_cm", 0.0))
         if join and self.expected_join and join != self.expected_join:
             log.warning(
                 "join=%r, not %r: %s",
@@ -606,19 +620,136 @@ class SteppedPraxisClient(PraxisClient):
     The call carries 25 frames per camera at episode start, then the frames of
     the rows executed since the previous call: 21 after an episode's first
     chunk, 24 after the others.
+
+    ``schedule="rtc"`` (real-time chunking) does not stop between chunks: every
+    ``rtc_stride`` ticks the client calls while the robot keeps running its
+    plan, and sends the plan with the call (:meth:`_episode_rtc`).
     """
 
     expected_join = None  # "newest" is normal here: each call carries its frames
     even_frames = True
 
-    def __init__(self, robot: Robot, embodiment: Embodiment, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        robot: Robot,
+        embodiment: Embodiment,
+        *,
+        schedule: str = "chunked",
+        rtc_stride: int = RTC_STRIDE,
+        **kwargs: Any,
+    ) -> None:
+        if schedule not in ("chunked", "rtc"):
+            raise ValueError(f"schedule must be 'chunked' or 'rtc', not {schedule!r}")
+        if not 1 <= rtc_stride < 21:
+            raise ValueError("rtc_stride must be 1 to 20 rows (below an episode's first chunk)")
         super().__init__(robot, embodiment, **kwargs)
+        self.schedule = schedule
+        self.rtc_stride = rtc_stride
         self.frames: dict[str, list[np.ndarray]] = {}
+        self._round_trips: deque[float] = deque(maxlen=RTC_DELAY_WINDOW)
 
     def _session_options(self) -> dict[str, Any]:
         return {"generation": "stepped", "step_timeout": self.chunk_timeout_s}
 
     async def _episode(self, task: str, chunks: int) -> list[Chunk]:
+        if self.schedule == "rtc":
+            return await self._episode_rtc(task, chunks)
+        return await self._episode_chunked(task, chunks)
+
+    async def _start(self, task: str) -> float:
+        """Set the task, hold still for 25 ticks, reset after an earlier episode.
+        Return the time of the last observed row."""
+        await self.reactor.send_command("set_task", {"task": task})
+        self.history.clear()
+        self.frames = {name: [] for name in self.embodiment.cameras}
+        self._deadline = time.monotonic()
+        for _ in range(STACK):  # episode start: 25 ticks of the start pose
+            await self._tick()
+            self._observe(record=True)
+        sent = time.perf_counter()
+        if self._episodes > 0:
+            reply = await self.reactor.send_command("reset_context", {})
+            data = (reply or {}).get("data") or {}
+            self._next_step = int(data.get("next_step", self._next_step))
+        self._episodes += 1
+        return sent
+
+    async def _episode_rtc(self, task: str, chunks: int) -> list[Chunk]:
+        """Real-time chunking: the robot keeps running its plan while the next
+        call is in flight.
+
+        After the 25 still ticks the first chunk comes as in a chunked episode.
+        Then, every ``rtc_stride`` ticks, one call goes out with the frames and
+        state rows since the previous call, ``executed_step`` (the chunk the
+        robot runs), ``executed_rows`` (the ticks since the previous call's
+        observation) and ``plan_json`` (the plan rows from the next row on, and
+        the delay estimate). The robot keeps executing meanwhile. The answer's
+        row 0 is due at the call's observation, so a chunk that arrives ``d``
+        ticks later starts at row ``d``; the model kept the plan rows due before
+        it, so the switch is seamless when the estimate held. If the plan runs
+        out first, the robot holds until the chunk arrives.
+        """
+        sent = await self._start(task)
+        first = await self._step(None, sent)
+        self._round_trips.append(first.latency_ms / 1000)
+        done = [first]
+        plan, row = first, 0  # the chunk running, and its next row
+        since = 0  # ticks observed since the observation of the last call
+        call: asyncio.Task | None = None
+        poll = self._start_poll(first)
+        held = False
+        self._deadline = time.monotonic()  # the first chunk's row 0 starts now
+        try:
+            while True:
+                if call is None and len(done) < chunks and since >= self.rtc_stride:
+                    await self._finish_poll(poll)
+                    poll = None
+                    call = asyncio.create_task(self._rtc_call(plan, row, since))
+                    since = 0
+                if row < len(plan.rows):
+                    self.robot.execute(plan.rows[row])
+                    row += 1
+                    held = False
+                elif call is None and len(done) >= chunks:
+                    break  # the episode's last chunk has run
+                elif not held:
+                    log.warning("plan of step %d ran out before the next chunk; holding", plan.step)
+                    self.robot.hold()
+                    held = True
+                await self._tick()
+                self._observe(record=True)
+                since += 1
+                if call is not None and call.done():
+                    chunk = call.result()  # raises the call's error
+                    call = None
+                    chunk.start_row = min(since, len(chunk.rows))
+                    done.append(chunk)
+                    plan, row = chunk, chunk.start_row
+                    poll = self._start_poll(chunk)
+            await self._finish_poll(poll)
+        finally:
+            if call is not None:
+                call.cancel()
+            if poll is not None:
+                poll.cancel()
+        return done
+
+    async def _rtc_call(self, plan: Chunk, row: int, since: int) -> Chunk:
+        """One real-time call: the plan from ``row`` on, observed ``since``
+        ticks after the previous call's observation."""
+        delay = max(self._round_trips)
+        rows = plan.rows[row:] or plan.rows[-1:]  # a plan that ran out holds its last row
+        extra = {
+            "executed_step": plan.step,
+            "executed_rows": since,
+            "plan_json": plan_json(self.embodiment, rows, delay),
+        }
+        sent = time.perf_counter()
+        chunk = await self._step(None, sent, extra)
+        self._round_trips.append(chunk.latency_ms / 1000)
+        return chunk
+
+    async def _episode_chunked(self, task: str, chunks: int) -> list[Chunk]:
         """As in a streamed session: the robot holds still for 25 ticks, then
         each chunk is executed row by row at 15 Hz. The last chunk is executed
         but not echoed; the next episode starts with ``reset_context``."""
@@ -673,7 +804,9 @@ class SteppedPraxisClient(PraxisClient):
             self.frames[name].append(np.array(frames[name], order="C"))
         self.history.append(_Row(None, state))
 
-    async def _step(self, executed: int | None, sent: float) -> Chunk:
+    async def _step(
+        self, executed: int | None, sent: float, extra: Mapping[str, Any] | None = None
+    ) -> Chunk:
         """Send the frames kept since the previous call, the last 25 state rows
         and (after the first chunk) the step echo, in one call; return the chunk
         it produces. A stepped session computes only inside ``step()``, so any
@@ -684,6 +817,7 @@ class SteppedPraxisClient(PraxisClient):
         }
         if executed is not None:
             state["executed_step"] = executed
+        state.update(extra or {})
         frames = self.frames
         self.frames = {name: [] for name in self.embodiment.cameras}
         media = await asyncio.to_thread(
@@ -776,6 +910,22 @@ STEPPED_JOIN_MEANINGS = {
     "newest": "expected in a stepped session: each call carries its own frames and "
     "state, and the last 25 rows were paired with the call's 25 newest frames",
 }
+
+
+def plan_json(embodiment: Embodiment, rows: Sequence[CommandRow], delay_s: float) -> str:
+    """The ``plan_json`` of a real-time call: the plan rows the robot runs from
+    the call's observation on, in the layout of ``action_prediction``, and the
+    delay estimate."""
+    out: dict[str, Any] = {"delay_s": float(delay_s)}
+    single = len(embodiment.arms) == 1
+    for name in embodiment.arms:
+        poses_key, grips_key = ("poses", "grips") if single else (f"{name}_poses", f"{name}_grips")
+        out[poses_key] = [
+            [*map(float, r.targets[name].position), *map(float, r.targets[name].rotation.reshape(-1))]
+            for r in rows
+        ]
+        out[grips_key] = [float(r.targets[name].grip) for r in rows]
+    return json.dumps(out)
 
 
 def state_json(embodiment: Embodiment, rows: Sequence[_Row]) -> str:

@@ -123,7 +123,17 @@ encoded and uploaded with the call.
 uv run python main.py --robot droid                  # streamed (default)
 uv run python main.py --robot droid --mode stepped
 uv run python main.py --robot yam --mode stepped
+uv run python main.py --robot yam --mode stepped --schedule rtc   # real-time chunking
 ```
+
+**Real-time chunking** (`--schedule rtc`, stepped only, models 0.4.0 and
+later) keeps the robot moving between chunks. Every 12 rows the client calls
+while the robot keeps running its plan. With the call it sends
+`executed_rows` (ticks since the previous call's observation) and `plan_json`
+(the plan rows from the next row on, plus `delay_s`, the longest of the last 5
+round trips). The answer's row 0 is due at the call's observation, so a chunk
+that arrives `d` ticks later starts at row `d`. If the plan runs out first,
+the robot holds until the chunk arrives.
 
 In code, swap the class; the rest is the same:
 
