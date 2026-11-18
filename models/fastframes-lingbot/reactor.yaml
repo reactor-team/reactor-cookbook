@@ -1,0 +1,34 @@
+$schema: reactor/v2
+
+model:
+  name: fastframes-lingbot
+  version: v0.2.1
+  description: Explore an image-conditioned world with Apple's FastFrames-LingBot 1.3B.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    cpu:
+      request: "8"
+      limit: "16"
+    memory:
+      request: 96Gi
+      limit: 160Gi
+
+runtime:
+  import: fastframes_lingbot:FastFramesLingBotApp
+  config: fastframes_lingbot.yaml
+  weights_path: ~/.cache/reactor_registry/fastframes-lingbot
+
+build:
+  runtime_version: "3.11.7"
+  python_requirements: requirements.txt
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  system_packages: [git, gcc, g++]
+  run:
+    - --mount=type=cache,target=/root/.cache/uv UV_LINK_MODE=copy uv pip install 'torch==2.9.1+cu128' 'torchvision==0.24.1+cu128' --index-url https://download.pytorch.org/whl/cu128
+    - --mount=type=bind,source=.,target=/port python /port/fastframes_lingbot_assets.py --checkout /opt
+  runtime_env:
+    OMP_NUM_THREADS: "4"
+    TOKENIZERS_PARALLELISM: "false"

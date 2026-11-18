@@ -1,0 +1,96 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, system-ui, sans-serif;
+  color: #ecedf0;
+  background: #101215;
+  --edge: #292d33;
+  --panel: #17191d;
+  --muted: #a2a9b4;
+  --accent: #b1f2d3;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+a { color: inherit; text-decoration: none; }
+
+button, input, textarea { font: inherit; color: inherit; }
+button, input, textarea {
+  background: #1d2025;
+  border: 1px solid #343942;
+  border-radius: 7px;
+}
+button { padding: 8px 12px; cursor: pointer; white-space: nowrap; }
+button:hover:not(:disabled) { border-color: #78828f; }
+button:disabled { opacity: .44; cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.muted { color: var(--muted); }
+
+.app-header {
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) minmax(290px, 430px) minmax(max-content, 1fr);
+  align-items: center;
+  gap: 24px;
+  padding: 14px 24px;
+  background: #15171a;
+  border-bottom: 1px solid var(--edge);
+  font-size: 13px;
+}
+.brand, .endpoint, .connection { display: flex; align-items: center; gap: 10px; }
+.brand { width: fit-content; white-space: nowrap; font-size: 14px; }
+.brand img { object-fit: contain; }
+.brand strong { font-size: 16px; }
+.endpoint label { white-space: nowrap; color: var(--muted); }
+.endpoint input { flex: 1; min-width: 0; padding: 8px 10px; }
+.connection { justify-self: end; }
+.connection span { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+.connection i { width: 7px; height: 7px; background: #80858e; border-radius: 50%; }
+.connection i.online { background: var(--accent); }
+
+main {
+  width: min(1380px, 100%);
+  margin: 0 auto;
+  padding: 34px 24px;
+  display: grid;
+  grid-template-columns: minmax(250px, 310px) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+aside, .stage { min-width: 0; border: 1px solid var(--edge); border-radius: 12px; background: var(--panel); }
+aside { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+.stage { padding: 18px; }
+.section-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.section-title h1, .section-title h2 { margin: 0; font-size: 16px; }
+.section-title .muted { font-size: 12px; }
+.subtle { border: 0; background: transparent; color: var(--accent); font-size: 12px; padding: 4px; }
+.subtle:hover { text-decoration: underline; }
+textarea { width: 100%; min-height: 132px; resize: vertical; line-height: 1.5; padding: 11px; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.actions button { min-width: 0; font-size: 13px; padding-inline: 7px; }
+.primary { background: var(--accent); color: #15241d; border-color: transparent; font-weight: 650; }
+.compact { font-size: 12px; line-height: 1.5; margin: 0; }
+.seed { border-top: 1px solid var(--edge); padding-top: 13px; display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 13px; gap: 8px; }
+.seed input { width: 8ch; box-sizing: content-box; padding: 6px 8px; }
+.error { color: #ffadad; margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+
+.player { margin-top: 14px; width: 100%; aspect-ratio: 832 / 480; position: relative; background: #0b0d0f; overflow: hidden; border-radius: 8px; }
+.video, .video video { width: 100%; height: 100%; }
+.placeholder { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; background: #0b0d0f; color: var(--muted); font-size: 14px; pointer-events: none; }
+.placeholder span { font-size: 34px; color: var(--accent); }
+.placeholder p { margin: 8px 12px; text-align: center; }
+.stage-status { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; margin-top: 12px; font-size: 13px; color: var(--muted); }
+
+@media (max-width: 850px) {
+  .app-header { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 12px 16px; }
+  .endpoint { grid-row: 2; grid-column: 1 / -1; }
+  main { gap: 14px; padding: 24px 16px; }
+}
+@media (max-width: 620px) {
+  main { grid-template-columns: minmax(0, 1fr); }
+  .stage { grid-row: 1; }
+  .app-header { gap: 10px; }
+  .brand img { width: 24px; }
+  .brand strong { font-size: 14px; }
+  .brand span { white-space: normal; }
+  .connection { gap: 6px; }
+  .connection button { padding-inline: 8px; }
+}

@@ -1,0 +1,11 @@
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
+numpy>=2.2
+PyYAML>=6
+huggingface-hub>=1.12
+# Native FastFrames inference (PyTorch is installed from the cu128 index).
+transformers==5.22.1
+safetensors==0.8.0
+einops==0.8.2
+ftfy==6.3.1
+regex==2026.9.29
