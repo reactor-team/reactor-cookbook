@@ -101,7 +101,14 @@ async def run(args: argparse.Namespace) -> None:
         model=args.model,
         pose_frame=args.pose_frame if embodiment is DROID else None,
         status_every=1,
-        **({"schedule": getattr(args, "schedule", "chunked")} if stepped else {}),
+        **(
+            {
+                "schedule": getattr(args, "schedule", "chunked"),
+                "early_rows": getattr(args, "early_rows", 12),
+            }
+            if stepped
+            else {}
+        ),
     ) as client:
         joins: set[str] = set()
         for episode in range(args.episodes):
@@ -135,9 +142,16 @@ def main() -> None:
     )
     parser.add_argument(
         "--schedule",
-        choices=("chunked", "rtc"),
+        choices=("chunked", "early", "rtc"),
         default="chunked",
-        help="stepped only: chunked runs a chunk then calls; rtc calls while the robot moves",
+        help="stepped only: chunked runs a chunk then calls; early runs --early-rows rows, "
+        "stops and calls; rtc calls while the robot moves",
+    )
+    parser.add_argument(
+        "--early-rows",
+        type=int,
+        default=12,
+        help="--schedule early: rows of each chunk run before the robot stops and calls (1 to 20)",
     )
     parser.add_argument("--model", help="owner/name; default reactor/praxis-1-<robot>")
     parser.add_argument(
@@ -152,8 +166,8 @@ def main() -> None:
         help="DROID only: the frame of ee_pose and of the returned poses",
     )
     args = parser.parse_args()
-    if args.schedule == "rtc" and args.mode != "stepped":
-        parser.error("--schedule rtc needs --mode stepped")
+    if args.schedule != "chunked" and args.mode != "stepped":
+        parser.error(f"--schedule {args.schedule} needs --mode stepped")
     if args.chunks < 1 or args.episodes < 1:
         parser.error("chunks and episodes must be positive")
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")

@@ -68,6 +68,8 @@ MAX_WAIT_FRAMES = WINDOW - STACK - math.ceil(JOIN_WAIT_S * FPS)
 #: Real-time chunking (``schedule="rtc"``): rows between two calls, Runway's default. It must stay
 #: below the 21 rows of an episode's first chunk, so a chunk outlasts the next call.
 RTC_STRIDE = 12
+#: Stop early (``schedule="early"``): rows the robot runs of each chunk before it stops and calls.
+EARLY_ROWS = 12
 #: Real-time chunking: the delay estimate is the longest of the last 5 round trips (Runway's rule).
 RTC_DELAY_WINDOW = 5
 #: ``prediction_failed`` codes that a retry with the same input cannot fix.
@@ -624,6 +626,9 @@ class SteppedPraxisClient(PraxisClient):
     ``schedule="rtc"`` (real-time chunking) does not stop between chunks: every
     ``rtc_stride`` ticks the client calls while the robot keeps running its
     plan, and sends the plan with the call (:meth:`_episode_rtc`).
+
+    ``schedule="early"`` (stop early) runs only the first ``early_rows`` rows of
+    each chunk, holds, and calls with ``executed_rows`` (:meth:`_episode_early`).
     """
 
     expected_join = None  # "newest" is normal here: each call carries its frames
@@ -636,15 +641,19 @@ class SteppedPraxisClient(PraxisClient):
         *,
         schedule: str = "chunked",
         rtc_stride: int = RTC_STRIDE,
+        early_rows: int = EARLY_ROWS,
         **kwargs: Any,
     ) -> None:
-        if schedule not in ("chunked", "rtc"):
-            raise ValueError(f"schedule must be 'chunked' or 'rtc', not {schedule!r}")
+        if schedule not in ("chunked", "early", "rtc"):
+            raise ValueError(f"schedule must be 'chunked', 'early' or 'rtc', not {schedule!r}")
         if not 1 <= rtc_stride < 21:
             raise ValueError("rtc_stride must be 1 to 20 rows (below an episode's first chunk)")
+        if not 1 <= early_rows < 21:
+            raise ValueError("early_rows must be 1 to 20 rows (below an episode's first chunk)")
         super().__init__(robot, embodiment, **kwargs)
         self.schedule = schedule
         self.rtc_stride = rtc_stride
+        self.early_rows = early_rows
         self.frames: dict[str, list[np.ndarray]] = {}
         self._round_trips: deque[float] = deque(maxlen=RTC_DELAY_WINDOW)
 
@@ -654,6 +663,8 @@ class SteppedPraxisClient(PraxisClient):
     async def _episode(self, task: str, chunks: int) -> list[Chunk]:
         if self.schedule == "rtc":
             return await self._episode_rtc(task, chunks)
+        if self.schedule == "early":
+            return await self._episode_early(task, chunks)
         return await self._episode_chunked(task, chunks)
 
     async def _start(self, task: str) -> float:
@@ -732,6 +743,43 @@ class SteppedPraxisClient(PraxisClient):
                 call.cancel()
             if poll is not None:
                 poll.cancel()
+        return done
+
+    async def _episode_early(self, task: str, chunks: int) -> list[Chunk]:
+        """Stop early: run the first ``early_rows`` rows of each chunk, hold,
+        and call.
+
+        The call sends ``executed_step`` (the chunk the robot ran),
+        ``executed_rows`` (the rows it ran) and the frames and state rows of
+        those rows only. The model adds just these rows to its context. The
+        robot holds still for the round trip, as in a chunked episode, but it
+        replans every ``early_rows`` rows instead of every 24. The last chunk is
+        run to the end.
+        """
+        sent = await self._start(task)
+        done: list[Chunk] = []
+        executed: int | None = None
+        extra: dict[str, Any] | None = None
+        for n in range(chunks):
+            chunk = await self._step(executed, sent, extra)
+            done.append(chunk)
+            last = n == chunks - 1
+            rows = chunk.rows if last else chunk.rows[: self.early_rows]
+            poll = self._start_poll(chunk)  # runs while the rows execute
+            try:
+                self._deadline = time.monotonic()  # the chunk's row 0 starts now
+                for row in rows:
+                    self.robot.execute(row)
+                    await self._tick()
+                    self._observe(record=True)
+                if len(rows) < len(chunk.rows):
+                    self.robot.hold()  # stopped before the chunk's end
+                sent = time.perf_counter()
+                await self._finish_poll(poll)
+            finally:
+                if poll is not None:
+                    poll.cancel()  # only an error leaves it running
+            executed, extra = chunk.step, {"executed_rows": len(rows)}
         return done
 
     async def _rtc_call(self, plan: Chunk, row: int, since: int) -> Chunk:
