@@ -1,0 +1,10 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+tests
+demo/node_modules
+demo/dist
+upstream
+*.mp4

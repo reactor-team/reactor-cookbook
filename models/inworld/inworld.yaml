@@ -1,0 +1,4 @@
+source: upstream
+attention_backend: fa
+cuda_graph: true
+num_gpus: 4
