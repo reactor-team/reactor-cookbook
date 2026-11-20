@@ -1,0 +1,31 @@
+# The model: LiveAvatar, one B200.
+#
+# The portrait a session starts from until `set_avatar` replaces it. A relative path resolves against the
+# upstream LiveAvatar checkout in the image.
+avatar: examples/livestream_1.png
+# The scene and performance text every block is conditioned on.
+prompt: >-
+  A person faces the camera and talks naturally, with clear lip movements, lively facial expressions
+  and small, natural head movements. The background stays still. The lighting is soft and even.
+seed: 420
+# Output size, multiples of 64. The real-time numbers are at 512x512.
+width: 512
+height: 512
+# The transformer blocks' projections on FP8 tensor cores (upstream's --fp8 scheme). On one B200 a 0.48 s
+# block renders in about 455 ms with it and 540 ms without: real time needs it. The frames change slightly.
+fp8: true
+# Blocks rendered at load: the compilation and the CUDA graph captures happen here, not in a session.
+warmup_blocks: 12
+
+# The application: how speech becomes blocks.
+#
+# Silent blocks after an utterance before the avatar counts as listening (LiveAvatar renders them alike).
+listen_after_blocks: 2
+# A speech block quieter than this (int16 RMS) is marked silent.
+silence_rms: 100
+# Video still queued, in seconds, when the next silent block lands.
+idle_margin_s: 0.1
+# How far ahead of playout speech renders, in seconds.
+speech_lead_s: 1.5
+# Drop the idle frames queued ahead of an utterance's first block, so the reply starts at once.
+cut_idle_for_speech: true

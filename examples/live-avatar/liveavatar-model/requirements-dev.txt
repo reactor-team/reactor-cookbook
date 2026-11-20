@@ -1,0 +1,7 @@
+# CPU tests: the application half on a fake model, and the model half's CPU helpers.
+reactor-runtime==3.11.9
+numpy==2.2.6
+Pillow
+scipy
+pytest
+pytest-asyncio

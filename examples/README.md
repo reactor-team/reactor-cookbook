@@ -18,3 +18,6 @@ Looking for the one reference frontend per API model — the templates
   itself with FastH3 Omni — reference-pinned cast, lip-synced dialogue, a whole
   sequence through the model's playout queue, and "what happens next"
   continuation from the last frame.
+- [`live-avatar`](./live-avatar): a voice agent with a face. A LiveKit voice agent on
+  OpenAI Realtime speaks through LiveAvatar, a real-time talking avatar on one B200,
+  with the model, the agent, the page and a setup skill in one folder.

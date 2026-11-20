@@ -1,0 +1,448 @@
+@font-face {
+  font-family: "Aeonik";
+  src: url("/fonts/aeonik/aeonik-regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Aeonik";
+  src: url("/fonts/aeonik/aeonik-medium.woff2") format("woff2");
+  font-weight: 500;
+  font-display: swap;
+}
+
+:root {
+  --bg: #000000;
+  --surface: #0e0e0d;
+  --surface-2: #161614;
+  --dune: #c7c099;
+  --dune-light: #fdf5c6;
+  --flora: #aac799;
+  --terra: #c79999;
+  --line: rgba(255, 255, 255, 0.08);
+  --text: rgba(255, 255, 255, 0.94);
+  --muted: rgba(255, 255, 255, 0.52);
+  --faint: rgba(255, 255, 255, 0.3);
+  --font-sans: "Aeonik", "Host Grotesk", Helvetica, Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", "Andale Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color-scheme: dark;
+}
+
+button,
+input,
+select,
+textarea {
+  color: inherit;
+  font: inherit;
+}
+
+/* One screen: a slim bar on top, the stage and a narrow column below it. */
+.app {
+  display: grid;
+  grid-template-rows: 52px minmax(0, 1fr);
+  height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo {
+  height: 15px;
+}
+
+.product {
+  color: var(--muted);
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--terra);
+}
+
+.dot.is-ok {
+  background: var(--flora);
+}
+
+/* The stage and the panel are one unit, centred, both as tall as the space below the bar allows. */
+.layout {
+  --unit: min(calc(100vh - 52px - 40px), calc(100vw - 360px - 88px));
+  display: grid;
+  grid-template-columns: var(--unit) 340px;
+  grid-template-rows: var(--unit);
+  justify-content: center;
+  align-content: start;
+  gap: 20px;
+  padding: 0 32px 40px;
+}
+
+/* -- the stage ------------------------------------------------------------------------------------------- */
+
+.stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.stage video {
+  display: none;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.stage video.is-visible {
+  display: block;
+}
+
+.stage-idle,
+.stage-idle img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.stage-idle img {
+  opacity: 0.45;
+}
+
+.stage-state {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.badge {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dune);
+}
+
+.captions {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.captions p {
+  margin: 0;
+}
+
+.captions p.is-you {
+  color: var(--muted);
+}
+
+.spinner {
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--faint);
+  border-top-color: var(--dune);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* -- the panel ------------------------------------------------------------------------------------------ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 22px;
+  border-radius: 18px;
+  background: var(--surface);
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+}
+
+.label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.faces {
+  display: flex;
+  justify-content: space-between;
+}
+
+.face {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--surface-2);
+  cursor: pointer;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: outline-color 0.15s;
+}
+
+.face img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.face.is-selected {
+  outline-color: var(--dune);
+}
+
+.face:disabled,
+.face.is-disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.face.upload {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.face.upload input {
+  display: none;
+}
+
+select,
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+textarea {
+  resize: none;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.actions button {
+  flex: 1;
+  padding: 11px 16px;
+  border: none;
+  border-radius: 999px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+button.primary {
+  background: var(--dune);
+  color: #000;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--dune-light);
+}
+
+button.ghost {
+  background: var(--surface-2);
+}
+
+button.danger {
+  background: var(--terra);
+  color: #000;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.error {
+  margin: -8px 0 0;
+  color: var(--terra);
+  font-size: 13px;
+}
+
+.room {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.room-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.room-state {
+  font-size: 12px;
+  color: var(--faint);
+}
+
+@media (max-width: 860px) {
+  .layout {
+    --unit: min(calc(100vw - 48px), calc(100vh - 52px - 300px));
+    grid-template-columns: var(--unit);
+    grid-template-rows: var(--unit) auto;
+    padding: 0 24px 24px;
+  }
+
+  .room {
+    display: none;
+  }
+}
+
+/* -- room diagram ---------------------------------------------------------------------------------------- */
+
+.room-diagram {
+  display: block;
+  flex: 1 1 0;
+  width: 100%;
+  min-height: 0;
+  max-height: 300px;
+}
+
+.room-diagram .node rect {
+  fill: var(--surface);
+  stroke: rgba(255, 255, 255, 0.1);
+}
+
+.room-diagram .node-title {
+  font-size: 15px;
+  font-weight: 500;
+  fill: var(--muted);
+}
+
+.room-diagram .node-detail {
+  font-size: 11px;
+  fill: var(--faint);
+}
+
+.room-diagram .node.is-on rect {
+  stroke: var(--dune);
+}
+
+.room-diagram .node.is-on .node-title {
+  fill: var(--text);
+}
+
+.room-diagram .link {
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 1.2;
+}
+
+.room-diagram .link.is-muted {
+  stroke-dasharray: 2 4;
+}
+
+.room-diagram .link.is-active {
+  stroke: var(--dune);
+  stroke-dasharray: 5 4;
+  animation: flow 0.8s linear infinite;
+}
+
+.room-diagram .arrow-head {
+  fill: rgba(255, 255, 255, 0.35);
+}
+
+.room-diagram .link-label {
+  font-size: 12px;
+  fill: var(--faint);
+}
+
+.room-diagram .link-label.is-active {
+  fill: var(--dune);
+}
+
+@keyframes flow {
+  to {
+    stroke-dashoffset: -18;
+  }
+}

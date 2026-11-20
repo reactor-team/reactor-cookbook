@@ -1,0 +1,23 @@
+# Keep local credentials, caches, weights, generated media and the demo client out of the image.
+.git
+.env
+.env.*
+*.pem
+*.key
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+tests
+weights
+checkpoints
+outputs
+*.log
+*.mp4
+*.wav
+*.safetensors
+*.pth
+*.pt
+.runtime
