@@ -8,3 +8,7 @@ node_modules/
 # reach of that folder's own ignore file. Ignoring it here covers the tree.
 .next/
 *.tsbuildinfo
+
+# The model gallery under site/: its build output and Astro cache.
+site/dist/
+site/.astro/

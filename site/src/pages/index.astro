@@ -1,0 +1,343 @@
+---
+import Base from "../layouts/Base.astro";
+import { SERVE_LABEL, START_LABEL, firstSentence, gpuLabel, loadCatalog, u, type StartKind } from "../lib/catalog";
+import { icon } from "../lib/icons";
+
+const { domains, groups, models } = loadCatalog();
+const starts: StartKind[] = ["one", "two", "readme"];
+const startIcon: Record<StartKind, string> = { one: "terminal", two: "list", readme: "book" };
+// Group chips only where a domain has more than one group to choose between.
+const groupChips = domains.filter((d) => d.groups.length > 1).flatMap((d) => d.groups);
+const embodiments = [...new Set(models.map((m) => m.embodiment).filter(Boolean))].sort() as string[];
+const gpus = [...new Set(models.map((m) => gpuLabel(m.resources)))].sort(
+  (a, b) => parseInt(a) - parseInt(b) || a.localeCompare(b),
+);
+const rows = [...models].sort((a, b) => (b.lastCommit?.date ?? "").localeCompare(a.lastCommit?.date ?? ""));
+---
+
+<Base title="Reactor Cookbook Models">
+  <main class="container list-page">
+    <aside class="filters" id="filters">
+      <div class="f-head">
+        <nav class="dom-tabs">
+          <button type="button" data-dom="">All</button>
+          {domains.map((d) => (
+            <button type="button" data-dom={d.id} title={d.summary}>{d.title}</button>
+          ))}
+        </nav>
+      </div>
+
+      <section>
+        <h3>Groups</h3>
+        <div class="chips">
+          {groupChips.map((g) => (
+            <button class={`tag chip ${g.id}`} type="button" data-k="group" data-v={g.id} data-domain={g.domainId} title={g.summary}>
+              <Fragment set:html={icon(g.icon, 15)} />{g.title}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section class="tasks">
+        <h3>Tasks</h3>
+        {domains.map((d) => (
+        <div class="chips task-chips" data-domain={d.id}>
+          <div class="chips-cap faint">{d.title}</div>
+          {d.groups.flatMap((g) =>
+            g.types.map((t) => (
+              <button class={`tag chip ${g.id}`} type="button" data-k="type" data-v={t.id} data-group={g.id} data-domain={g.domainId} title={t.title}>
+                <Fragment set:html={icon(t.icon, 15)} />{t.short}
+              </button>
+            )),
+          )}
+        </div>
+        ))}
+      </section>
+
+      <section>
+        <h3>Start</h3>
+        <div class="chips">
+          {starts.map((s) => (
+            <button class={`tag chip start-${s}`} type="button" data-k="start" data-v={s}>
+              <Fragment set:html={icon(startIcon[s], 14)} />{START_LABEL[s]}
+              <span class="faint n">{models.filter((m) => m.run.start === s).length}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h3>Serve on Reactor</h3>
+        <div class="chips">
+          {(["ready", "blocked", "readme"] as const).map((s) => (
+            <button class={`tag chip serve-${s}`} type="button" data-k="serve" data-v={s}>
+              <Fragment set:html={icon("rocket", 14)} />{SERVE_LABEL[s]}
+              <span class="faint n">{models.filter((m) => m.serve.status === s).length}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section data-domain="robotics">
+        <h3>Embodiment</h3>
+        <div class="chips">
+          {embodiments.map((e) => (
+            <button class="tag chip" type="button" data-k="embodiment" data-v={e} data-domain="robotics">
+              <Fragment set:html={icon("arm", 15)} />{e}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h3>Hardware</h3>
+        <div class="chips">
+          {gpus.map((g) => (
+            <button class="tag chip" type="button" data-k="gpu" data-v={g}>
+              <Fragment set:html={icon("cpu", 15)} /><span class="mono">{g}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h3>Other</h3>
+        <div class="chips">
+          <button class="tag chip audio" type="button" data-k="audio" data-v="1"><Fragment set:html={icon("audio", 15)} />Generates audio</button>
+          <button class="tag chip fe" type="button" data-k="frontend" data-v="1"><Fragment set:html={icon("play", 13)} />Has frontend</button>
+        </div>
+      </section>
+    </aside>
+
+    <section class="results">
+      <div class="r-head">
+        <h1>Models <span class="count faint" id="count">{models.length}</span></h1>
+        <div class="input-wrap name-filter">
+          <Fragment set:html={icon("search", 14)} />
+          <input class="input" id="q" type="search" placeholder="Filter by name" autocomplete="off" />
+        </div>
+        <button class="btn sm reset" type="button" hidden><Fragment set:html={icon("reset", 13)} />Reset filters</button>
+        <div class="sort-wrap">
+          <button class="btn" id="sort-btn" type="button"><Fragment set:html={icon("sort", 14)} />Sort: <span id="sort-label">Recently updated</span></button>
+          <div class="menu sort-menu" hidden>
+            <div class="menu-item" data-sort="updated">Recently updated</div>
+            <div class="menu-item" data-sort="name">Name</div>
+            <div class="menu-item" data-sort="gpu-asc">Fewest GPUs</div>
+            <div class="menu-item" data-sort="gpu-desc">Most GPUs</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rows" id="rows">
+        {rows.map((m) => (
+          <a
+            class="row"
+            href={u(`/models/${m.id}/`)}
+            title={firstSentence(m.description)}
+            data-id={m.id}
+            data-domain={m.domainId}
+            data-embodiment={m.embodiment ?? ""}
+            data-group={m.groupId}
+            data-type={m.typeId}
+            data-gpu={gpuLabel(m.resources)}
+            data-gpun={m.resources.gpuCount}
+            data-audio={m.audio ? "1" : ""}
+            data-start={m.run.start}
+            data-serve={m.serve.status}
+            data-frontend={m.frontend ? "1" : ""}
+            data-updated={m.lastCommit?.date ?? ""}
+          >
+            <div class="r-name">
+              <span class={`r-icon ti-${m.groupId}`} set:html={icon(m.groupIcon, 15)} />
+              <span class="mono">{m.id}</span>
+            </div>
+            <div class="r-meta">
+              <span class={`m st-${m.run.start}`}><Fragment set:html={icon(startIcon[m.run.start], 13)} />{START_LABEL[m.run.start]}</span>
+              <span class="m dot"><Fragment set:html={icon(m.typeIcon, 13)} />{m.typeShort}</span>
+              {m.embodiment && <span class="m dot"><Fragment set:html={icon("arm", 13)} />{m.embodiment}</span>}
+              <span class="m dot"><Fragment set:html={icon("cpu", 13)} /><span class="mono">{gpuLabel(m.resources)}</span></span>
+              {m.lastCommit && <span class="m dot">Updated <time data-rel={m.lastCommit.date}>{m.lastCommit.date.slice(0, 10)}</time></span>}
+              {m.version && <span class="m dot mono">v{m.version}</span>}
+              {m.audio && <span class="m dot audio-m" title="Generates audio"><Fragment set:html={icon("audio", 13)} /></span>}
+              {m.frontend && <span class="m dot fe-m" title="Ships a frontend"><Fragment set:html={icon("play", 11)} /></span>}
+            </div>
+          </a>
+        ))}
+      </div>
+      <p class="none muted" id="none" hidden>No models match these filters.</p>
+    </section>
+  </main>
+</Base>
+
+<style>
+  .list-page { display: grid; grid-template-columns: 390px minmax(0, 1fr); min-height: calc(100vh - 64px); }
+  .filters { border-right: 1px solid var(--g100); padding: 28px 24px 40px 0; display: flex; flex-direction: column; gap: 26px; }
+  .results { padding: 28px 0 40px 28px; min-width: 0; }
+  @media (max-width: 900px) {
+    .list-page { grid-template-columns: 1fr; }
+    .filters { border-right: 0; border-bottom: 1px solid var(--g100); padding: 20px 0; gap: 16px; }
+    .results { padding: 20px 0; }
+  }
+  .f-head { display: flex; align-items: center; }
+  .f-head { gap: 10px; }
+  .dom-tabs { display: flex; gap: 4px 2px; flex-wrap: wrap; }
+  .dom-tabs button { font: 500 14px var(--sans); color: var(--g500); background: none; border: 0; padding: 2px 7px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+  .dom-tabs button:hover { color: var(--g900); }
+  .dom-tabs button.on { background: var(--g900); color: var(--bg); font-weight: 600; }
+  .filters h3 { font-size: 15px; font-weight: 500; color: var(--g500); margin-bottom: 12px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .task-chips + .task-chips { margin-top: 14px; }
+  .chips-cap { width: 100%; font-size: 13px; margin-bottom: -2px; }
+  .chip { cursor: pointer; font-family: var(--sans); }
+  .chip:hover { border-color: var(--g300); }
+  .chip.dim { opacity: 0.45; }
+  .chip.on { background: var(--g900); background-image: none; color: var(--bg); border-color: var(--g900); opacity: 1; }
+  .chip.on .i { color: var(--bg) !important; }
+
+  .r-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  .r-head h1 { font-size: 20px; font-weight: 600; margin-right: 8px; }
+  .count { font-weight: 400; margin-left: 6px; }
+  .name-filter { flex: 0 1 240px; }
+  .name-filter .input { border-radius: 999px; padding-top: 4px; padding-bottom: 4px; font-size: 14px; }
+  .sort-wrap { position: relative; margin-left: auto; }
+  .sort-menu { left: auto; right: 0; min-width: 180px; }
+
+  .rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 12px; }
+  @media (max-width: 640px) { .rows { grid-template-columns: 1fr; } }
+  .row {
+    display: flex; flex-direction: column; gap: 3px; padding: 10px 14px; border: 1px solid var(--g100);
+    border-radius: 10px; background-image: var(--row-grad); min-width: 0;
+  }
+  .row:hover { border-color: var(--g200); box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04); }
+  .row:hover .r-name .mono { color: var(--blue); }
+  .r-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .r-name .mono { font-size: 15.5px; font-weight: 500; color: var(--g900); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .r-meta { display: flex; align-items: center; flex-wrap: wrap; font-size: 14px; color: var(--g400); line-height: 1.6; }
+  .r-meta .m { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .r-meta .mono { font-size: 12.5px; }
+  .audio-m .i { color: var(--green); }
+  .r-meta .st-one, .r-meta .st-one .i { color: var(--green); font-weight: 500; }
+  .r-meta .st-two, .r-meta .st-two .i { color: var(--amber); font-weight: 500; }
+  .r-meta .st-readme { color: var(--g500); font-weight: 500; }
+  .fe-m .i { color: var(--blue); }
+  .chip .n { font-size: 12.5px; margin-left: 2px; }
+  .chip.on .n { color: var(--bg); }
+  .none { margin-top: 24px; }
+</style>
+
+<script>
+  type Key = "domain" | "group" | "type" | "embodiment" | "gpu" | "audio" | "start" | "serve" | "frontend";
+  const KEYS: Key[] = ["domain", "group", "type", "embodiment", "gpu", "audio", "start", "serve", "frontend"];
+  const params = new URLSearchParams(location.search);
+  const state: Record<string, string> = {};
+  for (const k of KEYS) if (params.get(k)) state[k] = params.get(k)!;
+  let sort = params.get("sort") ?? "updated";
+
+  const chips = [...document.querySelectorAll<HTMLButtonElement>(".chip")];
+  const rows = [...document.querySelectorAll<HTMLAnchorElement>(".row")];
+  const list = document.getElementById("rows")!;
+  const q = document.getElementById("q") as HTMLInputElement;
+  const reset = document.querySelector<HTMLButtonElement>(".reset")!;
+  const sortBtn = document.getElementById("sort-btn")!;
+  const sortMenu = document.querySelector<HTMLElement>(".sort-menu")!;
+  const LABELS: Record<string, string> = { updated: "Recently updated", name: "Name", "gpu-asc": "Fewest GPUs", "gpu-desc": "Most GPUs" };
+
+  function rel(iso: string): string {
+    const d = (Date.now() - new Date(iso).getTime()) / 86400000;
+    if (d < 1) return "today";
+    if (d < 2) return "yesterday";
+    if (d < 31) return `${Math.floor(d)} days ago`;
+    return new Date(iso).toLocaleDateString("en", { month: "short", day: "numeric", year: d > 300 ? "numeric" : undefined });
+  }
+  for (const t of document.querySelectorAll<HTMLElement>("time[data-rel]")) t.textContent = rel(t.dataset.rel!);
+
+  const domTabs = [...document.querySelectorAll<HTMLButtonElement>(".dom-tabs button")];
+  const sections = [...document.querySelectorAll<HTMLElement>(".filters section")];
+
+  function apply() {
+    // Filters that belong to the other domain are hidden, and cleared.
+    const dom = state.domain ?? "";
+    for (const t of domTabs) t.classList.toggle("on", (t.dataset.dom ?? "") === dom);
+    for (const sec of sections) sec.hidden = Boolean(dom && sec.dataset.domain && sec.dataset.domain !== dom);
+    const taskGroups = [...document.querySelectorAll<HTMLElement>(".task-chips")];
+    for (const tc of taskGroups) {
+      tc.hidden = Boolean(dom && tc.dataset.domain !== dom);
+      tc.querySelector<HTMLElement>(".chips-cap")!.hidden = Boolean(dom);
+    }
+    document.querySelector<HTMLElement>(".tasks")!.hidden = taskGroups.every((tc) => tc.hidden);
+    // A GPU chip with no model in the current domain is noise.
+    for (const c of chips)
+      if (c.dataset.k === "gpu")
+        c.dataset.domain = rows.some((r) => r.dataset.gpu === c.dataset.v && (!dom || r.dataset.domain === dom)) ? "" : "none";
+    for (const c of chips) {
+      const off = Boolean(dom && c.dataset.domain && c.dataset.domain !== dom);
+      c.hidden = off;
+      if (off && state[c.dataset.k!] === c.dataset.v) delete state[c.dataset.k!];
+    }
+    // A type implies its group; picking a group clears a type from the other one.
+    for (const c of chips) {
+      const k = c.dataset.k as Key;
+      const on = state[k] === c.dataset.v;
+      c.classList.toggle("on", on);
+      c.classList.toggle("dim", Boolean(state[k]) && !on && (k === "group" || k === "type" || k === "gpu" || k === "embodiment" || k === "start" || k === "serve"));
+    }
+    const term = q.value.trim().toLowerCase();
+    let n = 0;
+    for (const r of rows) {
+      const ok =
+        KEYS.every((k) => !state[k] || r.dataset[k] === state[k]) && (!term || r.dataset.id!.includes(term));
+      r.hidden = !ok;
+      if (ok) n++;
+    }
+    const cmp: Record<string, (a: HTMLElement, b: HTMLElement) => number> = {
+      updated: (a, b) => b.dataset.updated!.localeCompare(a.dataset.updated!),
+      name: (a, b) => a.dataset.id!.localeCompare(b.dataset.id!),
+      "gpu-asc": (a, b) => +a.dataset.gpun! - +b.dataset.gpun! || a.dataset.id!.localeCompare(b.dataset.id!),
+      "gpu-desc": (a, b) => +b.dataset.gpun! - +a.dataset.gpun! || a.dataset.id!.localeCompare(b.dataset.id!),
+    };
+    rows.sort(cmp[sort] ?? cmp.updated).forEach((r) => list.appendChild(r));
+    document.getElementById("count")!.textContent = String(n);
+    document.getElementById("none")!.hidden = n > 0;
+    document.getElementById("sort-label")!.textContent = LABELS[sort];
+    reset.hidden = !Object.keys(state).some((k) => k !== "domain") && !term;
+
+    const url = new URL(location.href);
+    for (const k of KEYS) state[k] ? url.searchParams.set(k, state[k]) : url.searchParams.delete(k);
+    sort === "updated" ? url.searchParams.delete("sort") : url.searchParams.set("sort", sort);
+    history.replaceState(null, "", url);
+  }
+
+  for (const c of chips)
+    c.addEventListener("click", () => {
+      const k = c.dataset.k as Key;
+      if (state[k] === c.dataset.v) delete state[k];
+      else state[k] = c.dataset.v!;
+      if (k === "type" && state.type) {
+        state.group = c.dataset.group!;
+        state.domain = c.dataset.domain!;
+      }
+      if (k === "embodiment" && state.embodiment) state.domain = "robotics";
+      if (k === "group") {
+        const t = chips.find((x) => x.dataset.k === "type" && x.dataset.v === state.type);
+        if (t && t.dataset.group !== state.group) delete state.type;
+      }
+      apply();
+    });
+  for (const t of domTabs)
+    t.addEventListener("click", () => {
+      if (t.dataset.dom) state.domain = t.dataset.dom;
+      else delete state.domain;
+      apply();
+    });
+  reset.addEventListener("click", () => {
+    for (const k of KEYS) if (k !== "domain") delete state[k];
+    q.value = "";
+    apply();
+  });
+  q.addEventListener("input", apply);
+  sortBtn.addEventListener("click", (e) => { e.stopPropagation(); sortMenu.hidden = !sortMenu.hidden; });
+  for (const it of sortMenu.querySelectorAll<HTMLElement>(".menu-item"))
+    it.addEventListener("click", () => { sort = it.dataset.sort!; sortMenu.hidden = true; apply(); });
+  document.addEventListener("click", () => (sortMenu.hidden = true));
+  apply();
+</script>

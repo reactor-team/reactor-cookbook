@@ -1,0 +1,254 @@
+---
+import { Marked } from "marked";
+import path from "node:path";
+import Base from "../../layouts/Base.astro";
+import FileBrowser from "../../components/FileBrowser.astro";
+import RunCommand from "../../components/RunCommand.astro";
+import ServeOnReactor from "../../components/ServeOnReactor.astro";
+import { SERVE_LABEL, START_LABEL, githubTree, gpuLabel, loadCatalog, u, type Model } from "../../lib/catalog";
+import { icon } from "../../lib/icons";
+
+export function getStaticPaths() {
+  return loadCatalog().models.map((m) => ({ params: { id: m.id }, props: { model: m } }));
+}
+
+const { model } = Astro.props as { model: Model };
+const { groups } = loadCatalog();
+const r = model.resources;
+// The group tag only where the domain has more than one group to tell apart.
+const showGroup = groups.filter((g) => g.domainId === model.domainId).length > 1;
+const siblings = groups
+  .flatMap((g) => g.types)
+  .find((t) => t.id === model.typeId)!
+  .models.filter((m) => m.id !== model.id);
+const startIcon = { one: "terminal", two: "list", readme: "book" }[model.run.start];
+
+// README links: a relative link opens the file in the Files tab, a relative
+// image is served from /raw.
+function renderReadme(md: string): string {
+  const known = new Set(model.files.map((f) => f.path));
+  const resolve = (href: string) => path.posix.normalize(href.split("#")[0]).replace(/^\.\//, "");
+  const marked = new Marked({
+    walkTokens(token: any) {
+      if (!token.href || /^[a-z]+:|^#|^\//i.test(token.href)) return;
+      const rel = resolve(token.href);
+      if (token.type === "image") token.href = u(`/raw/${model.id}/${rel}`);
+      else if (token.type === "link") token.href = known.has(rel) ? `#files/${rel}` : githubTree(model.path, rel);
+    },
+  });
+  return marked.parse(md) as string;
+}
+const readmeHtml = model.readme ? renderReadme(model.readme) : null;
+const range = (a: string | null, b: string | null) => (a && b && a !== b ? `${a} – ${b}` : (a ?? b ?? "–"));
+---
+
+<Base title={`${model.displayName ?? model.id} · Reactor Cookbook Models`}>
+  <header class="m-head">
+    <div class="container">
+      <div class="title">
+        <span class={`t-icon ti-${model.groupId}`} set:html={icon(model.groupIcon, 18)} />
+        <a class="t-org" href={u("/")}>models</a>
+        <span class="t-sep">/</span>
+        <h1 class={model.displayName ? undefined : "mono"} title={model.displayName ? model.id : undefined}>{model.displayName ?? model.id}</h1>
+        <button class="icon-btn copy-id" type="button" title="Copy folder path" data-copy={model.path} set:html={icon("copy", 15)} />
+        {model.version && <span class="tag ver mono">v{model.version}</span>}
+      </div>
+      <div class="tags">
+        <a class={`tag start-${model.run.start}`} href={u(`/?start=${model.run.start}`)} title="How this model starts"><Fragment set:html={icon(startIcon, 15)} />{START_LABEL[model.run.start]}</a>
+        <a class={`tag ${model.groupId}`} href={u(`/?domain=${model.domainId}&group=${model.groupId}&type=${model.typeId}`)} title={model.typeTitle}>
+          <Fragment set:html={icon(model.typeIcon, 15)} />{model.typeShort}
+        </a>
+        <a class="tag" href={u(`/?domain=${model.domainId}`)}><Fragment set:html={icon(model.domainIcon, 15)} />{model.domainTitle}</a>
+        {showGroup && (
+          <a class={`tag ${model.groupId}`} href={u(`/?domain=${model.domainId}&group=${model.groupId}`)}><Fragment set:html={icon(model.groupIcon, 15)} />{model.groupTitle}</a>
+        )}
+        {model.embodiment && (
+          <a class="tag" href={u(`/?domain=robotics&embodiment=${encodeURIComponent(model.embodiment)}`)}><Fragment set:html={icon("arm", 15)} /><span class="k">Embodiment</span>{model.embodiment}</a>
+        )}
+        <a class="tag" href={u(`/?gpu=${encodeURIComponent(gpuLabel(r))}`)}><Fragment set:html={icon("cpu", 15)} /><span class="mono">{gpuLabel(r)}</span></a>
+        <a class={`tag serve-${model.serve.status}`} href={u(`/?serve=${model.serve.status}`)} title="Serving it on Reactor"><Fragment set:html={icon("rocket", 14)} />{SERVE_LABEL[model.serve.status]}</a>
+        {model.frontend && <a class="tag fe" href={u("/?frontend=1")}><Fragment set:html={icon("play", 13)} />Has frontend</a>}
+        {model.audio && <a class="tag audio" href={u("/?audio=1")}><Fragment set:html={icon("audio", 15)} />Audio</a>}
+        {model.runtimeVersion && <span class="tag"><span class="k">reactor-runtime</span><span class="mono">{model.runtimeVersion}</span></span>}
+      </div>
+      <div class="tabbar">
+        <nav class="tabs">
+          <a class="tab" data-tab="card" href="#"><Fragment set:html={icon("box", 15)} />Model card</a>
+          <a class="tab" data-tab="files" href="#files"><Fragment set:html={icon("list", 15)} />Files and versions</a>
+        </nav>
+        <div class="actions">
+          <a class="btn dark" href="#run"><Fragment set:html={icon("terminal", 14)} />Run on your GPU</a>
+          <a class="btn" href="#serve"><Fragment set:html={icon("rocket", 14)} />Serve on Reactor</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="container m-body">
+    <section class="paths" data-panel="card">
+      <RunCommand model={model} />
+      <ServeOnReactor model={model} />
+    </section>
+    <section class="card-view" data-panel="card">
+      <div class="readme-col">
+        {
+          readmeHtml ? (
+            <article class="readme" id="readme" set:html={readmeHtml} />
+          ) : (
+            <div class="no-card" id="readme">
+              <p>{model.description}</p>
+              <p class="faint">This model has no <span class="mono">README.md</span> yet; the text above is the description in <span class="mono">reactor.yaml</span>.</p>
+            </div>
+          )
+        }
+      </div>
+      <aside class="side">
+        {
+          readmeHtml && (
+            <section>
+              <h3>About</h3>
+              <p class="about">{model.description}</p>
+            </section>
+          )
+        }
+        <section>
+          <h3><Fragment set:html={icon("play", 13)} />Frontend</h3>
+          {model.frontend ? (
+            <p class="about">This model ships a frontend in <a class="lnk mono" href={model.frontend.link}>{model.frontend.readme ? "demo/README.md" : "demo/"}</a>.</p>
+          ) : (
+            <p class="about">No frontend yet.</p>
+          )}
+        </section>
+        <section>
+          <h3><Fragment set:html={icon("cpu", 15)} />Hardware</h3>
+          <div class="big mono">{gpuLabel(r)}</div>
+          <div class="kv">
+            <span>CPU</span><span class="mono">{range(r.cpuRequest, r.cpuLimit)}</span>
+            <span>Memory</span><span class="mono">{range(r.memRequest, r.memLimit)}</span>
+          </div>
+        </section>
+        <section>
+          <h3><Fragment set:html={icon("terminal", 15)} />Runtime</h3>
+          <div class="kv">
+            <span>Entry point</span><span class="mono">{model.entrypoint ?? "–"}</span>
+            <span>Config</span><span class="mono">{model.configFile ? <a class="lnk" href={`#files/${model.configFile}`}>{model.configFile}</a> : "–"}</span>
+            <span>Image</span><span>{model.buildRoute === "Dockerfile" ? <a class="lnk" href="#files/Dockerfile">Dockerfile</a> : model.buildRoute === "build block" ? <a class="lnk" href="#files/reactor.yaml">reactor.yaml build block</a> : "–"}</span>
+            <span>Weights</span><span class="mono">{model.run.weightsPath ?? "–"}</span>
+            <span>Recording</span><span>{model.recording ? "on" : "off"}</span>
+            <span>Manifest</span><span class="mono"><a class="lnk" href="#files/reactor.yaml">reactor.yaml</a></span>
+          </div>
+        </section>
+        {
+          siblings.length > 0 && (
+            <section>
+              <h3><Fragment set:html={icon(model.typeIcon, 15)} />Similar models <span class="h-sub">{model.typeShort}</span></h3>
+              <div class="sib">
+                {siblings.map((s) => (
+                  <a class="tag" href={u(`/models/${s.id}/`)}>
+                    <span class="mono">{s.id}</span>
+                  </a>
+                ))}
+              </div>
+            </section>
+          )
+        }
+      </aside>
+    </section>
+
+    <section data-panel="files" hidden>
+      <FileBrowser model={model} />
+    </section>
+  </main>
+</Base>
+
+<style>
+  .m-head { background-image: var(--head-grad); border-bottom: 1px solid var(--g100); padding-top: 32px; }
+  .title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 20px; }
+  .t-icon { display: inline-grid; margin-right: 4px; }
+  .t-org { color: var(--g400); }
+  .t-org:hover { color: var(--blue); }
+  .t-sep { color: var(--g300); }
+  .title h1 { font-size: 20px; font-weight: 600; color: var(--g900); overflow-wrap: anywhere; }
+  .ver { height: 24px; font-size: 12.5px; margin-left: 6px; color: var(--g500); }
+  .tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .tags a.tag:hover { border-color: var(--g300); }
+  .tabbar { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-top: 22px; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 4px; }
+  .tab {
+    display: flex; align-items: center; gap: 7px; padding: 0 16px 12px; font-size: 16px; color: var(--g500);
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tab .i { color: var(--g400); }
+  .tab:hover { color: var(--g900); }
+  .tab.on { color: var(--g900); font-weight: 600; border-bottom-color: var(--g900); }
+  .actions { display: flex; gap: 8px; padding-bottom: 8px; }
+
+  .paths { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; margin-top: 28px; }
+  @media (max-width: 1100px) { .paths { grid-template-columns: minmax(0, 1fr); } }
+  .card-view { display: grid; grid-template-columns: minmax(0, 1fr) 400px; }
+  @media (max-width: 1000px) { .card-view { grid-template-columns: 1fr; } .side { border-left: 0 !important; padding-left: 0 !important; } }
+  .readme-col { padding: 32px 36px 0 0; min-width: 0; }
+  .side { border-left: 1px solid var(--g100); padding: 12px 0 0 28px; }
+  .side section { padding: 20px 0; border-bottom: 1px solid var(--g100); }
+  .side section:last-child { border-bottom: 0; }
+  .side h3 { display: flex; align-items: center; gap: 7px; font-size: 15px; font-weight: 600; color: var(--g700); margin-bottom: 10px; }
+  .side h3 .i { color: var(--g400); }
+  .h-sub { font-weight: 400; color: var(--g400); font-size: 13.5px; margin-left: 2px; }
+  .about { margin: 0; font-size: 15px; color: var(--g500); line-height: 1.55; }
+  .big { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 5px 16px; font-size: 14.5px; }
+  .kv > :nth-child(odd) { color: var(--g400); }
+  .kv > :nth-child(even) { color: var(--g700); min-width: 0; overflow-wrap: anywhere; }
+  .kv .mono { font-size: 13px; }
+  .lnk { color: var(--blue); }
+  .lnk:hover { text-decoration: underline; }
+  .sib { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sib .tag { height: 26px; font-size: 13px; }
+  .sib .tag:hover { color: var(--blue); }
+
+  .no-card p { margin: 0 0 12px; font-size: 16px; }
+  .readme { font-size: 16px; line-height: 1.7; max-width: 800px; overflow-wrap: break-word; color: var(--g700); }
+  .readme :global(a) { color: var(--blue); }
+  .readme :global(a:hover) { text-decoration: underline; }
+  .readme :global(h1) { font-size: 26px; margin: 0 0 16px; color: var(--g900); }
+  .readme :global(h2) { font-size: 21px; margin: 32px 0 12px; color: var(--g900); }
+  .readme :global(h3) { font-size: 17.5px; margin: 26px 0 10px; color: var(--g900); }
+  .readme :global(h4) { font-size: 16px; margin: 20px 0 8px; color: var(--g900); }
+  .readme :global(> :first-child) { margin-top: 0; }
+  .readme :global(code) { font-size: 0.86em; background: var(--g100); padding: 2px 5px; border-radius: 5px; }
+  .readme :global(pre) { background: var(--g50); border: 1px solid var(--g100); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; }
+  .readme :global(pre code) { background: none; padding: 0; }
+  .readme :global(table) { border-collapse: collapse; display: block; overflow-x: auto; font-size: 14.5px; margin: 16px 0; }
+  .readme :global(th), .readme :global(td) { border: 1px solid var(--g200); padding: 6px 12px; text-align: left; vertical-align: top; }
+  .readme :global(th) { background: var(--g50); font-weight: 600; }
+  .readme :global(img) { max-width: 100%; }
+  .readme :global(blockquote) { margin: 0; padding: 2px 16px; border-left: 3px solid var(--g200); color: var(--g500); }
+  .readme :global(hr) { border: 0; border-top: 1px solid var(--g200); margin: 28px 0; }
+</style>
+
+<script>
+  import { icon } from "../../lib/icons";
+
+  const tabs = [...document.querySelectorAll<HTMLAnchorElement>(".tab")];
+  const panels = [...document.querySelectorAll<HTMLElement>("[data-panel]")];
+  function sync() {
+    const tab = location.hash.startsWith("#files") ? "files" : "card";
+    for (const t of tabs) t.classList.toggle("on", t.dataset.tab === tab);
+    for (const p of panels) p.hidden = p.dataset.panel !== tab;
+  }
+  tabs[0].addEventListener("click", (e) => {
+    e.preventDefault();
+    history.pushState(null, "", location.pathname);
+    sync();
+  });
+  window.addEventListener("hashchange", sync);
+  window.addEventListener("popstate", sync);
+  sync();
+
+  for (const b of document.querySelectorAll<HTMLButtonElement>(".copy-id"))
+    b.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(b.dataset.copy!);
+      b.innerHTML = icon("check", 15);
+      setTimeout(() => (b.innerHTML = icon("copy", 15)), 1200);
+    });
+</script>

@@ -1,0 +1,97 @@
+---
+// "Serve it on Reactor": deploy the model folder under the reader's own
+// account with the reactor CLI, so their app connects to <their-org>/<name>.
+import { marked } from "marked";
+import { SERVE_LABEL, type Model } from "../lib/catalog";
+import { icon } from "../lib/icons";
+
+interface Props {
+  model: Model;
+}
+const { model } = Astro.props;
+const serve = model.serve;
+const md = (s: string) => marked.parseInline(s) as string;
+const statusIcon = { ready: "rocket", blocked: "x", readme: "book" }[serve.status];
+---
+
+<section class="serve" id="serve">
+  <div class="serve-head">
+    <h2><Fragment set:html={icon("rocket", 17)} />Serve it on Reactor</h2>
+    <span class={`tag serve-${serve.status}`}><Fragment set:html={icon(statusIcon, 14)} />{SERVE_LABEL[serve.status]}</span>
+  </div>
+  <p class="serve-lead">
+    Deploy this folder to the Reactor platform under your own account with the
+    <a class="lnk" href="https://docs.reactor.inc/deploy/overview" target="_blank" rel="noopener"><span class="mono">reactor</span> CLI</a>,
+    so your app connects to <span class="mono">&lt;your-org&gt;/{serve.name}</span> over the Reactor API.
+  </p>
+
+  <dl class="facts">
+    <dt>GPUs</dt>
+    <dd><span class="mono">{serve.gpu}</span> per instance, from <span class="mono">model.resources</span> in reactor.yaml.</dd>
+    <dt>Regions</dt>
+    <dd>
+      {serve.regions.length
+        ? serve.regions.map((r) => <span class="mono">{r.region} × {r.count} </span>)
+        : <span>none declared</span>}
+    </dd>
+    <dt>Release</dt>
+    <dd><span class="mono">{serve.name}:{serve.version}</span></dd>
+  </dl>
+
+  {serve.status === "readme" && (
+    <p class="block">Not a one-command deploy: the weights must first be prepared as the <a class="lnk" href="#readme">README</a> describes, and publishing then uploads that folder.</p>
+  )}
+  {serve.blockers.length > 0 && (
+    <div class="block">
+      <strong>Not deployable as is:</strong>
+      <ul>{serve.blockers.map((b) => <li set:html={md(b)} />)}</ul>
+    </div>
+  )}
+
+  {serve.steps.map((s, i) => (
+    <div class="step">
+      <div class="step-head">
+        <span class="num">{i + 1}</span>
+        <span class="step-title" set:html={md(s.title)} />
+        {s.code && <button class="btn sm copy" type="button" data-code={s.code}><Fragment set:html={icon("copy", 13)} /><span>Copy</span></button>}
+      </div>
+      {s.text && <p class="step-text" set:html={md(s.text)} />}
+      {s.code && <pre class="cmd"><code>{s.code}</code></pre>}
+    </div>
+  ))}
+
+  <ul class="notes">{serve.notes.map((n) => <li set:html={md(n)} />)}</ul>
+</section>
+
+<style>
+  .serve { border: 1px solid var(--g200); border-radius: 12px; padding: 18px 20px 8px; min-width: 0; }
+  .serve-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .serve-head h2 { display: flex; align-items: center; gap: 8px; font-size: 19px; color: var(--g900); }
+  .serve-head h2 :global(.i) { color: var(--g400); }
+  .serve-lead { margin: 8px 0 12px; color: var(--g500); font-size: 15px; }
+  .block { margin: 0 0 14px; padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(180, 83, 9, 0.3); color: var(--g700); font-size: 14.5px; }
+  .block ul { margin: 6px 0 0; padding-left: 18px; }
+  .step { margin-bottom: 14px; }
+  .step-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 14.5px; }
+  .num { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--g900); color: var(--bg); font-size: 12px; font-weight: 600; }
+  .step-title { font-weight: 600; color: var(--g700); }
+  .step-head .copy { margin-left: auto; }
+  .step-text { margin: 0 0 6px 28px; font-size: 14px; color: var(--g500); }
+  .cmd { margin: 0; background: var(--g50); border: 1px solid var(--g200); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-size: 13px; line-height: 1.6; }
+  .facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0 0 14px; font-size: 14.5px; color: var(--g700); }
+  .facts dt { color: var(--g400); }
+  .facts dd { margin: 0; min-width: 0; }
+  .facts .mono, .step-text :global(code), .block :global(code), .notes :global(code), .step-title :global(code) { font-family: var(--mono); font-size: 12.5px; }
+  .notes { margin: 4px 0 10px; padding-left: 18px; font-size: 14px; color: var(--g500); }
+</style>
+
+<script>
+  import { icon } from "../lib/icons";
+
+  for (const b of document.querySelectorAll<HTMLButtonElement>(".serve .copy"))
+    b.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(b.dataset.code!);
+      b.innerHTML = `${icon("check", 13)}<span>Copied</span>`;
+      setTimeout(() => (b.innerHTML = `${icon("copy", 13)}<span>Copy</span>`), 1400);
+    });
+</script>

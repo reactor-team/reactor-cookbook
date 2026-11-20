@@ -1,0 +1,91 @@
+---
+import "../styles/global.css";
+import { GITHUB_REPO, searchIndex, u } from "../lib/catalog";
+import { icon } from "../lib/icons";
+
+interface Props {
+  title: string;
+}
+const { title } = Astro.props;
+const index = searchIndex();
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Sans+3:wght@400;500;600;700&display=swap"
+    />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="container">
+        <a class="brand" href={u("/")}><span class="logo" set:html={icon("box", 15)} />Reactor Cookbook Models</a>
+        <div class="search" id="global-search">
+          <Fragment set:html={icon("search", 15)} />
+          <input type="search" placeholder="Search models…" autocomplete="off" aria-label="Search models" />
+          <div class="menu" hidden></div>
+        </div>
+        <nav class="nav">
+          <a href={u("/")}><Fragment set:html={icon("box", 15)} /><span>Models</span></a>
+          <a href="https://docs.reactor.inc/deploy/overview" target="_blank" rel="noopener"><Fragment set:html={icon("book", 15)} /><span>Docs</span></a>
+          <a href={GITHUB_REPO} target="_blank" rel="noopener"><Fragment set:html={icon("external", 15)} /><span>GitHub</span></a>
+        </nav>
+      </div>
+    </header>
+    <slot />
+    <footer class="site">
+      <div class="container">Generated from <a class="lnk" href={GITHUB_REPO} target="_blank" rel="noopener">reactor-cookbook</a> at build time · families in <span class="mono">site/categories.yaml</span> · Apache-2.0</div>
+    </footer>
+    <script type="application/json" id="search-index" set:html={JSON.stringify(index)} />
+  </body>
+</html>
+
+<script>
+  import { icon } from "../lib/icons";
+
+  const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+  const box = document.getElementById("global-search")!;
+  const input = box.querySelector("input")!;
+  const menu = box.querySelector<HTMLElement>(".menu")!;
+  const models: { id: string; type: string; icon: string; gpu: string }[] = JSON.parse(
+    document.getElementById("search-index")!.textContent!,
+  );
+  let hits: typeof models = [];
+  let hl = 0;
+
+  function draw() {
+    const q = input.value.trim().toLowerCase();
+    if (!q) return (menu.hidden = true);
+    hits = models.filter((m) => m.id.includes(q) || m.type.toLowerCase().includes(q)).slice(0, 10);
+    hl = Math.min(hl, Math.max(hits.length - 1, 0));
+    menu.innerHTML = hits.length
+      ? hits
+          .map(
+            (m, i) =>
+              `<a class="menu-item${i === hl ? " hl" : ""}" href="${BASE}/models/${m.id}/">${icon("box", 14)}<span class="mono">${m.id}</span><span class="sub">${m.type}</span></a>`,
+          )
+          .join("")
+      : `<div class="menu-empty">No models match “${input.value.replace(/</g, "&lt;")}”</div>`;
+    menu.hidden = false;
+  }
+  input.addEventListener("input", () => { hl = 0; draw(); });
+  input.addEventListener("focus", draw);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { hl = Math.min(hl + 1, hits.length - 1); draw(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { hl = Math.max(hl - 1, 0); draw(); e.preventDefault(); }
+    else if (e.key === "Enter" && hits[hl]) location.href = `${BASE}/models/${hits[hl].id}/`;
+    else if (e.key === "Escape") { menu.hidden = true; input.blur(); }
+  });
+  document.addEventListener("click", (e) => { if (!box.contains(e.target as Node)) menu.hidden = true; });
+  // "/" focuses search, as on most catalog sites.
+  document.addEventListener("keydown", (e) => {
+    const t = e.target as HTMLElement;
+    if (e.key === "/" && !["INPUT", "TEXTAREA"].includes(t.tagName)) { e.preventDefault(); input.focus(); }
+  });
+</script>

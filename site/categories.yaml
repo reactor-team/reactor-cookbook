@@ -1,0 +1,313 @@
+# Where each folder under models/ appears in the gallery, and how its weights
+# reach the GPU node. Every folder under models/ that has a reactor.yaml must be
+# listed exactly once, and every entry must name an existing folder: the build
+# fails otherwise.
+#
+# A family is a domain > group; inside a group a type says what goes in and what
+# comes out, shown as a tag on each model. `short` is the tag label; `icon` names
+# one in src/lib/icons.ts.
+#
+# Model entry fields:
+#   id          folder name under models/
+#   audio       true when the output carries generated sound
+#   embodiment  the robot a policy is trained for
+#   weights     how the weights reach the node; decides the run command:
+#                 hf      reactor.yaml's runtime.weights_path is an hf:// reference;
+#                         `reactor run` resolves, downloads and mounts it (--yes
+#                         skips its confirmation prompt)
+#                 auto    the model downloads its own weights on first start into
+#                         the mounted weights path; `evidence` names the file and
+#                         the call that does it, and the build checks it is there
+#                 manual  the README has the reader download them by hand; every
+#                         fenced code block in it that contains a `readme_download`
+#                         string is shown verbatim before the run command
+#                 readme  no one-command start; the page points at the README
+#   download    the size the README gives for the weights, shown on the page
+#   env         host variables forwarded into the container with `-e NAME`
+#   run_args    extra `reactor run` flags taken from the README's run command
+#   readme_run  for `manual`: for each string, the first README code block that
+#               contains it, shown verbatim as the start step instead of a
+#               generated `reactor run`
+#   notes       short notes shown beside the command (tokens, licences, host needs)
+#   first_build the note shown when the image compiles something heavy; the build
+#               fails when the Dockerfile or build block compiles (a
+#               --no-build-isolation install, FLASH_ATTENTION_FORCE_BUILD,
+#               TORCH_CUDA_ARCH_LIST, nvcc, cmake --build) and this is missing,
+#               or when it is set and nothing compiles
+#   publish_weights  the weights directory `reactor model publish` uploads, when
+#               it is not reactor.yaml's runtime.weights_path
+#   serve_blocker    why the folder cannot be served on Reactor as it is, beyond
+#               what the build derives from reactor.yaml
+
+domains:
+  - id: video
+    title: Video
+    icon: film
+    summary: Video models you run on your own GPUs and stream over WebRTC.
+    groups:
+      - id: chunk
+        title: Autoregressive (chunk by chunk)
+        icon: wave
+        summary: >-
+          One start produces one continuous stream. Commands sent mid-stream take
+          effect on the next chunk boundary; there are no seams.
+        types:
+          - id: steerable-world
+            short: Image + Text + Action → Video
+            icon: gamepad
+            title: Image / Text + Action → Video [+ Audio]
+            summary: >-
+              A steerable world: live movement, camera or key controls while the
+              stream runs, usually opened on an image.
+            models:
+              - id: abot-world
+                weights: auto
+                evidence: abot_world_assets.py:snapshot_download(
+              - id: alayaworld
+                weights: auto
+                evidence: alayaworld_assets.py:_hf_snapshot_download(
+                env: [HF_TOKEN]
+                notes:
+                  - Gemma is gated on Hugging Face. Accept its licence, then `export HF_TOKEN=<your read token>` before running.
+              - id: diamond-csgo-world-model
+                publish_weights: '"$HOME/.cache/reactor_registry/diamond-csgo-world-model"'
+                weights: auto
+                evidence: diamond_model.py:snapshot_download(
+                download: about 1.4 GB
+                notes:
+                  - reactor.yaml sets no `runtime.weights_path`, so nothing is mounted from the host. Add `--weights <dir>` to keep the download between runs.
+              - id: dreamx-world
+                weights: auto
+                evidence: dreamx_assets.py:_hf_hub_download(
+                download: at least 80 GB for the image, build cache and model assets
+                notes:
+                  - Neither checkpoint repository is gated.
+              - id: echo-wm
+                weights: auto
+                audio: true
+                evidence: echo_wm_assets.py:snapshot_download(
+                env: [HF_TOKEN]
+                notes:
+                  - Accept the Gemma 3 licence on Hugging Face, then `export HF_TOKEN=<your read token>` before the first start.
+              - id: evoke
+                weights: auto
+                evidence: download_snapshot.py:snapshot_download(
+                download: about 90 GB of persistent storage
+                notes:
+                  - ViGeo weights are CC-BY-NC-4.0; review that licence before commercial use.
+              - id: hy-world-1-5
+                weights: auto
+                evidence: hy_world_1_5_assets.py:snapshot_download(
+                notes:
+                  - The preferred SigLIP image encoder comes from the gated `black-forest-labs/FLUX.1-Redux-dev`. Accept its terms, `export HF_TOKEN=<your read token>` and add `-e HF_TOKEN` to use it; without it, startup uses the public SigLIP SO400M.
+              - id: lingbot-world-v1-fast
+                first_build: "The first run builds the image. It installs flash-attn with `pip install --no-build-isolation`; pip compiles it from source when no prebuilt flash-attn wheel matches the image's torch and CUDA, and that takes a long time the first time."
+                weights: auto
+                evidence: download_snapshot.py:snapshot_download(
+                download: about 90 GB of persistent storage
+              - id: lingbot-world-v2
+                weights: auto
+                evidence: lingbot_world_v2_assets.py:snapshot_download(
+                download: about 100 GB
+                notes:
+                  - Source and weights are CC BY-NC-SA 4.0, for non-commercial use.
+              - id: lyra-2
+                first_build: "The first run builds the image, including compiling Transformer Engine's PyTorch extension from source (`--no-build-isolation`), and flash-attn 2.8.1 when no prebuilt wheel matches; it takes a long time the first time."
+                weights: readme
+                notes:
+                  - The Lyra 2.0 checkpoints must already sit under `source/Lyra-2/checkpoints/` in the weights directory, arranged by the upstream instructions; the model does not download them. Then run with `--weights /path/to/lyra-weights`.
+              - id: matrix-game-2-0
+                weights: auto
+                evidence: matrix_game_2_assets.py:snapshot_download(
+                download: about 12 GB
+              - id: matrix-game-3-0
+                weights: auto
+                evidence: matrix_game_3_0_assets.py:snapshot_download(
+                download: about 40 GB
+              - id: matrix-game-3-5
+                weights: auto
+                evidence: download_snapshot.py:snapshot_download(
+                download: roughly 48 GB for checkpoints
+              - id: open-dreamer
+                publish_weights: '"$HOME/.cache/reactor_registry/open-dreamer"'
+                weights: auto
+                evidence: opendreamer_model.py:snapshot_download(
+                download: about 8 GB
+                notes:
+                  - reactor.yaml sets no `runtime.weights_path`, so nothing is mounted from the host. Add `--weights <dir>` to keep the download between runs.
+              - id: open-oasis
+                weights: auto
+                evidence: open_oasis_assets.py:hf_hub_download(
+              - id: sana-wm
+                first_build: "The first run builds the image, including building mmcv 1.7.2 from its source distribution (`--no-build-isolation`); it takes a long time the first time."
+                weights: auto
+                evidence: sana_wm_assets.py:snapshot_download(
+                download: about 110 GB
+              - id: solarwm-stage2
+                first_build: "The first run builds the image. It installs flash-attn with `pip install --no-build-isolation`; pip compiles it from source when no prebuilt flash-attn wheel matches the image's torch and CUDA, and that takes a long time the first time."
+                weights: auto
+                evidence: solarwm_stage2_config.py:snapshot_download(
+                env: [HF_TOKEN]
+                notes:
+                  - The checkpoint repository `junchaoh-cs/SolarWM` is gated. Request access, then `export HF_TOKEN=<your read token>` before running.
+              - id: worldcrafter-fast
+                weights: hf
+                download: at least 200 GB
+                notes:
+                  - Caches and scratch use `/local-ssd` inside the container; provide a writable local disk there.
+                  - For a single-GPU smoke test add `-e WORLDCRAFTER_GPUS=1`; supported counts are one and eight.
+              - id: worldplay2
+                first_build: "The first run builds the image. It installs flash-attn with `pip install --no-build-isolation`; pip compiles it from source when no prebuilt flash-attn wheel matches the image's torch and CUDA, and that takes a long time the first time."
+                weights: manual
+                download: about 82 GB
+                readme_download: ["hf download"]
+                notes:
+                  - The download step needs Python 3 for the Hugging Face CLI.
+              - id: yume-1-5
+                first_build: "The first run builds the image. It installs flash-attn with `pip install --no-build-isolation`; pip compiles it from source when no prebuilt flash-attn wheel matches the image's torch and CUDA, and that takes a long time the first time."
+                weights: auto
+                evidence: yume_assets.py:snapshot_download(
+              - id: zing-0-5
+                first_build: "The first run builds the image. It installs flash-attn with `pip install --no-build-isolation`; pip compiles it from source when no prebuilt flash-attn wheel matches the image's torch and CUDA, and that takes a long time the first time."
+                weights: auto
+                evidence: zing_assets.py:snapshot_download(
+          - id: prompt-stream
+            short: Text + Image → Video
+            icon: type
+            title: Text + (Image) → Video
+            summary: >-
+              A prompt-driven stream, optionally opened on an image, steered by
+              changing the prompt while it runs.
+            models:
+              - id: sgf-plus
+                first_build: "The first run builds the image. It installs flash-attn with `pip install --no-build-isolation`; pip compiles it from source when no prebuilt flash-attn wheel matches the image's torch and CUDA, and that takes a long time the first time."
+                weights: auto
+                evidence: sgf_plus_assets.py:snapshot_download(
+                download: about 28 GiB
+          - id: video-to-video
+            short: Video → Video
+            icon: repeat
+            title: Video in + Reference + Text → Video
+            summary: >-
+              A live restyle: a video streamed in is rewritten on the fly,
+              following an instruction or reference.
+            models:
+              - id: joy-video-edit
+                first_build: "The first run builds the image, including compiling the `joyomni_ops` CUDA kernels against CUTLASS from source; it takes a long time the first time."
+                weights: auto
+                evidence: joy_video_edit_assets.py:snapshot_download(
+                download: about 48 GB
+                notes:
+                  - Needs 128 GB of host memory; loading the DiT checkpoint peaks at about 63 GB.
+
+      - id: clip
+        title: Clip by clip
+        icon: film
+        summary: >-
+          One request produces one finished clip or render. Inputs are fixed per
+          clip; clips are built and played back to back.
+        types:
+          - id: text-to-video
+            short: Text → Video
+            icon: type
+            title: Text → Video + Audio
+            summary: >-
+              Each clip has its own prompt; the next clip is built while the
+              current one plays.
+            models:
+              - id: fasth3
+                serve_blocker: "The model refuses to load without `OPENROUTER_API_KEY` (or a key file at `/run/secrets/openrouter_api_key`), read in fasth3.py:247 on every load, and reactor.yaml gives a deployed instance no way to receive it: `-e OPENROUTER_API_KEY` only reaches a local `reactor run`."
+                first_build: "The first run builds the image, including compiling the `fastvideo-kernel` CUDA extension from source; it takes a long time the first time."
+                weights: manual
+                audio: true
+                download: about 148 GB
+                readme_download: ["hf download"]
+                env: [OPENROUTER_API_KEY]
+                notes:
+                  - Needs an OpenRouter API key for the story writer; `export OPENROUTER_API_KEY=<your key>` before running.
+                  - The download step needs the Hugging Face CLI (`hf`).
+          - id: control-video-to-video
+            short: Control video → Video
+            icon: repeat
+            title: Semantic video + Reference + Text → Video
+            summary: >-
+              One request re-renders a recorded control video: its motion is kept,
+              its appearance comes from a reference and a prompt.
+            models:
+              - id: streamrender-h3
+                publish_weights: /path/to/weights
+                weights: manual
+                download: about 274 GB
+                readme_download: ["hf download"]
+                readme_run: ["reactor build --no-dockerfile", "docker run"]
+                notes:
+                  - The README launches the built image with plain `docker run` and `--shm-size=2g`; it calls a plain `reactor run` with default shared memory unvalidated for this model, so the start step below is the README's own.
+                  - Replace `/path/to/weights` in both steps with the same directory.
+
+      - id: code
+        title: Code video models
+        icon: gamepad
+        summary: >-
+          A game program draws a draft chunk and the model repaints it, so the
+          program holds the world's state and the model its look.
+        types:
+          - id: draft-to-video
+            short: Draft + Reference → Video
+            icon: gamepad
+            title: Draft video (game) + Action / Reference / Text → Video
+            summary: >-
+              Keys steer a code game; each draft chunk it renders is repainted
+              into the generated world.
+            models:
+              - id: eden-live
+                publish_weights: '"$EDEN_BUNDLE"'
+                weights: manual
+                download: about 37 GB
+                readme_download: ["hf download"]
+                run_args: --shm-size 2g --weights "$EDEN_BUNDLE"
+                notes:
+                  - The README asks for access to `VAST-AI/EdenLive` and signs in with `hf auth login`; the download step also needs npm.
+                  - Run the start step in the same shell, so `$EDEN_BUNDLE` is still set.
+              - id: matrix-game-4
+                first_build: "The first run builds the image, including compiling both native game engines from source with CMake; it takes a long time the first time."
+                weights: auto
+                evidence: 'matrix_game4_assets.py:"download",'
+                download: about 42 GiB, plus the Hugging Face download cache
+                notes:
+                  - The game capture needs working hardware EGL/OpenGL on the node; it refuses software rendering by default.
+
+  - id: robotics
+    title: Robot policies
+    icon: bot
+    summary: >-
+      Closed-loop robot control on your own GPUs. Camera views, robot state and
+      a task go in; action chunks come out.
+    groups:
+      - id: policy
+        title: Robot policies
+        icon: bot
+        summary: >-
+          The client streams camera views and proprioceptive state with a
+          language task, and receives a chunk of future actions per inference.
+        types:
+          - id: vision-language-action
+            short: Vision-Language-Action
+            icon: eye
+            title: Vision-language-action policy → Action chunk
+            summary: >-
+              A policy decodes the next chunk of actions from the current
+              observations and task.
+            models:
+              - id: cosmos3-policy-droid
+                weights: auto
+                embodiment: DROID
+                evidence: cosmos3_policy_droid_assets.py:snapshot_download(
+                download: about 7 GB for the default Edge checkpoint
+                notes:
+                  - No token is needed; the repositories are public.
+              - id: rldx-1
+                first_build: "The first run builds the image, including compiling flash-attn 2.7.4.post1 from source (`FLASH_ATTENTION_FORCE_BUILD` in the Dockerfile). Measured once, on a shared B200 node under heavy load: the first `reactor run` took 52 min end to end, about 1.5 min downloading, about 46 min building the image and about 5 min loading."
+                weights: hf
+                embodiment: RoboCasa
+                notes:
+                  - The checkpoint is under the RLWRLD Model License, which includes use restrictions; review it before downloading.

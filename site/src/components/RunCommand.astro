@@ -1,0 +1,115 @@
+---
+// "Run it on a GPU node": the command (or the steps) that download this model's
+// code and weights and start it with the reactor CLI, each with a copy button.
+import { marked } from "marked";
+import { START_LABEL, WEIGHTS_LABEL, type Model } from "../lib/catalog";
+import { icon } from "../lib/icons";
+
+interface Props {
+  model: Model;
+}
+const { model } = Astro.props;
+const run = model.run;
+const md = (s: string) => marked.parseInline(s) as string;
+const startIcon = { one: "terminal", two: "list", readme: "book" }[run.start];
+---
+
+<section class="run" id="run">
+  <div class="run-head">
+    <h2><Fragment set:html={icon("terminal", 17)} />Run it on your own GPU</h2>
+    <span class={`tag start-${run.start}`}><Fragment set:html={icon(startIcon, 14)} />{START_LABEL[run.start]}</span>
+  </div>
+  <p class="run-lead">
+    On a Linux node with Docker, the NVIDIA Container Toolkit and the
+    <a class="lnk" href="https://docs.reactor.inc/deploy/platform/installation" target="_blank" rel="noopener"><span class="mono">reactor</span> CLI</a>.
+    {run.start === "one" && <>This one command fetches only this model's folder, builds its image on first run, gets its weights and serves it on <span class="mono">http://localhost:8080</span>.</>}
+    {run.start === "two" && <>The weights are downloaded by hand, with the README's own commands, before the model starts.</>}
+    {run.start === "readme" && <>This model does not start from one command: prepare its weights as the <a class="lnk" href="#readme">README</a> describes, then run it from the folder.</>}
+  </p>
+
+  {run.steps.map((s, i) => (
+    <div class="step">
+      <div class="step-head">
+        {run.steps.length > 1 && <span class="num">{i + 1}</span>}
+        <span class="step-title">{s.title}</span>
+        {s.verbatim && <span class="verb faint">verbatim from README.md</span>}
+        <button class="btn sm copy" type="button" data-code={s.code}><Fragment set:html={icon("copy", 13)} /><span>Copy</span></button>
+      </div>
+      <pre class="cmd"><code>{s.code}</code></pre>
+    </div>
+  ))}
+  {run.start === "readme" && (
+    <div class="step">
+      <div class="step-head"><span class="num">2</span><span class="step-title">Prepare the weights and start it</span></div>
+      <p class="see">Follow the <a class="lnk" href="#readme">README</a> from the model folder.</p>
+    </div>
+  )}
+
+  <dl class="facts">
+    <dt>Weights</dt>
+    <dd>
+      {WEIGHTS_LABEL[run.weights]}
+      {run.weights === "hf" && <> (<span class="mono">{run.weightsPath}</span>); <span class="mono">--yes</span> skips the CLI's download prompt.</>}
+      {run.weights === "auto" && run.evidence && (
+        <> by <a class="lnk mono" href={`#files/${run.evidence.file}`} title={run.evidence.text}>{run.evidence.file}:{run.evidence.line}</a>{run.weightsPath ? <>, into <span class="mono">{run.weightsPath}</span>, made first so Docker does not create it as root.</> : "."}</>
+      )}
+      {run.download && <> The README gives the size: {run.download}.</>}
+    </dd>
+    {run.firstBuild && (
+      <>
+        <dt>First build</dt>
+        <dd set:html={md(run.firstBuild)} />
+      </>
+    )}
+    <dt>GPUs</dt>
+    <dd>
+      <span class="mono">{model.resources.gpuCount}× {model.resources.gpuType?.replace(/^NVIDIA_/, "")}</span> requested in reactor.yaml.
+      {run.gpuNote && <Fragment set:html={" " + md(run.gpuNote)} />}
+    </dd>
+    {run.env.length > 0 && (
+      <>
+        <dt>Environment</dt>
+        <dd>Forwarded from your shell by name with {run.env.map((e) => <span class="mono">-e {e} </span>)}, so the value never lands on the command line.</dd>
+      </>
+    )}
+    {run.notes.length > 0 && (
+      <>
+        <dt>Notes</dt>
+        <dd><ul>{run.notes.map((n) => <li set:html={md(n)} />)}</ul></dd>
+      </>
+    )}
+  </dl>
+</section>
+
+<style>
+  .run { border: 1px solid var(--g200); border-radius: 12px; padding: 18px 20px 8px; background: var(--g50); min-width: 0; }
+  .run-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .run-head h2 { display: flex; align-items: center; gap: 8px; font-size: 19px; color: var(--g900); }
+  .run-head h2 :global(.i) { color: var(--g400); }
+  .run-lead { margin: 8px 0 14px; color: var(--g500); font-size: 15px; }
+  .step { margin-bottom: 14px; }
+  .step-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 14.5px; }
+  .num { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--g900); color: var(--bg); font-size: 12px; font-weight: 600; }
+  .step-title { font-weight: 600; color: var(--g700); }
+  .verb { font-size: 13px; }
+  .step-head .copy { margin-left: auto; }
+  .cmd { margin: 0; background: var(--bg); border: 1px solid var(--g200); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-size: 13px; line-height: 1.6; }
+  .see { margin: 0 0 0 28px; font-size: 15px; }
+  .facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 14px 0 10px; font-size: 14.5px; color: var(--g700); }
+  .facts dt { color: var(--g400); }
+  .facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .facts ul { margin: 0; padding-left: 18px; }
+  .facts :global(code), .facts .mono { font-family: var(--mono); font-size: 12.5px; }
+  @media (max-width: 640px) { .facts { grid-template-columns: 1fr; } .facts dt { margin-top: 6px; } }
+</style>
+
+<script>
+  import { icon } from "../lib/icons";
+
+  for (const b of document.querySelectorAll<HTMLButtonElement>(".run .copy"))
+    b.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(b.dataset.code!);
+      b.innerHTML = `${icon("check", 13)}<span>Copied</span>`;
+      setTimeout(() => (b.innerHTML = `${icon("copy", 13)}<span>Copy</span>`), 1400);
+    });
+</script>

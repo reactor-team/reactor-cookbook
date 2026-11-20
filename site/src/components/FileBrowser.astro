@@ -1,0 +1,280 @@
+---
+// "Files and versions": the model folder's tracked files as a directory
+// listing with each entry's last commit, and a file view that fetches the
+// file from /raw and highlights it in the browser. Binary and oversized files
+// link to GitHub. The location lives in the URL hash: #files/<dir-or-file>.
+import { GITHUB_REF, GITHUB_REPO, type Model } from "../lib/catalog";
+import { icon } from "../lib/icons";
+
+interface Props {
+  model: Model;
+}
+const { model } = Astro.props;
+const data = {
+  id: model.id,
+  path: model.path,
+  leaf: model.id.split("/").pop(),
+  repo: GITHUB_REPO,
+  ref: GITHUB_REF,
+  files: model.files.map((f) => [f.path, f.size, f.viewable ?? "", f.commit]),
+  commits: model.commits.map((c) => [c.sha, c.date, c.subject]),
+};
+---
+
+<div class="fb">
+  <div class="fb-bar">
+    <span class="btn ref"><Fragment set:html={icon("branch", 14)} />{GITHUB_REF}</span>
+    <nav class="crumbs"></nav>
+    <span class="dir-size mono"></span>
+    <div class="fb-right">
+      <div class="input-wrap goto">
+        <Fragment set:html={icon("search", 14)} />
+        <input class="input" type="search" placeholder="Go to file" autocomplete="off" />
+        <div class="menu" hidden></div>
+      </div>
+      <a class="btn hist" target="_blank" rel="noopener"><Fragment set:html={icon("history", 14)} />History</a>
+    </div>
+  </div>
+  <div class="fb-box"></div>
+  <script type="application/json" class="fb-data" set:html={JSON.stringify(data)} />
+</div>
+
+<style>
+  .fb { padding-top: 28px; }
+  .fb-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .ref { cursor: default; }
+  .ref:hover { background: var(--bg); border-color: var(--g200); }
+  .crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 16px; min-width: 0; }
+  .crumbs :global(a) { color: var(--g700); }
+  .crumbs :global(a:hover) { color: var(--blue); text-decoration: underline; }
+  .crumbs :global(.sep) { color: var(--g300); }
+  .crumbs :global(.cur) { color: var(--g900); font-weight: 600; }
+  .dir-size { font-size: 12.5px; color: var(--g500); border: 1px solid var(--g200); border-radius: 6px; padding: 0 6px; }
+  .dir-size:empty { display: none; }
+  .fb-right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .goto { width: 240px; }
+  .goto .input { font-size: 14px; padding-top: 4px; padding-bottom: 4px; }
+  .goto .menu { width: 420px; left: auto; right: 0; }
+  @media (max-width: 700px) { .fb-right { margin-left: 0; width: 100%; } .goto { flex: 1; } .goto .menu { width: auto; left: 0; } }
+
+  .fb-box { border: 1px solid var(--g200); border-radius: 12px; overflow: hidden; }
+  .fb-box :global(.head) {
+    display: flex; align-items: center; gap: 12px; padding: 9px 14px; background: var(--g50);
+    border-bottom: 1px solid var(--g200); font-size: 14.5px; min-width: 0;
+  }
+  .fb-box :global(.sha) { font-family: var(--mono); font-size: 12.5px; color: var(--g700); border: 1px solid var(--g200); border-radius: 6px; padding: 0 6px; background: var(--bg); }
+  .fb-box :global(.sha:hover) { color: var(--blue); }
+  .fb-box :global(.subj) { font-family: var(--mono); font-size: 13.5px; color: var(--g500); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+  .fb-box :global(.when) { color: var(--g400); font-size: 14px; white-space: nowrap; margin-left: auto; }
+  .fb-box :global(.ent) {
+    display: grid; grid-template-columns: minmax(0, 2.2fr) 90px minmax(0, 2fr) 130px; gap: 16px; align-items: center;
+    padding: 7px 14px; border-top: 1px solid var(--g100); font-size: 15px;
+  }
+  .fb-box :global(.head + .ent) { border-top: 0; }
+  .fb-box :global(.ent:hover) { background: var(--g50); }
+  @media (max-width: 800px) { .fb-box :global(.ent) { grid-template-columns: minmax(0, 1fr) 80px 90px; } .fb-box :global(.ent .subj) { display: none; } }
+  .fb-box :global(.nm) { display: flex; align-items: center; gap: 9px; min-width: 0; color: var(--g900); }
+  .fb-box :global(.nm span) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fb-box :global(.nm:hover span) { text-decoration: underline; }
+  .fb-box :global(.nm .i) { color: var(--g400); }
+  .fb-box :global(.nm.dir .i) { color: var(--folder); }
+  .fb-box :global(.sz) { font-family: var(--mono); font-size: 13px; color: var(--g500); text-align: right; white-space: nowrap; }
+  .fb-box :global(.ent .when) { text-align: right; }
+  .fb-box :global(.filebar) { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--g200); font-size: 14px; color: var(--g500); }
+  .fb-box :global(.filebar .sp) { flex: 1; }
+  .fb-box :global(.msg) { padding: 20px 16px; color: var(--g500); margin: 0; }
+  .fb-box :global(.code-wrap) { overflow: auto; max-height: 80vh; }
+  .fb-box :global(table.code) { border-collapse: collapse; font: 13px/1.65 var(--mono); width: 100%; }
+  .fb-box :global(td.ln) { width: 1%; padding: 0 14px; text-align: right; color: var(--g400); user-select: none; vertical-align: top; }
+  .fb-box :global(td.lc) { padding: 0 16px 0 6px; white-space: pre; color: var(--g900); }
+  .fb-box :global(.img-view) { padding: 16px; }
+  .fb-box :global(.img-view img) { max-width: 100%; display: block; }
+  /* highlight.js tokens */
+  .fb-box :global(.hljs-keyword), .fb-box :global(.hljs-built_in), .fb-box :global(.hljs-selector-tag) { color: #a626a4; }
+  .fb-box :global(.hljs-string), .fb-box :global(.hljs-attr) { color: #50a14f; }
+  .fb-box :global(.hljs-number), .fb-box :global(.hljs-literal) { color: #986801; }
+  .fb-box :global(.hljs-comment) { color: var(--g400); font-style: italic; }
+  .fb-box :global(.hljs-title), .fb-box :global(.hljs-section) { color: #4078f2; }
+  .fb-box :global(.hljs-meta), .fb-box :global(.hljs-type) { color: #c18401; }
+  @media (prefers-color-scheme: dark) {
+    .fb-box :global(.hljs-keyword), .fb-box :global(.hljs-built_in), .fb-box :global(.hljs-selector-tag) { color: #c678dd; }
+    .fb-box :global(.hljs-string), .fb-box :global(.hljs-attr) { color: #98c379; }
+    .fb-box :global(.hljs-number), .fb-box :global(.hljs-literal) { color: #d19a66; }
+    .fb-box :global(.hljs-title), .fb-box :global(.hljs-section) { color: #61afef; }
+    .fb-box :global(.hljs-meta), .fb-box :global(.hljs-type) { color: #e5c07b; }
+  }
+</style>
+
+<script>
+  import hljs from "highlight.js/lib/common";
+  import { icon } from "../lib/icons";
+
+  type Entry = [string, number, string, number];
+  type C = [string, string, string];
+
+  const root = document.querySelector<HTMLElement>(".fb")!;
+  const data = JSON.parse(root.querySelector(".fb-data")!.textContent!);
+  const files: Entry[] = data.files;
+  const commits: C[] = data.commits;
+  const byPath = new Map(files.map((f) => [f[0], f]));
+  const box = root.querySelector<HTMLElement>(".fb-box")!;
+  const crumbs = root.querySelector<HTMLElement>(".crumbs")!;
+  const dirSize = root.querySelector<HTMLElement>(".dir-size")!;
+  const hist = root.querySelector<HTMLAnchorElement>(".hist")!;
+  const goto = root.querySelector<HTMLInputElement>(".goto input")!;
+  const gotoMenu = root.querySelector<HTMLElement>(".goto .menu")!;
+
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const fmt = (n: number) =>
+    n < 1000 ? `${n} Bytes` : n < 1e6 ? `${(n / 1e3).toFixed(1)} kB` : n < 1e9 ? `${(n / 1e6).toFixed(1)} MB` : `${(n / 1e9).toFixed(2)} GB`;
+  function rel(iso: string): string {
+    const d = (Date.now() - new Date(iso).getTime()) / 86400000;
+    if (d < 1) return "today";
+    if (d < 2) return "yesterday";
+    if (d < 31) return `${Math.floor(d)} days ago`;
+    if (d < 60) return "1 month ago";
+    if (d < 365) return `${Math.floor(d / 30)} months ago`;
+    return "over 1 year ago";
+  }
+  // The newest of a set of commit indices (commits are newest first).
+  const newest = (idx: number[]) => idx.filter((i) => i >= 0).reduce((a, b) => Math.min(a, b), Infinity);
+
+  function current(): string {
+    const h = decodeURIComponent(location.hash);
+    return h.startsWith("#files/") ? h.slice(7).replace(/\/$/, "") : "";
+  }
+  const link = (p: string) => (p ? `#files/${encodeURI(p)}` : "#files");
+
+  function commitHead(ci: number): string {
+    if (!isFinite(ci) || !commits[ci]) return `<div class="head"><span class="subj">No history</span></div>`;
+    const [sha, date, subject] = commits[ci];
+    return `<div class="head"><a class="sha" href="${data.repo}/commit/${sha}" target="_blank" rel="noopener">${sha}</a><span class="subj" title="${esc(subject)}">${esc(subject)}</span><span class="when" title="${date}">${rel(date)}</span></div>`;
+  }
+
+  function drawCrumbs(p: string, isFile: boolean) {
+    const parts = p ? p.split("/") : [];
+    const out = [parts.length ? `<a href="#files">${esc(data.leaf)}</a>` : `<span class="cur">${esc(data.leaf)}</span>`];
+    parts.forEach((seg, i) => {
+      const sub = parts.slice(0, i + 1).join("/");
+      out.push(`<span class="sep">/</span>`);
+      out.push(i === parts.length - 1 ? `<span class="cur">${esc(seg)}</span>` : `<a href="${link(sub)}">${esc(seg)}</a>`);
+    });
+    crumbs.innerHTML = out.join("");
+    hist.href = `${data.repo}/commits/${data.ref}/${p ? `${data.path}/${p}` : data.path}`;
+    if (isFile) dirSize.textContent = "";
+  }
+
+  function drawDir(dir: string) {
+    const prefix = dir ? dir + "/" : "";
+    const inDir = files.filter((f) => f[0].startsWith(prefix));
+    const dirs = new Map<string, Entry[]>();
+    const direct: Entry[] = [];
+    for (const f of inDir) {
+      const rest = f[0].slice(prefix.length);
+      const slash = rest.indexOf("/");
+      if (slash < 0) direct.push(f);
+      else {
+        const name = rest.slice(0, slash);
+        if (!dirs.has(name)) dirs.set(name, []);
+        dirs.get(name)!.push(f);
+      }
+    }
+    drawCrumbs(dir, false);
+    dirSize.textContent = fmt(inDir.reduce((s, f) => s + f[1], 0));
+    const row = (href: string, ic: string, cls: string, name: string, size: string, ci: number) => {
+      const c = isFinite(ci) ? commits[ci] : null;
+      return `<div class="ent"><a class="nm ${cls}" href="${href}">${icon(ic, 17)}<span>${esc(name)}</span></a><span class="sz">${size}</span><span class="subj">${c ? esc(c[2]) : ""}</span><span class="when" ${c ? `title="${c[1]}"` : ""}>${c ? rel(c[1]) : ""}</span></div>`;
+    };
+    const rows: string[] = [];
+    for (const name of [...dirs.keys()].sort((a, b) => a.localeCompare(b)))
+      rows.push(row(link(prefix + name), "folder", "dir", name, "", newest(dirs.get(name)!.map((f) => f[3]))));
+    for (const f of direct.sort((a, b) => a[0].localeCompare(b[0])))
+      rows.push(row(link(f[0]), "file", "", f[0].slice(prefix.length), fmt(f[1]), f[3] >= 0 ? f[3] : Infinity));
+    box.innerHTML = commitHead(newest(inDir.map((f) => f[3]))) + rows.join("");
+  }
+
+  function langFor(p: string): string | undefined {
+    const name = p.split("/").pop()!.toLowerCase();
+    if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
+    const ext = name.includes(".") ? name.split(".").pop()! : "";
+    const map: Record<string, string> = { py: "python", yml: "yaml", yaml: "yaml", md: "markdown", sh: "bash", toml: "ini", cu: "cpp", cuh: "cpp", h: "cpp", hpp: "cpp", cc: "cpp", cpp: "cpp", json: "json", txt: "plaintext" };
+    const l = map[ext] ?? ext;
+    return hljs.getLanguage(l) ? l : undefined;
+  }
+
+  async function drawFile(p: string, f: Entry) {
+    drawCrumbs(p, true);
+    const raw = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/raw/${data.id}/${p}`;
+    const gh = `${data.repo}/blob/${data.ref}/${data.path}/${p}`;
+    const bar = (extra: string) =>
+      `<div class="filebar"><span>${extra}${fmt(f[1])}</span><span class="sp"></span>${f[2] ? `<a class="btn sm" href="${raw}" target="_blank" rel="noopener">raw</a>` : ""}<a class="btn sm" href="${gh}" target="_blank" rel="noopener">${icon("external", 13)}GitHub</a></div>`;
+    const head = commitHead(f[3] >= 0 ? f[3] : Infinity);
+    if (!f[2]) {
+      box.innerHTML = head + bar("") + `<p class="msg">This file is binary or too large to show here. Open it on GitHub.</p>`;
+      return;
+    }
+    if (f[2] === "image") {
+      box.innerHTML = head + bar("") + `<div class="img-view"><img src="${raw}" alt=""></div>`;
+      return;
+    }
+    box.innerHTML = head + bar("") + `<p class="msg">Loading…</p>`;
+    const text = await (await fetch(raw)).text();
+    if (current() !== p) return;
+    const lang = langFor(p);
+    const html = lang ? hljs.highlight(text, { language: lang, ignoreIllegals: true }).value : esc(text);
+    // Split highlighted HTML per line, reopening spans that cross a newline.
+    const lines: string[] = [];
+    const open: string[] = [];
+    for (const rawLine of html.split("\n")) {
+      let line = open.join("") + rawLine;
+      for (const m of rawLine.matchAll(/<span[^>]*>|<\/span>/g)) m[0] === "</span>" ? open.pop() : open.push(m[0]);
+      line += "</span>".repeat(open.length);
+      lines.push(line);
+    }
+    if (lines.length && lines[lines.length - 1] === "") lines.pop();
+    box.innerHTML =
+      head +
+      bar(`${lines.length} lines · `) +
+      `<div class="code-wrap"><table class="code"><tbody>${lines
+        .map((l, i) => `<tr><td class="ln">${i + 1}</td><td class="lc">${l || " "}</td></tr>`)
+        .join("")}</tbody></table></div>`;
+  }
+
+  function sync() {
+    if (!location.hash.startsWith("#files")) return;
+    const p = current();
+    const f = byPath.get(p);
+    if (f) drawFile(p, f);
+    else if (!p || files.some((x) => x[0].startsWith(p + "/"))) drawDir(p);
+    else {
+      drawCrumbs(p, true);
+      box.innerHTML = `<p class="msg">No such file or folder in this model.</p>`;
+    }
+  }
+
+  // Go to file
+  let hits: Entry[] = [];
+  let hl = 0;
+  function drawGoto() {
+    const q = goto.value.trim().toLowerCase();
+    if (!q) return (gotoMenu.hidden = true);
+    hits = files.filter((f) => f[0].toLowerCase().includes(q)).slice(0, 12);
+    hl = Math.min(hl, Math.max(hits.length - 1, 0));
+    gotoMenu.innerHTML = hits.length
+      ? hits.map((f, i) => `<a class="menu-item${i === hl ? " hl" : ""}" href="${link(f[0])}">${icon("file", 14)}<span class="mono" style="font-size:13px">${esc(f[0])}</span></a>`).join("")
+      : `<div class="menu-empty">No matching files</div>`;
+    gotoMenu.hidden = false;
+  }
+  goto.addEventListener("input", () => { hl = 0; drawGoto(); });
+  goto.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { hl = Math.min(hl + 1, hits.length - 1); drawGoto(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { hl = Math.max(hl - 1, 0); drawGoto(); e.preventDefault(); }
+    else if (e.key === "Enter" && hits[hl]) { location.hash = link(hits[hl][0]).slice(1); goto.value = ""; gotoMenu.hidden = true; }
+    else if (e.key === "Escape") gotoMenu.hidden = true;
+  });
+  gotoMenu.addEventListener("click", () => { goto.value = ""; gotoMenu.hidden = true; });
+  document.addEventListener("click", (e) => { if (!goto.parentElement!.contains(e.target as Node)) gotoMenu.hidden = true; });
+
+  window.addEventListener("hashchange", sync);
+  sync();
+</script>
