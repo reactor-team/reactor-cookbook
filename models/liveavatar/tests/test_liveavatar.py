@@ -1,4 +1,7 @@
+import asyncio
 import io
+import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -7,8 +10,8 @@ from PIL import Image
 from reactor_runtime import ApplicationError, CommandError, StepOutcome, UploadedFile
 from reactor_runtime.interface.model.contract import ModelContract
 
-from liveavatar_pipeline import LiveAvatar
 from liveavatar_model import LiveAvatarModel, TakeFailed
+from liveavatar_pipeline import LiveAvatar
 from liveavatar_types import LiveAvatarOutput, LiveAvatarState, StateUpdate
 
 
@@ -125,6 +128,10 @@ async def test_invalid_upload_does_not_replace_input(model):
     with pytest.raises(CommandError):
         await model.set_audio(audio_upload(0.2))
     assert model.state._audio.read_bytes() == original
+    assert set(Path(model.state._directory.name).iterdir()) == {
+        model.state._image,
+        model.state._audio,
+    }
 
 
 @pytest.mark.asyncio
@@ -171,10 +178,12 @@ async def test_reset_keeps_upload_directory_and_emits_one_final_snapshot(model):
     from unittest.mock import AsyncMock
 
     await model.set_avatar_image(image_upload())
+    await model.set_audio(audio_upload())
     directory = model.state._directory
     model.send = AsyncMock()
     await model.reset()
     assert model.state._directory is directory
+    assert list(Path(directory.name).iterdir()) == []
     assert model.send.call_count == 1
     assert not model.send.call_args.args[0].ready
     await model.set_avatar_image(image_upload())
@@ -207,6 +216,7 @@ async def test_session_cleanup_and_new_session_defaults(tmp_path):
 @pytest.mark.asyncio
 async def test_application_hooks_with_fake_model(model):
     from unittest.mock import Mock
+
     from liveavatar_model import LiveAvatarResult
 
     model._engine = Mock()
@@ -234,19 +244,19 @@ async def test_application_hooks_with_fake_model(model):
 
 @pytest.mark.asyncio
 async def test_audio_timeout_preserves_selection_and_cleans_upload(model, monkeypatch):
-    import subprocess
 
     await model.set_audio(audio_upload())
     original = model.state._audio.read_bytes()
 
     def timeout(*args, **kwargs):
+        Path(args[0][-1]).write_bytes(b"partial WAV")
         raise subprocess.TimeoutExpired("ffmpeg", kwargs["timeout"])
 
     monkeypatch.setattr(subprocess, "run", timeout)
     with pytest.raises(CommandError, match="timed out"):
         await model.set_audio(audio_upload())
     assert model.state._audio.read_bytes() == original
-    assert not model._path("audio-upload").exists()
+    assert list(Path(model.state._directory.name).iterdir()) == [model.state._audio]
 
 
 @pytest.mark.asyncio
@@ -261,3 +271,68 @@ async def test_oversized_image_refused_before_conversion(model, monkeypatch):
         await model.set_avatar_image(image)
     decoded.convert.assert_not_called()
     assert model.state._image is None
+
+
+@pytest.mark.asyncio
+async def test_failed_and_cleared_pose_uploads_remove_staged_media(model):
+    clip = (
+        await asyncio.to_thread(
+            subprocess.run,
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=s=32x32:r=25",
+                "-frames:v",
+                "2",
+                "-c:v",
+                "mpeg4",
+                "-f",
+                "mp4",
+                "-movflags",
+                "frag_keyframe+empty_moov",
+                "pipe:1",
+            ],
+            capture_output=True,
+            check=True,
+        )
+    ).stdout
+    await model.set_pose_video(UploadedFile("pose.mp4", "video/mp4", clip))
+    selected = model.state._pose
+    with pytest.raises(CommandError, match="readable video track"):
+        await model.set_pose_video(UploadedFile("broken.mp4", "video/mp4", b"broken"))
+    assert selected.read_bytes() == clip
+    assert list(selected.parent.iterdir()) == [selected]
+    await model.set_pose_video(None)
+    assert model.state._pose is None and not selected.exists()
+
+
+@pytest.mark.asyncio
+async def test_idle_controls_keep_workers_and_active_disconnect_shuts_them_down(
+    tmp_path,
+):
+    from unittest.mock import Mock
+
+    app = LiveAvatar()
+    app._work = tmp_path
+    runner = app._engine = Mock()
+    app.state = LiveAvatarState()
+    await app.on_session_started()
+    await app.stop_take()
+    await app.reset()
+    await app.on_session_ended()
+    assert app._engine is runner
+    runner.shutdown.assert_not_called()
+
+    app.state = LiveAvatarState()
+    await app.on_session_started()
+    await app.set_avatar_image(image_upload())
+    await app.set_audio(audio_upload())
+    await app.start()
+    directory = Path(app.state._directory.name)
+    await app.on_session_ended()
+    runner.shutdown.assert_called_once_with()
+    assert app._engine is None and not directory.exists()

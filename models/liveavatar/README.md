@@ -14,7 +14,7 @@ GPUs. A session waits for your inputs and an explicit `start` command.
   Docker, an NVIDIA driver and NVIDIA Container Toolkit.
 - Three available NVIDIA B200 GPUs.
 - A high-capacity volume for the base checkpoint, LiveAvatar checkpoint,
-  image layers and persistent runtime data.
+  image layers and a writable directory for uploads and compilation caches.
 
 ## Run
 
@@ -29,12 +29,14 @@ below. Replace `/path/to/liveavatar-weights` with that directory:
 ```sh
 cd models/liveavatar
 reactor build
-reactor run --gpus '"device=0,1,2"' \
+reactor run --gpus '"device=0,1,2"' --shm-size 2g \
   --weights /path/to/liveavatar-weights
 ```
 
 `reactor run` serves at `http://localhost:8080` by default and reuses the built
-image and mounted weights. Rebuild after changing code, configuration or
+image and mounted weights. Use a CLI with `--shm-size` support. Workers use
+shared memory to transfer each RGB clip and its audio to the Runtime.
+Rebuild after changing code, configuration or
 dependencies. Adjust `--gpus` to select available devices and add `--port` to
 choose a different HTTP port. Check readiness and the generated contract:
 
@@ -46,10 +48,11 @@ curl -fsS http://localhost:8080/schema
 Wait for `state: available` before connecting a new session. During loading,
 the health endpoint can already return HTTP 200.
 
-The container uses the prepared weights and keeps persistent runtime data
-beneath the weights mount. Storage locations are chosen by the operator.
-The source is pinned during the image build; startup validates that checkout
-and the mounted weights. Existing cache environment settings are respected.
+The service can use a read-only weights mount. It stages uploads and compiler
+caches in a per-user directory under the system temporary directory. Set
+`LIVEAVATAR_WORK_DIR` to a writable path inside the container to choose another
+location. Explicit cache settings such as `TORCHINDUCTOR_CACHE_DIR` take
+precedence. Startup verifies the pinned source and mounted weights.
 
 ## Connect and prepare a take
 
@@ -67,6 +70,7 @@ model commands in Controls:
 Image and audio may be selected in either order. Await each command reply
 before starting. A newly created session has empty input selections;
 uploading files and changing conditions leave generation idle until `start`.
+If a replacement upload fails validation, the previous selection is retained.
 
 Use a client with image and audio upload support. In Sandbox, creating the
 session and sending the model's `start` command are separate actions.
@@ -89,9 +93,9 @@ All input setters apply to the next `start` and require an idle take.
 | `stop()` | End the take and clear queued playback, retaining inputs, options and progress. |
 | `reset()` | End the take, clear selections and progress, and restore the default seed and clip limit. |
 
-The prompt conditions visual appearance and performance; speech comes from
-the uploaded audio. Prepare pose guidance before uploading it. Pose-conditioned
-generation requires separate acceptance testing.
+The prompt guides visual appearance and performance. The uploaded audio
+supplies the speech. For pose control, upload a prepared pose sequence
+paired with that speech.
 
 A running take rejects input changes. Send `stop`, await its reply, update
 conditions, then send `start` for another take. Commands run between inference
@@ -101,9 +105,11 @@ turns, so an in-flight clip can delay a stop or reset reply.
 
 The model loads once at service startup. Each take uses the selected image,
 audio and conditions throughout its generation. Automatic completion retains
-the selections and model weights for another take. Ending a session clears its
-uploaded selections. Stopping an active take releases its generation workers;
-the next take can therefore incur model-loading latency.
+the selections and model weights for another take. Idle stop, reset and
+disconnect keep the workers loaded. Reset and session end delete uploaded files.
+Interrupting an active take shuts down its worker group together. The next
+`start` acknowledges the request immediately. Its first inference turn reloads
+the workers before producing the first clip.
 
 Each inference turn supplies one audiovisual clip. The first clip carries
 45 frames; later clips carry 48. `main_video` plays at the model's native
@@ -127,8 +133,8 @@ Commands return typed, command-correlated replies:
 - `generation_ended` reports `complete` when a take reaches its audio or
   clip limit, or contains the generation failure text.
 
-Rejected commands return `command_error`. Missing image or audio produces
-`inputs_required`; changing inputs during generation produces
+The awaited SDK call raises on rejection. Starting without both required
+inputs returns `inputs_required`. Changing inputs during generation returns
 `take_running`. Read command acknowledgements from the awaited call and use
 `state_update` to render the current session.
 
@@ -136,13 +142,13 @@ Rejected commands return `command_error`. Missing image or audio produces
 
 The first clip includes model preparation and compilation. Throughput depends
 on hardware, clip conditions and transport; use received video timing when
-measuring realtime playback. Stop/reset can add model-loading latency to the
-next take.
+measuring realtime playback.
 
 Playback can contain waiting silence while the next clip is being generated.
 
 [check_model.py](check_model.py) exercises the real SDK upload and command
-sequence and saves received video, received PCM and messages. Its `take.mp4`
+sequence and saves received video, received PCM and messages. Pass
+`--pose-video pose.mp4` to exercise optional pose guidance. Its `take.mp4`
 preview pairs received video with the uploaded speech on the model timeline;
 use `audio.wav` to inspect the actual received audio, including waiting
 silence.
@@ -157,15 +163,15 @@ silence.
   supplies the LiveAvatar checkpoint.
 
 Review the upstream repositories and model cards for their usage terms.
-Checkpoint revisions are pinned in `liveavatar_assets.py`, and the image's
-source revision is pinned in `reactor.yaml`.
-
+The source and checkpoint revisions are pinned in `liveavatar_assets.py`.
 
 ## Tests
 
-From the repository root, run the CPU contract tests without model weights:
+Use Python 3.12 with `ffmpeg` and `ffprobe` on the path. From the repository
+root, install the CPU test dependencies and run the suite in a virtual environment.
 
 ```sh
 cd models/liveavatar
+python -m pip install reactor-runtime==3.11.9 -r requirements-dev.txt
 PYTHONPATH=. python -m pytest tests/ -q
 ```

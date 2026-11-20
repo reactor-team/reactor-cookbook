@@ -13,7 +13,6 @@ class LiveAvatarSettings:
     source: Path
     base: Path
     lora: Path
-    work: Path
     turbo: bool = True
 
 
@@ -58,7 +57,15 @@ class LiveAvatarResult:
 
 
 class TakeFailed(RuntimeError):
-    """The native worker failed to initialize or produce the requested clip."""
+    """A recoverable failure belonging to one take, including across worker IPC."""
+
+    def __init__(self, take_id: int, reason: str):
+        super().__init__(take_id, reason)
+        self.take_id = take_id
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return self.reason
 
 
 class LiveAvatarModel:
@@ -96,18 +103,27 @@ class LiveAvatarModel:
                     max_chunks=conditions.max_chunks,
                 )
             except Exception as error:
-                raise TakeFailed(str(error) or type(error).__name__) from error
+                raise TakeFailed(
+                    input.take_id, str(error) or type(error).__name__
+                ) from error
             self._take_id = input.take_id
         if self._complete:
             raise RuntimeError("The take completed; start a new take before generating")
         try:
             media = self._backend.next()
         except Exception as error:
-            raise TakeFailed(str(error) or type(error).__name__) from error
+            raise TakeFailed(
+                input.take_id, str(error) or type(error).__name__
+            ) from error
         if media is None:
             self._complete = True
             return LiveAvatarResult(
-                input.take_id, None, None, self._chunks, self._frames, True
+                take_id=input.take_id,
+                video=None,
+                audio=None,
+                chunks=self._chunks,
+                frames=self._frames,
+                complete=True,
             )
         video, audio = media
         expected = 45 if self._chunks == 0 else 48
@@ -130,7 +146,12 @@ class LiveAvatarModel:
         self._chunks += 1
         self._frames += len(video)
         return LiveAvatarResult(
-            input.take_id, video, audio, self._chunks, self._frames, False
+            take_id=input.take_id,
+            video=video,
+            audio=audio,
+            chunks=self._chunks,
+            frames=self._frames,
+            complete=False,
         )
 
     def reset(self) -> None:

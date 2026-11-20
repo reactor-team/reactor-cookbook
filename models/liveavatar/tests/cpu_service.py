@@ -5,8 +5,8 @@ import soundfile as sf
 from reactor_runtime.serve import main
 
 from liveavatar_audio import OUTPUT_SAMPLE_RATE, playback_audio
-from liveavatar_pipeline import LiveAvatar
 from liveavatar_model import LiveAvatarModel
+from liveavatar_pipeline import LiveAvatar
 
 
 class Surrogate:
@@ -26,21 +26,33 @@ class Surrogate:
         audio = self.audio[self.offset : self.offset + samples]
         self.offset += samples
         audio = np.pad(audio, (0, samples - len(audio)))
-        return np.full((count, 64, 64, 3), self.index * 30, np.uint8), audio[None, :]
+        return np.full((count, 64, 64, 3), self.index * 30 % 256, np.uint8), audio[
+            None, :
+        ]
 
     def close(self):
         pass
 
 
+class CPURunner(LiveAvatarModel):
+    def shutdown(self):
+        self.reset()
+
+
+def start_cpu_engine(self):
+    if self._engine is None:
+        self._engine = CPURunner()
+        self._engine._backend = Surrogate()
+
+
 def load(self, config_path=None):
-    from reactor_runtime import get_weights_path
+    from liveavatar_assets import configure_cache_environment
 
-    self._work = get_weights_path() / ".runtime"
-    self._work.mkdir(parents=True, exist_ok=True)
-    self._engine = LiveAvatarModel()
-    self._engine._backend = Surrogate()
+    self._work = configure_cache_environment()
+    self._start_engine()
 
 
-LiveAvatar.load = load
 if __name__ == "__main__":
+    LiveAvatar._start_engine = start_cpu_engine
+    LiveAvatar.load = load
     main()

@@ -1,6 +1,7 @@
 """Exercise take identity, native clip boundaries and application failure paths."""
 
 import asyncio
+import pickle
 import subprocess
 import sys
 from dataclasses import FrozenInstanceError
@@ -9,15 +10,17 @@ from unittest.mock import AsyncMock, Mock
 
 import numpy as np
 import pytest
+from reactor_runtime import ApplicationError, StepOutcome
+
 from liveavatar_model import (
     LiveAvatarInput,
     LiveAvatarModel,
+    LiveAvatarResult,
     TakeConditions,
     TakeFailed,
 )
 from liveavatar_pipeline import LiveAvatar
 from liveavatar_types import LiveAvatarState
-from reactor_runtime import ApplicationError, StepOutcome
 
 
 class Backend:
@@ -203,3 +206,64 @@ def test_invalid_audio_does_not_count_clip(bad_audio):
     with pytest.raises(ValueError, match="48 kHz"):
         model.generate(step)
     assert model._chunks == model._frames == 0
+
+
+@pytest.mark.asyncio
+async def test_finished_or_failed_old_take_cannot_affect_restarted_take():
+    application = app()
+    await application.start()
+    first = await application.process_input()
+    chunk = application.generate(first)
+    complete = LiveAvatarResult(
+        take_id=first.take_id,
+        video=None,
+        audio=None,
+        chunks=1,
+        frames=45,
+        complete=True,
+    )
+    failed = pickle.loads(pickle.dumps(TakeFailed(first.take_id, "old worker failed")))
+    await application.stop_take()
+    # Runtime gives a reconnect a fresh state object on the same application.
+    application.state = LiveAvatarState()
+    application.state._image, application.state._audio = (
+        Path("new.png"),
+        Path("new.wav"),
+    )
+    await application.start()
+    assert application.state._take_id != first.take_id
+    await application.process_input()
+    runner = application._engine
+    application.send.reset_mock()
+    for outcome in (
+        StepOutcome(result=chunk),
+        StepOutcome(result=complete),
+        StepOutcome(error=failed),
+    ):
+        assert await application.process_output(outcome) is None
+    application.send.assert_not_called()
+    runner.shutdown.assert_not_called()
+    assert application._engine is runner and application.state._running
+    assert application.state._chunks == application.state._frames == 0
+    assert application.state._applied_take_id is application.state._error is None
+    assert application.generate(await application.process_input()).chunks == 1
+
+
+@pytest.mark.asyncio
+async def test_start_after_interrupt_acknowledges_before_loading_and_can_retry():
+    application = app()
+    await application.start()
+    await application.stop_take()
+    restart = application._start_engine
+    application._start_engine = Mock(side_effect=OSError("worker could not load"))
+    assert (await application.start()).action == "start"
+    application._start_engine.assert_not_called()
+    with pytest.raises(ApplicationError, match="reload generation workers"):
+        await application.process_input()
+    application._start_engine.assert_called_once_with()
+    assert not application.state._running and application.state._chunks == 0
+    ended, snapshot = [call.args[0] for call in application.send.call_args_list[-2:]]
+    assert ended.reason == snapshot.error and not snapshot.running
+    application._start_engine = restart
+    await application.start()
+    assert application.generate(await application.process_input()).chunks == 1

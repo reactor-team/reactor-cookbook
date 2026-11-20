@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 from liveavatar_model import LiveAvatarSettings
@@ -13,9 +14,16 @@ BASE_REVISION = "dab4e9c55bbe4c8c4d03db1c2c98c7f0ac9c454b"
 LORA_REVISION = "92cdccd12a91e8a63767a7c821b7c75e51d5a172"
 
 
-def configure_cache_environment(weights_root: Path) -> Path:
-    """Keep generated caches under the mount, respecting operator overrides."""
-    work = weights_root / ".runtime"
+def configure_cache_environment() -> Path:
+    """Keep uploads and generated caches writable independently of mounted weights."""
+    override = os.environ.get("LIVEAVATAR_WORK_DIR")
+    work = (
+        Path(override).expanduser()
+        if override
+        else Path(tempfile.gettempdir()) / f"liveavatar-{os.getuid()}"
+    )
+    work = work.resolve()
+    work.mkdir(mode=0o700, parents=True, exist_ok=True)
     for name, relative in {
         "HF_HOME": "cache",
         "XDG_CACHE_HOME": "cache",
@@ -27,7 +35,6 @@ def configure_cache_environment(weights_root: Path) -> Path:
     }.items():
         path = Path(os.environ.setdefault(name, str(work / relative)))
         path.mkdir(parents=True, exist_ok=True)
-    work.mkdir(parents=True, exist_ok=True)
     return work
 
 
@@ -81,7 +88,6 @@ def prepare_settings(weights_root: Path) -> LiveAvatarSettings:
         .expanduser()
         .resolve()
     )
-    work = configure_cache_environment(weights_root)
     base, lora = prepare_assets(
         weights_root,
         source,
@@ -93,6 +99,28 @@ def prepare_settings(weights_root: Path) -> LiveAvatarSettings:
         source=source,
         base=base,
         lora=lora,
-        work=work,
         turbo=os.environ.get("LIVEAVATAR_TURBO", "1") == "1",
+    )
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Check out the inference source for the serving image."
+    )
+    parser.add_argument("--checkout", required=True, type=Path)
+    target = parser.parse_args().checkout
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "--no-checkout",
+            "https://github.com/Alibaba-Quark/LiveAvatar.git",
+            str(target),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(target), "checkout", "--detach", SOURCE_REVISION], check=True
     )

@@ -18,6 +18,7 @@ async def main(args):
     audio = []
     audio_formats = set()
     ended = asyncio.Event()
+    generated_frames = 0
     failure = []
     messages = []
     async with Reactor(
@@ -35,8 +36,11 @@ async def main(args):
 
         @reactor.on_message
         def message(msg):
+            nonlocal generated_frames
             messages.append(msg)
             print(json.dumps(msg, ensure_ascii=False), flush=True)
+            if msg["type"] == "chunk_complete":
+                generated_frames += int(msg["data"]["frames"])
             if msg["type"] == "generation_ended":
                 if msg["data"]["reason"] != "complete":
                     failure.append(msg["data"]["reason"])
@@ -49,6 +53,10 @@ async def main(args):
         with args.audio.open("rb") as uploaded:
             driving_audio = await reactor.upload_file(uploaded)
         await reactor.send_command("set_audio", {"audio": driving_audio})
+        if args.pose_video is not None:
+            with args.pose_video.open("rb") as uploaded:
+                pose = await reactor.upload_file(uploaded)
+            await reactor.send_command("set_pose_video", {"pose_video": pose})
         await reactor.send_command(
             "set_prompt", {"prompt": args.prompt, "negative_prompt": ""}
         )
@@ -57,7 +65,9 @@ async def main(args):
         )
         await reactor.send_command("start", {})
         await asyncio.wait_for(ended.wait(), args.timeout)
-        await asyncio.sleep(args.chunks * 48 / 25 + 2)
+        if not failure:
+            pending_frames = max(0, generated_frames - len(frames))
+            await asyncio.sleep(pending_frames / 25 + 2)
         await reactor.send_command("stop", {})
     (args.output / "messages.json").write_text(
         json.dumps(messages, indent=2, ensure_ascii=False)
@@ -101,17 +111,20 @@ async def main(args):
         ],
         check=True,
     )
-    print(f"Saved {len(frames)} received video frames to {args.output / 'take.mp4'}")
+    print(
+        f"Received {len(frames)} of {generated_frames} generated frames. Saved {args.output / 'take.mp4'}"
+    )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", type=Path, required=True)
     parser.add_argument("--audio", type=Path, required=True)
+    parser.add_argument("--pose-video", type=Path, help="Prepared pose guidance MP4")
     parser.add_argument("--prompt", default="")
     parser.add_argument("--seed", type=int, default=420)
     parser.add_argument("--chunks", type=int, default=3)
-    parser.add_argument("--url", default="http://127.0.0.1:8791")
+    parser.add_argument("--url", default="http://127.0.0.1:8080")
     parser.add_argument("--timeout", type=float, default=1800)
     parser.add_argument("--output", type=Path, required=True)
     asyncio.run(main(parser.parse_args()))

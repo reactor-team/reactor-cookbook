@@ -13,7 +13,7 @@ def test_manifest_has_native_yaml_build_and_three_gpu_profile():
     assert manifest["model"]["resources"]["gpu"]["count"] == 3
     assert manifest["build"]["runtime_env"]["LIVEAVATAR_TURBO"] == "1"
     assert manifest["build"]["runtime_env"]["LIVEAVATAR_STEPS"] == "4"
-    assert manifest["build"]["runtime_version"] == "3.6.0"
+    assert manifest["build"]["runtime_version"] == "3.11.9"
     assert "--force-reinstall flash-attn-4==4.0.0b30" in manifest["build"]["run"][0]
     assert "from flash_attn.cute import" in manifest["build"]["run"][1]
     assert not (Path(__file__).parents[1] / "Dockerfile").exists()
@@ -81,10 +81,11 @@ def test_cache_setup_respects_operator_paths(tmp_path, monkeypatch):
         monkeypatch.delenv(key, raising=False)
     custom = tmp_path / "operator-cache"
     monkeypatch.setenv("HF_HOME", str(custom))
-    work = assets.configure_cache_environment(tmp_path / "weights")
+    monkeypatch.setenv("LIVEAVATAR_WORK_DIR", str(tmp_path / "runtime"))
+    work = assets.configure_cache_environment()
     assert os.environ["HF_HOME"] == str(custom)
     assert custom.is_dir()
-    assert work == tmp_path / "weights/.runtime"
+    assert work == tmp_path / "runtime"
     assert Path(os.environ["TMPDIR"]).is_relative_to(work)
 
 
@@ -92,15 +93,15 @@ def test_model_load_uses_explicit_settings_without_asset_preparation(
     tmp_path, monkeypatch
 ):
     import pickle
+    from unittest.mock import Mock
+
     import liveavatar_parallel
     from liveavatar_model import LiveAvatarModel, LiveAvatarSettings
-    from unittest.mock import Mock
 
     settings = LiveAvatarSettings(
         source=tmp_path,
         base=tmp_path / "base",
         lora=tmp_path / "lora",
-        work=tmp_path / "work",
     )
     assert pickle.loads(pickle.dumps(settings)) == settings
     backend = Mock()

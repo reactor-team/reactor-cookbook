@@ -1,7 +1,7 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-# ruff: noqa: F841, RUF059, TRY201 -- retain upstream generation bookkeeping.
-"""Streaming TPP adapter for pinned LiveAvatar source c3c47d031d8bf3247428333c1fe610579c71a551.
+# ruff: noqa: F841, RUF059 -- retain upstream generation bookkeeping.
+"""Streaming TPP adapter for the pinned LiveAvatar source.
 
 The generate method follows the upstream causal_s2v_pipeline_tpp.WanS2V
 implementation, with explicit stage ownership and per-block delivery.

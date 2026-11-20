@@ -84,7 +84,7 @@ class StateUpdate(ModelMessage):
             prompt=state._prompt or None,
             negative_prompt=state._negative_prompt or None,
             seed=state._seed,
-            ready=bool(state._image_name and state._audio_name),
+            ready=state._image is not None and state._audio is not None,
             running=state._running,
             completed_chunks=state._chunks,
             frames=state._frames,

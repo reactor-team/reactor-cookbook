@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pytest
+
 from liveavatar_parallel import ParallelBackend
 
 
@@ -126,7 +127,7 @@ def test_application_owns_runner_and_restart(monkeypatch):
     monkeypatch.setattr(application, "DistributedRunner", runner)
     value = application.LiveAvatar()
     value._settings = LiveAvatarSettings(
-        Path("/source"), Path("/base"), Path("/lora"), Path("/work")
+        source=Path("/source"), base=Path("/base"), lora=Path("/lora")
     )
     value.state = LiveAvatarState()
     value._start_engine()
@@ -191,6 +192,7 @@ def test_native_continuation_thread_pauses_at_each_delivered_clip(
     tmp_path, monkeypatch
 ):
     import soundfile as sf
+
     import liveavatar_parallel_worker
 
     value = backend()

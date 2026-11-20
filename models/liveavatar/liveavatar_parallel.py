@@ -22,6 +22,7 @@ from liveavatar_model import LiveAvatarSettings
 class ParallelBackend:
     def __init__(self, settings: LiveAvatarSettings, rank: int, world_size: int):
         import torch.distributed as dist
+
         from liveavatar_parallel_worker import load_rank
         from liveavatar_turbo import turbo_plan
 
@@ -71,7 +72,7 @@ class ParallelBackend:
             self._dist.barrier()
             if self.rank == self.output_rank:
                 self._results.put(("end", None))
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- relay native thread failures to all ranks
             self._results.put(("error", str(error) or type(error).__name__))
 
     def _deliver(self, frames):
@@ -82,10 +83,9 @@ class ParallelBackend:
         if not self.active:
             raise RuntimeError("No active take")
         payload = [None]
-        if self.rank == self.output_rank:
-            if self.pending_ack:
-                self._ack.put(True)
-                self.pending_ack = False
+        if self.rank == self.output_rank and self.pending_ack:
+            self._ack.put(True)
+            self.pending_ack = False
         # A failed DiT producer must reach the app even while the VAE producer
         # is blocked in native NCCL recv. Only small status objects are polled.
         while True:

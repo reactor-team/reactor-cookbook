@@ -23,7 +23,7 @@
     "/events/set_avatar_image": {
       "post": {
         "operationId": "set_avatar_image",
-        "summary": "Select the reference image for the next avatar take while idle. Requires an active session and a completed upload. Returns `input_accepted` and broadcasts `state_update`; generation begins after a separate `start`. Rejects invalid images with `invalid_image` and changes during a take with `take_running` through `command_error`.",
+        "summary": "Select the reference image for the next avatar take while idle. Requires an active session and a completed upload. Returns `input_accepted` and broadcasts `state_update`; generation begins after a separate `start`. Rejects invalid images with `invalid_image` and changes during a take with `take_running`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -61,7 +61,7 @@
     "/events/set_audio": {
       "post": {
         "operationId": "set_audio",
-        "summary": "Select the speech audio for the next avatar take while idle. Requires an active session and a completed upload. Returns `input_accepted` and broadcasts `state_update`; `start` also requires an accepted reference image. Rejects empty, oversized or unreadable audio with `invalid_audio`, audio shorter than 1.92 seconds with `audio_too_short`, and changes during a take with `take_running` through `command_error`.",
+        "summary": "Select the speech audio for the next avatar take while idle. Requires an active session and a completed upload. Returns `input_accepted` and broadcasts `state_update`; `start` also requires an accepted reference image. Rejects empty, oversized or unreadable audio with `invalid_audio`, audio shorter than 1.92 seconds with `audio_too_short`, and changes during a take with `take_running`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -99,7 +99,7 @@
     "/events/set_pose_video": {
       "post": {
         "operationId": "set_pose_video",
-        "summary": "Select or clear optional pose guidance for the next take while idle. Requires an active session. Returns `input_accepted` and broadcasts `state_update`; reference image and speech audio remain required before `start`. Rejects empty, oversized or unreadable video with `invalid_pose` and changes during a take with `take_running` through `command_error`.",
+        "summary": "Select or clear optional pose guidance for the next take while idle. Requires an active session. Returns `input_accepted` and broadcasts `state_update`; reference image and speech audio remain required before `start`. Rejects empty, oversized or unreadable video with `invalid_pose` and changes during a take with `take_running`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -142,7 +142,7 @@
     "/events/set_prompt": {
       "post": {
         "operationId": "set_prompt",
-        "summary": "Set the optional appearance, scene and performance description for the next take while idle. Returns `input_accepted` and broadcasts `state_update`; invalid field values or an active take return `command_error`. Applies at the next `start`, with speech supplied through `set_audio`. `negative_prompt` is retained as compatibility text and has no effect on video in this serving profile.",
+        "summary": "Set the optional appearance, scene and performance description for the next take while idle. Returns `input_accepted` and broadcasts `state_update`; an active take fails with `take_running`. Applies at the next `start`, with speech supplied through `set_audio`. `negative_prompt` is retained as compatibility text and has no effect on video in this serving profile.",
         "requestBody": {
           "required": true,
           "content": {
@@ -186,7 +186,7 @@
     "/events/set_generation_options": {
       "post": {
         "operationId": "set_generation_options",
-        "summary": "Select the sampling seed and clip limit for the next take while idle. Returns `input_accepted` and broadcasts `state_update`; invalid field values or an active take return `command_error`. Both values apply at the next explicit `start`; omitted fields take their declared defaults.",
+        "summary": "Select the sampling seed and clip limit for the next take while idle. Returns `input_accepted` and broadcasts `state_update`; an active take fails with `take_running`. Both values apply at the next explicit `start`; omitted fields take their declared defaults.",
         "requestBody": {
           "required": true,
           "content": {
@@ -232,7 +232,7 @@
     "/events/start": {
       "post": {
         "operationId": "start",
-        "summary": "Begin an avatar take from the selected image, speech audio and optional conditions. Valid while idle after `set_avatar_image` and `set_audio` succeed. Returns `take_changed` and broadcasts `state_update`, resetting progress and the generation error. Rejects missing inputs with `inputs_required` and an active take with `take_running` through `command_error`. Configure every desired input before calling this parameter-free command.",
+        "summary": "Begin an avatar take from the selected image, speech audio and optional conditions. Valid while idle after `set_avatar_image` and `set_audio` succeed. Returns `take_changed` and broadcasts `state_update`, resetting progress and the generation error. Rejects missing inputs with `inputs_required` and an active take with `take_running`. Configure every desired input before calling this parameter-free command.",
         "requestBody": {
           "required": true,
           "content": {

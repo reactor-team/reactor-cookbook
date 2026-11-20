@@ -1,0 +1,6 @@
+# CPU contract tests and media fixtures.
+Pillow
+scipy
+soundfile
+pytest
+pytest-asyncio

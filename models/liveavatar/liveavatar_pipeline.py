@@ -5,30 +5,12 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import subprocess
 import tempfile
 from pathlib import Path
 
-import liveavatar_assets as assets
-from liveavatar_model import (
-    LiveAvatarInput,
-    LiveAvatarModel,
-    LiveAvatarResult,
-    TakeConditions,
-    TakeFailed,
-)
-from liveavatar_types import (
-    ChunkComplete,
-    GenerationEnded,
-    InputAccepted,
-    LiveAvatarOutput,
-    LiveAvatarState,
-    StateUpdate,
-    TakeChanged,
-)
 from PIL import Image
-from reactor_runtime.distributed import DistributedRunner
-from liveavatar_turbo import turbo_plan
 from reactor_runtime import (
     ApplicationError,
     ClientInfo,
@@ -42,15 +24,107 @@ from reactor_runtime import (
     session_ended,
     session_started,
 )
+from reactor_runtime.distributed import DistributedRunner
+
+import liveavatar_assets as assets
+from liveavatar_model import (
+    LiveAvatarInput,
+    LiveAvatarModel,
+    LiveAvatarResult,
+    TakeConditions,
+    TakeFailed,
+)
+from liveavatar_turbo import turbo_plan
+from liveavatar_types import (
+    ChunkComplete,
+    GenerationEnded,
+    InputAccepted,
+    LiveAvatarOutput,
+    LiveAvatarState,
+    StateUpdate,
+    TakeChanged,
+)
 
 
-def _save_reference(data: bytes, temporary: Path, destination: Path) -> None:
+def _save_reference(data: bytes, destination: Path) -> None:
     """Validate and convert on the command's CPU preparation thread."""
     with Image.open(io.BytesIO(data)) as decoded:
         if decoded.width * decoded.height > 40_000_000:
-            raise ValueError("Image exceeds 40 million pixels")
-        decoded.convert("RGB").save(temporary)
-        temporary.replace(destination)
+            raise CommandError("invalid_image", "Image exceeds 40 million pixels")
+        with tempfile.TemporaryDirectory(dir=destination.parent) as directory:
+            converted = Path(directory) / "reference.png"
+            decoded.convert("RGB").save(converted)
+            converted.replace(destination)
+
+
+def _save_audio(data: bytes, destination: Path) -> None:
+    import soundfile as sf
+
+    with tempfile.TemporaryDirectory(dir=destination.parent) as directory:
+        raw = Path(directory) / "upload"
+        converted = Path(directory) / "speech.wav"
+        raw.write_bytes(data)
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-nostdin",
+                "-i",
+                str(raw),
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                str(converted),
+            ],
+            check=False,
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode:
+            raise CommandError("invalid_audio", "Cannot decode the uploaded audio")
+        try:
+            info = sf.info(converted)
+        except (RuntimeError, OSError) as error:
+            raise CommandError(
+                "invalid_audio", "Converted audio is unreadable"
+            ) from error
+        if info.frames < 48 * 16000 // 25:
+            raise CommandError(
+                "audio_too_short",
+                "Supply at least 1.92 seconds of audio for one native clip",
+            )
+        converted.replace(destination)
+
+
+def _save_pose(data: bytes, destination: Path) -> None:
+    with tempfile.TemporaryDirectory(dir=destination.parent) as directory:
+        staged = Path(directory) / "pose.mp4"
+        staged.write_bytes(data)
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width",
+                "-of",
+                "csv=p=0",
+                str(staged),
+            ],
+            check=False,
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode or not result.stdout.strip():
+            raise CommandError(
+                "invalid_pose", "Upload must contain a readable video track"
+            )
+        staged.replace(destination)
 
 
 class LiveAvatar(ReactorApp):
@@ -63,14 +137,14 @@ class LiveAvatar(ReactorApp):
         self._engine: DistributedRunner | None = None
         self._settings = None
         self._work: Path | None = None
+        self._last_take_id = 0
 
     def load(self, config_path: Path | None = None):
         from reactor_runtime import get_weights_path
 
         weights_root = get_weights_path()
-        settings = assets.prepare_settings(weights_root)
-        self._work = settings.work
-        self._settings = settings
+        self._work = assets.configure_cache_environment()
+        self._settings = assets.prepare_settings(weights_root)
         self._start_engine()
 
     def _start_engine(self) -> None:
@@ -99,19 +173,16 @@ class LiveAvatar(ReactorApp):
         self.state._directory = tempfile.TemporaryDirectory(
             prefix="session-", dir=self._work
         )
-        self.state._image = self.state._audio = self.state._pose = None
-        self.state._applied_take_id = None
 
     @session_ended
     async def on_session_ended(self):
         try:
-            await asyncio.to_thread(self._release_engine)
+            if self.state._running:
+                await asyncio.to_thread(self._release_engine)
         finally:
             if self.state._directory is not None:
                 self.state._directory.cleanup()
                 self.state._directory = None
-            self.state._image = self.state._audio = self.state._pose = None
-            self.state._applied_take_id = None
 
     @connected
     async def on_connected(self, client: ClientInfo):
@@ -133,7 +204,7 @@ class LiveAvatar(ReactorApp):
 
     @event(
         name="set_avatar_image",
-        description="Select the reference image for the next avatar take while idle. Requires an active session and a completed upload. Returns `input_accepted` and broadcasts `state_update`; generation begins after a separate `start`. Rejects invalid images with `invalid_image` and changes during a take with `take_running` through `command_error`.",
+        description="Select the reference image for the next avatar take while idle. Requires an active session and a completed upload. Returns `input_accepted` and broadcasts `state_update`; generation begins after a separate `start`. Rejects invalid images with `invalid_image` and changes during a take with `take_running`.",
     )
     async def set_avatar_image(
         self,
@@ -143,25 +214,29 @@ class LiveAvatar(ReactorApp):
         ),
     ) -> InputAccepted:
         self._require_idle()
-        try:
-            if not image.data or image.size > 25 * 1024**2:
-                raise ValueError("Image must be nonempty and at most 25 MiB")
-            await asyncio.to_thread(
-                _save_reference,
-                image.data,
-                self._path("reference-new.png"),
-                self._path("reference.png"),
+        if not image.data or image.size > 25 * 1024**2:
+            raise CommandError(
+                "invalid_image", "Image must be nonempty and at most 25 MiB"
             )
-        except (OSError, ValueError, Image.DecompressionBombError) as exc:
-            raise CommandError("invalid_image", str(exc)) from exc
-        self.state._image = self._path("reference.png")
+        destination = self._path("reference.png")
+        try:
+            await asyncio.to_thread(_save_reference, image.data, destination)
+        except Image.DecompressionBombError as error:
+            raise CommandError(
+                "invalid_image", "Image exceeds 40 million pixels"
+            ) from error
+        except (OSError, ValueError) as error:
+            raise CommandError(
+                "invalid_image", "Upload a readable reference image"
+            ) from error
+        self.state._image = destination
         self.state._image_name = image.name
         await self._send_state_update()
         return InputAccepted(field="avatar_image")
 
     @event(
         name="set_audio",
-        description="Select the speech audio for the next avatar take while idle. Requires an active session and a completed upload. Returns `input_accepted` and broadcasts `state_update`; `start` also requires an accepted reference image. Rejects empty, oversized or unreadable audio with `invalid_audio`, audio shorter than 1.92 seconds with `audio_too_short`, and changes during a take with `take_running` through `command_error`.",
+        description="Select the speech audio for the next avatar take while idle. Requires an active session and a completed upload. Returns `input_accepted` and broadcasts `state_update`; `start` also requires an accepted reference image. Rejects empty, oversized or unreadable audio with `invalid_audio`, audio shorter than 1.92 seconds with `audio_too_short`, and changes during a take with `take_running`.",
     )
     async def set_audio(
         self,
@@ -175,59 +250,21 @@ class LiveAvatar(ReactorApp):
             raise CommandError(
                 "invalid_audio", "Audio must be nonempty and at most 100 MiB"
             )
-        raw, target = self._path("audio-upload"), self._path("driving-new.wav")
-        raw.write_bytes(audio.data)
+        destination = self._path("driving.wav")
         try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                [
-                    "ffmpeg",
-                    "-v",
-                    "error",
-                    "-nostdin",
-                    "-y",
-                    "-i",
-                    str(raw),
-                    "-vn",
-                    "-ac",
-                    "1",
-                    "-ar",
-                    "16000",
-                    str(target),
-                ],
-                capture_output=True,
-                timeout=60,
-            )
+            await asyncio.to_thread(_save_audio, audio.data, destination)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise CommandError(
                 "invalid_audio", "Audio conversion failed or timed out"
             ) from error
-        finally:
-            raw.unlink(missing_ok=True)
-        if result.returncode:
-            raise CommandError("invalid_audio", "Cannot decode the uploaded audio")
-        import soundfile as sf
-
-        try:
-            info = sf.info(target)
-        except (RuntimeError, OSError) as error:
-            raise CommandError(
-                "invalid_audio", "Converted audio is unreadable"
-            ) from error
-        if info.duration < 48 / 25:
-            raise CommandError(
-                "audio_too_short",
-                "Supply at least 1.92 seconds of audio for one native clip",
-            )
-        target.replace(self._path("driving.wav"))
-        self.state._audio = self._path("driving.wav")
+        self.state._audio = destination
         self.state._audio_name = audio.name
         await self._send_state_update()
         return InputAccepted(field="audio")
 
     @event(
         name="set_pose_video",
-        description="Select or clear optional pose guidance for the next take while idle. Requires an active session. Returns `input_accepted` and broadcasts `state_update`; reference image and speech audio remain required before `start`. Rejects empty, oversized or unreadable video with `invalid_pose` and changes during a take with `take_running` through `command_error`.",
+        description="Select or clear optional pose guidance for the next take while idle. Requires an active session. Returns `input_accepted` and broadcasts `state_update`; reference image and speech audio remain required before `start`. Rejects empty, oversized or unreadable video with `invalid_pose` and changes during a take with `take_running`.",
     )
     async def set_pose_video(
         self,
@@ -239,6 +276,8 @@ class LiveAvatar(ReactorApp):
     ) -> InputAccepted:
         self._require_idle()
         if pose_video is None:
+            if self.state._pose is not None:
+                self.state._pose.unlink(missing_ok=True)
             self.state._pose = None
             self.state._pose_name = None
         else:
@@ -246,43 +285,21 @@ class LiveAvatar(ReactorApp):
                 raise CommandError(
                     "invalid_pose", "Pose video must be nonempty and at most 100 MiB"
                 )
-            path = self._path("pose-new.mp4")
-            path.write_bytes(pose_video.data)
+            destination = self._path("pose.mp4")
             try:
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    [
-                        "ffprobe",
-                        "-v",
-                        "error",
-                        "-select_streams",
-                        "v:0",
-                        "-show_entries",
-                        "stream=width",
-                        "-of",
-                        "csv=p=0",
-                        str(path),
-                    ],
-                    capture_output=True,
-                    timeout=30,
-                )
+                await asyncio.to_thread(_save_pose, pose_video.data, destination)
             except (OSError, subprocess.TimeoutExpired) as error:
                 raise CommandError(
                     "invalid_pose", "Video inspection failed or timed out"
                 ) from error
-            if result.returncode or not result.stdout.strip():
-                raise CommandError(
-                    "invalid_pose", "Upload must contain a readable video track"
-                )
-            path.replace(self._path("pose.mp4"))
-            self.state._pose = self._path("pose.mp4")
+            self.state._pose = destination
             self.state._pose_name = pose_video.name
         await self._send_state_update()
         return InputAccepted(field="pose_video")
 
     @event(
         name="set_prompt",
-        description="Set the optional appearance, scene and performance description for the next take while idle. Returns `input_accepted` and broadcasts `state_update`; invalid field values or an active take return `command_error`. Applies at the next `start`, with speech supplied through `set_audio`. `negative_prompt` is retained as compatibility text and has no effect on video in this serving profile.",
+        description="Set the optional appearance, scene and performance description for the next take while idle. Returns `input_accepted` and broadcasts `state_update`; an active take fails with `take_running`. Applies at the next `start`, with speech supplied through `set_audio`. `negative_prompt` is retained as compatibility text and has no effect on video in this serving profile.",
     )
     async def set_prompt(
         self,
@@ -307,7 +324,7 @@ class LiveAvatar(ReactorApp):
 
     @event(
         name="set_generation_options",
-        description="Select the sampling seed and clip limit for the next take while idle. Returns `input_accepted` and broadcasts `state_update`; invalid field values or an active take return `command_error`. Both values apply at the next explicit `start`; omitted fields take their declared defaults.",
+        description="Select the sampling seed and clip limit for the next take while idle. Returns `input_accepted` and broadcasts `state_update`; an active take fails with `take_running`. Both values apply at the next explicit `start`; omitted fields take their declared defaults.",
     )
     async def set_generation_options(
         self,
@@ -331,7 +348,7 @@ class LiveAvatar(ReactorApp):
 
     @event(
         name="start",
-        description="Begin an avatar take from the selected image, speech audio and optional conditions. Valid while idle after `set_avatar_image` and `set_audio` succeed. Returns `take_changed` and broadcasts `state_update`, resetting progress and the generation error. Rejects missing inputs with `inputs_required` and an active take with `take_running` through `command_error`. Configure every desired input before calling this parameter-free command.",
+        description="Begin an avatar take from the selected image, speech audio and optional conditions. Valid while idle after `set_avatar_image` and `set_audio` succeed. Returns `take_changed` and broadcasts `state_update`, resetting progress and the generation error. Rejects missing inputs with `inputs_required` and an active take with `take_running`. Configure every desired input before calling this parameter-free command.",
     )
     async def start(self) -> TakeChanged:
         self._require_idle()
@@ -339,11 +356,11 @@ class LiveAvatar(ReactorApp):
             raise CommandError(
                 "inputs_required", "Upload reference image and driving audio first"
             )
-        await asyncio.to_thread(self._start_engine)
         self.state._running = True
         self.state._chunks = self.state._frames = 0
         self.state._error = None
-        self.state._take_id += 1
+        self._last_take_id += 1
+        self.state._take_id = self._last_take_id
         await self._send_state_update()
         return TakeChanged(action="start")
 
@@ -352,7 +369,8 @@ class LiveAvatar(ReactorApp):
         description="End the take and clear queued playback while retaining selected inputs, options and progress for inspection or another `start`. Valid while idle or generating in an active session. Returns `take_changed` and broadcasts `state_update`. Handled between inference turns, so an in-flight clip can delay the reply. Explicit stopping is reported by this reply; `generation_ended` reports automatic completion or failure.",
     )
     async def stop_take(self) -> TakeChanged:
-        await asyncio.to_thread(self._release_engine)
+        if self.state._running:
+            await asyncio.to_thread(self._release_engine)
         self.state._running = False
         self.state._applied_take_id = None
         self.output.flush()
@@ -364,13 +382,15 @@ class LiveAvatar(ReactorApp):
         description="End the take, clear queued playback and selected inputs, and restore the session defaults. Valid while idle or generating in an active session; an in-flight clip can delay the reply. Returns `take_changed` and broadcasts `state_update` with cleared image, audio, pose, text, progress and error, seed 420 and clip limit 10000. Select image and audio again before `start`.",
     )
     async def reset(self) -> TakeChanged:
-        await asyncio.to_thread(self._release_engine)
+        if self.state._running:
+            await asyncio.to_thread(self._release_engine)
         self.output.flush()
+        for path in (self.state._image, self.state._audio, self.state._pose):
+            if path is not None:
+                path.unlink(missing_ok=True)
         directory = self.state._directory
-        take_id = self.state._take_id
         self.state = LiveAvatarState()
         self.state._directory = directory
-        self.state._take_id = take_id
         await self._send_state_update()
         return TakeChanged(action="reset")
 
@@ -390,23 +410,46 @@ class LiveAvatar(ReactorApp):
                 seed=self.state._seed,
                 max_chunks=self.state._max_chunks,
             )
+        if self._engine is None:
+            try:
+                await asyncio.to_thread(self._start_engine)
+            except (
+                Exception
+            ) as error:  # runner.start() can re-raise any worker load error
+                logging.getLogger(__name__).exception(
+                    "Failed to reload LiveAvatar workers"
+                )
+                reason = (
+                    "Could not reload generation workers. Start a new take to retry."
+                )
+                await self._end_failed_take(reason)
+                raise ApplicationError(reason) from error
         return LiveAvatarInput(take_id=self.state._take_id, conditions=conditions)
+
+    async def _end_failed_take(self, reason: str) -> None:
+        self.state._running = False
+        self.state._error = reason
+        await self.send(GenerationEnded(reason=reason))
+        await self._send_state_update()
 
     def generate(self, input: LiveAvatarInput) -> LiveAvatarResult:
         return self._engine.generate(input)
 
     async def process_output(self, outcome: StepOutcome) -> LiveAvatarOutput | None:
-        if isinstance(outcome.error, TakeFailed):
-            await asyncio.to_thread(self._release_engine)
-            self.state._running = False
-            self.state._error = str(outcome.error)
-            await self.send(GenerationEnded(reason=self.state._error))
-            await self.send(StateUpdate.from_state(self.state))
-            return None
-        if outcome.error is not None:
-            # Contract or device failures outside the native take are not recoverable.
+        if outcome.error is not None and not isinstance(outcome.error, TakeFailed):
             raise outcome.error
-        result: LiveAvatarResult = outcome.result
+        step = outcome.error if outcome.error is not None else outcome.result
+        if (
+            self.state is None
+            or not self.state._running
+            or step.take_id != self.state._take_id
+        ):
+            return None
+        if isinstance(step, TakeFailed):
+            await asyncio.to_thread(self._release_engine)
+            await self._end_failed_take(step.reason)
+            return None
+        result: LiveAvatarResult = step
         self.state._applied_take_id = result.take_id
         self.state._chunks, self.state._frames = result.chunks, result.frames
         if result.complete:
