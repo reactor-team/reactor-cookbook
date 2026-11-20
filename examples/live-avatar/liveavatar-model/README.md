@@ -6,8 +6,8 @@ The model joins a [LiveKit](https://livekit.io) room as a LiveKit avatar, so any
 through it with LiveKit's avatar protocol: the agent sends speech, the avatar publishes video and that speech,
 lip-synced, on the agent's behalf.
 
-The folder holds the model and a demo: a page and a LiveKit voice agent on OpenAI Realtime that you talk to through
-the avatar ([`demo/`](demo)).
+This folder is the model, a `reactor` workspace. [The example's README](../README.md) runs it with a voice agent and a
+page you talk to it from.
 
 ## How a call works
 
@@ -29,7 +29,7 @@ sequenceDiagram
 
 Your app's server starts the avatar the same way whether the model runs on your machine (`reactor run`) or on
 Reactor: start a session with `set_avatar` as its starting input, upload the portrait, and ask the session to join
-the room with the avatar's token. [`demo/lib/reactor.ts`](demo/lib/reactor.ts) does both.
+the room with the avatar's token. [`../client/lib/reactor.ts`](../client/lib/reactor.ts) does both.
 
 ## The contract
 
@@ -51,8 +51,6 @@ model lists every field.
 - Linux, one NVIDIA B200, Docker and the NVIDIA Container Toolkit, and the
   [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation).
 - About 50 GB for the weights.
-- For the demo: a LiveKit project reachable from where the model runs (LiveKit Cloud works), an OpenAI API key with
-  Realtime access, Node.js 20+ and [uv](https://docs.astral.sh/uv/).
 
 ## 1. Prepare the weights
 
@@ -79,7 +77,7 @@ weights can be mounted read-only.
 
 ## 3. Talk to it
 
-[`demo/README.md`](demo/README.md) starts the voice agent and the page, and points the page at
+[The example's README](../README.md) starts the voice agent and the page, and points the page at
 `http://localhost:8080`.
 
 ## Performance
