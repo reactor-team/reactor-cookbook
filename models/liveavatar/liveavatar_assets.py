@@ -1,4 +1,4 @@
-"""Application-owned preparation of pinned source and checkpoint paths."""
+"""The pinned upstream source and checkpoints, and where the runtime's caches go."""
 
 from __future__ import annotations
 
@@ -7,120 +7,57 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from liveavatar_model import LiveAvatarSettings
-
 SOURCE_REVISION = "c3c47d031d8bf3247428333c1fe610579c71a551"
 BASE_REVISION = "dab4e9c55bbe4c8c4d03db1c2c98c7f0ac9c454b"
 LORA_REVISION = "92cdccd12a91e8a63767a7c821b7c75e51d5a172"
 
+#: Files the weights folder must hold: the base checkpoint in ``wan2_2/``, LiveAvatar's in ``liveavatar_lora/``.
+REQUIRED = (
+    "wan2_2/config.json",
+    "wan2_2/Wan2.1_VAE.pth",
+    "liveavatar_lora/liveavatar.safetensors",
+)
 
-def configure_cache_environment() -> Path:
-    """Keep uploads and generated caches writable independently of mounted weights."""
+
+def prepare_weights(weights_root: Path, source: Path) -> Path:
+    """Check the upstream checkout and the weights, and point the compile caches at a writable folder.
+
+    The caches go to ``LIVEAVATAR_WORK_DIR``, or a per-user folder under the system's temporary directory, so the
+    weights can be mounted read-only. A cache variable already set in the environment wins.
+
+    Returns:
+        The weights root, holding ``wan2_2/`` and ``liveavatar_lora/``.
+
+    Raises:
+        RuntimeError: The checkout is not the pinned revision, or a weight file is missing.
+    """
+    if not source.is_dir():
+        raise RuntimeError(f"the upstream LiveAvatar source is not at {source}")
+    revision = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+    ).strip()
+    if revision != SOURCE_REVISION:
+        raise RuntimeError(
+            f"expected upstream LiveAvatar {SOURCE_REVISION}, found {revision}"
+        )
+    missing = [name for name in REQUIRED if not (weights_root / name).is_file()]
+    if missing:
+        raise RuntimeError(
+            f"incomplete weights under {weights_root}; run prepare_weights.py: {missing}"
+        )
     override = os.environ.get("LIVEAVATAR_WORK_DIR")
     work = (
         Path(override).expanduser()
         if override
         else Path(tempfile.gettempdir()) / f"liveavatar-{os.getuid()}"
     )
-    work = work.resolve()
     work.mkdir(mode=0o700, parents=True, exist_ok=True)
     for name, relative in {
-        "HF_HOME": "cache",
-        "XDG_CACHE_HOME": "cache",
-        "TORCH_HOME": "torch",
-        "TMPDIR": "tmp",
         "TORCHINDUCTOR_CACHE_DIR": "inductor",
+        "TRITON_CACHE_DIR": "triton",
         "CUTE_DSL_CACHE_DIR": "cute",
-        "FLASH_ATTENTION_CUTE_DSL_CACHE_DIR": "fa4",
     }.items():
-        path = Path(os.environ.setdefault(name, str(work / relative)))
-        path.mkdir(parents=True, exist_ok=True)
-    return work
-
-
-def prepare_assets(
-    weights_root: Path, source: Path, *, local_only: bool
-) -> tuple[Path, Path]:
-    """Validate the build's source and prepare weights; never mutate a checkout."""
-    if not source.is_dir():
-        raise RuntimeError(
-            "The serving image must include the pinned LiveAvatar source"
+        Path(os.environ.setdefault(name, str(work / relative))).mkdir(
+            parents=True, exist_ok=True
         )
-    revision = subprocess.check_output(
-        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
-    ).strip()
-    if revision != SOURCE_REVISION:
-        raise RuntimeError(f"Expected upstream {SOURCE_REVISION}, found {revision}")
-    if local_only:
-        base, lora = weights_root / "wan2_2", weights_root / "liveavatar_lora"
-        required = [
-            base / "config.json",
-            base / "Wan2.1_VAE.pth",
-            lora / "liveavatar.safetensors",
-        ]
-        missing = [str(path) for path in required if not path.is_file()]
-        if missing:
-            raise RuntimeError(
-                f"Incomplete mounted weights; run prepare_weights.py: {missing}"
-            )
-        return base, lora
-
-    from huggingface_hub import snapshot_download
-
-    cache = weights_root / "huggingface"
-    base = Path(
-        snapshot_download(
-            "Wan-AI/Wan2.2-S2V-14B", revision=BASE_REVISION, cache_dir=cache
-        )
-    )
-    lora = Path(
-        snapshot_download(
-            "Quark-Vision/Live-Avatar", revision=LORA_REVISION, cache_dir=cache
-        )
-    )
-    return base, lora
-
-
-def prepare_settings(weights_root: Path) -> LiveAvatarSettings:
-    """Resolve deployment choices once, before constructing the model."""
-    source = (
-        Path(os.environ.get("LIVEAVATAR_SOURCE", "/opt/liveavatar-source"))
-        .expanduser()
-        .resolve()
-    )
-    base, lora = prepare_assets(
-        weights_root,
-        source,
-        local_only=os.environ.get("LIVEAVATAR_LOCAL_WEIGHTS_ONLY", "1") == "1",
-    )
-    if os.environ.get("LIVEAVATAR_STEPS", "4") != "4":
-        raise ValueError("This serving recipe preserves the released four-step sampler")
-    return LiveAvatarSettings(
-        source=source,
-        base=base,
-        lora=lora,
-        turbo=os.environ.get("LIVEAVATAR_TURBO", "1") == "1",
-    )
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Check out the inference source for the serving image."
-    )
-    parser.add_argument("--checkout", required=True, type=Path)
-    target = parser.parse_args().checkout
-    subprocess.run(
-        [
-            "git",
-            "clone",
-            "--no-checkout",
-            "https://github.com/Alibaba-Quark/LiveAvatar.git",
-            str(target),
-        ],
-        check=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(target), "checkout", "--detach", SOURCE_REVISION], check=True
-    )
+    return weights_root

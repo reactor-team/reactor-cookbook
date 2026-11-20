@@ -1,177 +1,146 @@
-# LiveAvatar through Reactor Runtime
+# LiveAvatar on Reactor
 
-Generate a speaking-avatar video from an uploaded reference image and speech
-audio with [LiveAvatar](https://github.com/Alibaba-Quark/LiveAvatar) and Reactor.
-Add a scene or performance prompt, optionally supply a prepared pose sequence,
-and stream the resulting video with the uploaded speech.
+A talking avatar for voice agents. From one portrait, [LiveAvatar](https://github.com/Alibaba-Quark/LiveAvatar)
+renders a face that lip-syncs, live, to the speech an agent streams to it, at 512x512 and 25 FPS on one NVIDIA B200.
+The model joins a [LiveKit](https://livekit.io) room as a LiveKit avatar, so any LiveKit voice agent can speak
+through it with LiveKit's avatar protocol: the agent sends speech, the avatar publishes video and that speech,
+lip-synced, on the agent's behalf.
 
-The recipe serves LiveAvatar's four-step Turbo profile on three NVIDIA B200
-GPUs. A session waits for your inputs and an explicit `start` command.
+The folder holds the model and a demo: a page and a LiveKit voice agent on OpenAI Realtime that you talk to through
+the avatar ([`demo/`](demo)).
 
-## Prerequisites
+## How a call works
 
-- The [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation),
-  Docker, an NVIDIA driver and NVIDIA Container Toolkit.
-- Three available NVIDIA B200 GPUs.
-- A high-capacity volume for the base checkpoint, LiveAvatar checkpoint,
-  image layers and a writable directory for uploads and compilation caches.
+```mermaid
+sequenceDiagram
+  participant P as Your app (server)
+  participant L as LiveKit room
+  participant G as Voice agent
+  participant R as This model (Reactor)
+  P->>L: create the room, dispatch the agent
+  L->>G: the agent joins
+  P->>R: start a session, starting input set_avatar(portrait)
+  P->>R: join the room with the avatar's token
+  R->>L: joins as the avatar, publishing on behalf of the agent
+  Note over G,R: speech on lk.audio_stream; the avatar's video and voice to the user
+  G-->>R: lk.clear_buffer when the user interrupts
+  R-->>G: lk.playback_started, lk.playback_finished
+```
 
-## Run
+Your app's server starts the avatar the same way whether the model runs on your machine (`reactor run`) or on
+Reactor: start a session with `set_avatar` as its starting input, upload the portrait, and ask the session to join
+the room with the avatar's token. [`demo/lib/reactor.ts`](demo/lib/reactor.ts) does both.
 
-This directory is a `reactor` workspace. Its `reactor.yaml` declares the model,
-runtime, GPU resources and complete serving-image build. See the [build configuration
-guide](https://docs.reactor.inc/deploy/platform/build).
+## The contract
 
-Prepare a weights directory containing the base checkpoint in `wan2_2/` and
-the LiveAvatar checkpoint in `liveavatar_lora/`, using the model assets linked
-below. Replace `/path/to/liveavatar-weights` with that directory:
+| | Name | What it carries |
+| --- | --- | --- |
+| Input track | `agent_audio` | Speech to say, 24 kHz mono, one LiveKit byte stream (`lk.audio_stream`) per utterance |
+| Output tracks | `main_video`, `main_audio` | The avatar's frames, and the speech as it plays with them (24 kHz) |
+| Command | `set_avatar` | The portrait; only the session's starting input can send it |
+| Command | `clear_buffer` | Stop the utterance playing and return to idle (the `lk.clear_buffer` RPC) |
+| Command | `user_speaking_state` | `speaking` or `idle` (data packets on `avatar.user_speaking_state`) |
+| Message | `playback_started` | The first frame of an utterance plays (the `lk.playback_started` RPC to the agent) |
+| Message | `playback_finished` | An utterance played to its end or was cut, with `playback_position` and `interrupted` |
+
+The `runtime.livekit` block in [`reactor.yaml`](reactor.yaml) maps them onto the room. `GET /schema` on a running
+model lists every field.
+
+## What you need
+
+- Linux, one NVIDIA B200, Docker and the NVIDIA Container Toolkit, and the
+  [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation).
+- About 50 GB for the weights.
+- For the demo: a LiveKit project reachable from where the model runs (LiveKit Cloud works), an OpenAI API key with
+  Realtime access, Node.js 20+ and [uv](https://docs.astral.sh/uv/).
+
+## 1. Prepare the weights
 
 ```sh
-cd models/liveavatar
+pip install "huggingface_hub[cli]<1"
+python prepare_weights.py --output /path/to/liveavatar-weights --allow-download
+```
+
+The folder gets [Wan2.2-S2V-14B](https://huggingface.co/Wan-AI/Wan2.2-S2V-14B) in `wan2_2/` and the
+[LiveAvatar checkpoint](https://huggingface.co/Quark-Vision/Live-Avatar) in `liveavatar_lora/`, at the revisions
+pinned in [`liveavatar_assets.py`](liveavatar_assets.py). The image build clones the pinned upstream source.
+
+## 2. Start the model
+
+```sh
 reactor build
-reactor run --gpus '"device=0,1,2"' --shm-size 2g \
-  --weights /path/to/liveavatar-weights
+reactor run --gpus device=0 --weights /path/to/liveavatar-weights --port 8080
 ```
 
-`reactor run` serves at `http://localhost:8080` by default and reuses the built
-image and mounted weights. Use a CLI with `--shm-size` support. Workers use
-shared memory to transfer each RGB clip and its audio to the Runtime.
-Rebuild after changing code, configuration or
-dependencies. Adjust `--gpus` to select available devices and add `--port` to
-choose a different HTTP port. Check readiness and the generated contract:
+**Check:** `curl http://localhost:8080/health` reports `"state":"available"`. Loading compiles the model and renders
+`warmup_blocks` blocks, so the first session runs at full speed. The compile caches go to `LIVEAVATAR_WORK_DIR` (by
+default a folder under the system's temporary directory); with them warm, a restart takes about two minutes, and the
+weights can be mounted read-only.
+
+## 3. Talk to it
+
+[`demo/README.md`](demo/README.md) starts the voice agent and the page, and points the page at
+`http://localhost:8080`.
+
+## Performance
+
+A block is 12 frames, 0.48 s of video: the model keeps real time while a block renders in less than that. On one
+B200 at 512x512, measured offline with [`bench.py`](bench.py) over 360 blocks of speech:
+
+| Profile | Per block (median / max) | Real-time factor |
+| --- | --- | --- |
+| `fp8: true` (the default) | 455 / 461 ms | 0.95 |
+| `fp8: false` | 542 / 546 ms | 1.13, slower than real time |
+
+`fp8` runs the transformer blocks' projections on FP8 tensor cores with per-tensor scales, upstream's `--fp8`
+scheme; the frames change slightly. Without it, one B200 does not keep real time.
 
 ```sh
-curl -fsS http://localhost:8080/health
-curl -fsS http://localhost:8080/schema
+python bench.py --weights /path/to/liveavatar-weights --source /path/to/LiveAvatar \
+  --portrait face.png --audio speech.wav --blocks 40 --compile --fp8 --clip out.mp4
 ```
 
-Wait for `state: available` before connecting a new session. During loading,
-the health endpoint can already return HTTP 200.
+## Configuration
 
-The service can use a read-only weights mount. It stages uploads and compiler
-caches in a per-user directory under the system temporary directory. Set
-`LIVEAVATAR_WORK_DIR` to a writable path inside the container to choose another
-location. Explicit cache settings such as `TORCHINDUCTOR_CACHE_DIR` take
-precedence. Startup verifies the pinned source and mounted weights.
+[`config.yml`](config.yml) sets the default portrait, the text prompt, the seed, the output size, `fp8`, the
+warm-up, and how speech is paced into blocks. Each key is documented in place.
 
-## Connect and prepare a take
+## Notes on the code
 
-Open [Reactor Sandbox](https://reactor-sandbox.vercel.app/), choose
-**Local (Direct)** and enter the Runtime URL. Create a session, then use the
-model commands in Controls:
-
-1. Upload an image and submit `set_avatar_image`.
-2. Upload speech audio and submit `set_audio`.
-3. Optionally submit `set_prompt`, `set_pose_video` and
-   `set_generation_options`.
-4. Check `state_update.ready` is true and `state_update.running` is false.
-5. Send `start` with an empty payload.
-
-Image and audio may be selected in either order. Await each command reply
-before starting. A newly created session has empty input selections;
-uploading files and changing conditions leave generation idle until `start`.
-If a replacement upload fails validation, the previous selection is retained.
-
-Use a client with image and audio upload support. In Sandbox, creating the
-session and sending the model's `start` command are separate actions.
-For remote browsers, HTTP signalling and WebRTC media both need a reachable route.
-SSH HTTP-port forwarding alone covers signalling; a TURN/TCP relay and its
-forwarded port can carry the media connection.
-
-## Inputs and controls
-
-All input setters apply to the next `start` and require an idle take.
-
-| Command | Input and effect |
-| --- | --- |
-| `set_avatar_image(image)` | Select a decodable reference image, such as PNG, JPEG or WebP, up to 25 MiB and 40 million pixels. |
-| `set_audio(audio)` | Select decodable speech audio, such as WAV, FLAC or MP3, up to 100 MiB and at least 1.92 seconds long. |
-| `set_pose_video(pose_video)` | Select a prepared MP4 pose sequence up to 100 MiB, or pass null to clear pose guidance. |
-| `set_prompt(prompt, negative_prompt)` | Describe appearance, surroundings and performance. Both text fields accept up to 4096 characters; `negative_prompt` is compatibility text with no effect on video in this serving profile. |
-| `set_generation_options(seed, max_chunks)` | Select a seed from 0 through 2147483647 and a clip limit from 1 through 10000. Omitted fields use 420 and 10000 respectively. |
-| `start()` | Begin a take from the accepted inputs and reset its progress counters. Requires both image and audio. |
-| `stop()` | End the take and clear queued playback, retaining inputs, options and progress. |
-| `reset()` | End the take, clear selections and progress, and restore the default seed and clip limit. |
-
-The prompt guides visual appearance and performance. The uploaded audio
-supplies the speech. For pose control, upload a prepared pose sequence
-paired with that speech.
-
-A running take rejects input changes. Send `stop`, await its reply, update
-conditions, then send `start` for another take. Commands run between inference
-turns, so an in-flight clip can delay a stop or reset reply.
-
-## Output and take lifetime
-
-The model loads once at service startup. Each take uses the selected image,
-audio and conditions throughout its generation. Automatic completion retains
-the selections and model weights for another take. Idle stop, reset and
-disconnect keep the workers loaded. Reset and session end delete uploaded files.
-Interrupting an active take shuts down its worker group together. The next
-`start` acknowledges the request immediately. Its first inference turn reloads
-the workers before producing the first clip.
-
-Each inference turn supplies one audiovisual clip. The first clip carries
-45 frames; later clips carry 48. `main_video` plays at the model's native
-25 FPS. `main_audio` carries the selected speech, resampled to mono 48 kHz
-and aligned with the generated clip durations. Audio length and `max_chunks`
-determine when a take finishes.
-
-## Model messages
-
-Commands return typed, command-correlated replies:
-
-- `input_accepted` identifies an accepted image, audio, pose, prompt or
-  generation-option selection.
-- `take_changed` acknowledges `start`, `stop` or `reset`.
-- `state_update` is the complete snapshot of selected filenames, text,
-  seed, readiness, running state, clip limit, progress and generation error.
-  A joining client receives a snapshot immediately. Accepted changes,
-  generated clips and automatic completion or failure broadcast updates.
-- `chunk_complete` reports the one-based generated clip number and its
-  frame count. Client playback can lag generation progress.
-- `generation_ended` reports `complete` when a take reaches its audio or
-  clip limit, or contains the generation failure text.
-
-The awaited SDK call raises on rejection. Starting without both required
-inputs returns `inputs_required`. Changing inputs during generation returns
-`take_running`. Read command acknowledgements from the awaited call and use
-`state_update` to render the current session.
-
-## Inference performance and verification
-
-The first clip includes model preparation and compilation. Throughput depends
-on hardware, clip conditions and transport; use received video timing when
-measuring realtime playback.
-
-Playback can contain waiting silence while the next clip is being generated.
-
-[check_model.py](check_model.py) exercises the real SDK upload and command
-sequence and saves received video, received PCM and messages. Pass
-`--pose-video pose.mp4` to exercise optional pose guidance. Its `take.mp4`
-preview pairs received video with the uploaded speech on the model timeline;
-use `audio.wav` to inspect the actual received audio, including waiting
-silence.
-
-## Public source and model assets
-
-- [Alibaba-Quark/LiveAvatar](https://github.com/Alibaba-Quark/LiveAvatar)
-  supplies the pinned inference source included by the YAML build.
-- [Wan-AI/Wan2.2-S2V-14B](https://huggingface.co/Wan-AI/Wan2.2-S2V-14B)
-  supplies the base model.
-- [Quark-Vision/Live-Avatar](https://huggingface.co/Quark-Vision/Live-Avatar)
-  supplies the LiveAvatar checkpoint.
-
-Review the upstream repositories and model cards for their usage terms.
-The source and checkpoint revisions are pinned in `liveavatar_assets.py`.
+- **The application half is model-agnostic.** [`avatar_app.py`](avatar_app.py) is the whole LiveKit avatar
+  protocol: utterances out of `agent_audio`, a playout clock that pairs each block's frames with its audio and
+  dates the playback reports, interrupts, and the commands. It drives any model that implements
+  [`avatar_contract.py`](avatar_contract.py): render a block of video from a block of speech, and reset.
+  [`liveavatar_app.py`](liveavatar_app.py) only builds LiveAvatar's model half. Another avatar model fits the same
+  application by implementing that contract.
+- **The model streams one block per call.** Upstream renders a whole file in 48-frame clips of four causal blocks,
+  each denoising step keeping its own key/value cache. [`liveavatar_engine.py`](liveavatar_engine.py) runs that
+  loop one block at a time from audio that arrives during the session: the per-step caches roll over one clip,
+  the clip noise is drawn every fourth block as upstream draws it, and the wav2vec features of each block read the
+  audio before it as context.
+- **The streamed-block forward is rewritten for speed, not changed.** [`liveavatar_fast.py`](liveavatar_fast.py)
+  computes upstream's forward for this one case with the same weights; it differs from upstream's forward by as
+  much as swapping the attention kernel does. It keeps each step's cache in one buffer, broadcasts the modulation
+  per frame, builds the rotary tables once per block, caches the prompt's cross-attention keys, and runs the
+  audio encoder once per block; each step then compiles and is captured as a CUDA graph.
+- **Its own loop.** The app overrides `run()`: a block renders on a worker thread while commands, the speech
+  pump and the playback reports run on the event loop, so `clear_buffer` lands mid-render.
+- **No listening pose.** LiveAvatar renders a block marked listening like any silent one.
 
 ## Tests
 
-Use Python 3.12 with `ffmpeg` and `ffprobe` on the path. From the repository
-root, install the CPU test dependencies and run the suite in a virtual environment.
+From this folder, without a GPU or the weights:
 
 ```sh
-cd models/liveavatar
-python -m pip install reactor-runtime==3.11.9 -r requirements-dev.txt
+pip install -r requirements-dev.txt
 PYTHONPATH=. python -m pytest tests/ -q
 ```
+
+## Public source and model assets
+
+- [Alibaba-Quark/LiveAvatar](https://github.com/Alibaba-Quark/LiveAvatar): the inference source, pinned in
+  `reactor.yaml`.
+- [Wan-AI/Wan2.2-S2V-14B](https://huggingface.co/Wan-AI/Wan2.2-S2V-14B): the base model.
+- [Quark-Vision/Live-Avatar](https://huggingface.co/Quark-Vision/Live-Avatar): the LiveAvatar checkpoint.
+
+Review the upstream repositories and model cards for their usage terms.

@@ -1,4 +1,4 @@
-# Keep local credentials, caches, weights and generated media out of the image.
+# Keep local credentials, caches, weights, generated media and the demo client out of the image.
 .git
 .env
 .env.*
@@ -10,11 +10,11 @@ __pycache__
 *.py[cod]
 .pytest_cache
 .ruff_cache
+demo
+tests
 weights
 checkpoints
-artifacts
 outputs
-test_outputs
 *.log
 *.mp4
 *.wav

@@ -1,162 +1,232 @@
-"""Native avatar take lifecycle and audiovisual chunks, independent of Reactor."""
+"""LiveAvatar, the model half.
 
-from dataclasses import dataclass
+Plain Python around :class:`liveavatar_engine.BlockEngine`. Nothing here knows
+about clients, tracks, commands or rooms, and nothing here imports
+``reactor_runtime``. :class:`LiveAvatarModel` has three methods: ``load`` loads
+the weights and renders a few warm-up blocks, ``generate`` renders one 0.48 s
+block from 0.48 s of speech, and ``reset`` forgets the bound portrait so the
+next block starts a fresh clip.
+
+It implements :class:`avatar_contract.AvatarModel`: the application half and
+this one meet on :class:`avatar_contract.AvatarInput` and
+:class:`avatar_contract.AvatarResult`, plain data and CPU arrays.
+"""
+
+from __future__ import annotations
+
+import io
 from pathlib import Path
 
 import numpy as np
 
+from avatar_contract import AvatarInput, AvatarResult
+from liveavatar_engine import BLOCK_FRAMES, ENCODER_RATE, FPS, BlockEngine
 
-@dataclass(frozen=True)
-class LiveAvatarSettings:
-    """Resolved, picklable deployment settings; no model-side environment lookup."""
+#: Rate of the speech a block carries, and of the audio that plays with the frames.
+SAMPLE_RATE = 24_000
+#: Samples of speech one block consumes: 0.48 s at :data:`SAMPLE_RATE`.
+BLOCK_SAMPLES = BLOCK_FRAMES * SAMPLE_RATE // FPS
+#: Samples of earlier speech kept so each block resamples without an edge at its start.
+_RESAMPLE_CONTEXT = 240
 
-    source: Path
-    base: Path
-    lora: Path
-    turbo: bool = True
-
-
-@dataclass(frozen=True)
-class TakeConditions:
-    """App-prepared RGB image, mono 16 kHz WAV and optional native pose video.
-
-    Paths remain valid until the take ends. Conditions accompany a new take ID
-    until its first successful result acknowledges that ID.
-    """
-
-    image: Path
-    audio: Path
-    pose: Path | None
-    prompt: str
-    negative_prompt: str
-    seed: int
-    max_chunks: int
+DEFAULT_PROMPT = (
+    "A person faces the camera and talks naturally, with clear lip movements, lively facial expressions "
+    "and small, natural head movements. The background stays still. The lighting is soft and even."
+)
 
 
-@dataclass(frozen=True)
-class LiveAvatarInput:
-    """One requested clip; conditions are omitted after the take is acknowledged."""
-
-    take_id: int
-    conditions: TakeConditions | None
-
-
-@dataclass(frozen=True)
-class LiveAvatarResult:
-    """Actual progress and CPU media: uint8 (T,H,W,3), float32 (1,T*1920).
-
-    T is 45 for the first clip and 48 thereafter. Completion carries no media.
-    """
-
-    take_id: int
-    video: np.ndarray | None
-    audio: np.ndarray | None
-    chunks: int
-    frames: int
-    complete: bool
-
-
-class TakeFailed(RuntimeError):
-    """A recoverable failure belonging to one take, including across worker IPC."""
-
-    def __init__(self, take_id: int, reason: str):
-        super().__init__(take_id, reason)
-        self.take_id = take_id
-        self.reason = reason
-
-    def __str__(self) -> str:
-        return self.reason
+class NoAvatar(Exception):
+    """A fresh clip is asked for and the block's input carries no portrait to bind."""
 
 
 class LiveAvatarModel:
-    def __init__(self):
-        self.rank: int = 0
-        self.world_size: int = 1
-        self._backend = None
-        self._take_id = None
-        self._chunks = self._frames = 0
-        self._complete = False
+    """LiveAvatar behind ``load`` / ``generate`` / ``reset``.
 
-    def load(self, settings: LiveAvatarSettings) -> None:
-        from liveavatar_parallel import ParallelBackend
+    Holds the engine, the id of the portrait it bound, and the speech it last read, which the next
+    block resamples from. LiveAvatar has no listening pose: a block marked ``listening`` renders like
+    any silent one.
+    """
 
-        self._backend = ParallelBackend(
-            settings=settings, rank=self.rank, world_size=self.world_size
+    fps = FPS
+    block_frames = BLOCK_FRAMES
+    sample_rate = SAMPLE_RATE
+
+    def __init__(self) -> None:
+        self.engine: BlockEngine | None = None
+        self.avatar_id: int | None = None
+        self._tail = np.zeros(_RESAMPLE_CONTEXT, dtype=np.float32)
+
+    def load(
+        self,
+        weights_root: Path,
+        *,
+        source: Path,
+        width: int = 512,
+        height: int = 512,
+        prompt: str = DEFAULT_PROMPT,
+        seed: int = 420,
+        compile_dit: bool = True,
+        fp8: bool = False,
+        warmup_avatar: bytes | None = None,
+        warmup_blocks: int = 6,
+    ) -> None:
+        """Load the weights on the GPU and render ``warmup_blocks`` blocks from ``warmup_avatar``.
+
+        Args:
+            weights_root: The folder with ``wan2_2/`` (Wan2.2-S2V-14B) and ``liveavatar_lora/``.
+            source: The pinned upstream LiveAvatar checkout.
+            width: Output width, a multiple of 64.
+            height: Output height, a multiple of 64.
+            prompt: The scene and performance text every block is conditioned on.
+            seed: Seed of the clip noise.
+            compile_dit: Compile the denoiser's forward with ``torch.compile``. The warm-up then pays the
+                compilation, so the first session does not.
+            fp8: Run the transformer's projections in FP8, which changes pixels slightly.
+            warmup_avatar: A portrait for the warm-up blocks; required when ``warmup_blocks`` is positive.
+            warmup_blocks: Blocks rendered at load, half of them speech-like and half silent.
+        """
+        engine = BlockEngine(
+            source,
+            weights_root / "wan2_2",
+            weights_root / "liveavatar_lora",
+            height=height,
+            width=width,
+            prompt=prompt,
+            seed=seed,
         )
+        engine.load(compile_dit=compile_dit, fp8=fp8)
+        self.engine = engine
+        if warmup_blocks:
+            if warmup_avatar is None:
+                raise ValueError("warm-up blocks need a portrait")
+            self._warmup(warmup_avatar, warmup_blocks)
 
-    def generate(self, input: LiveAvatarInput) -> LiveAvatarResult:
-        if self._backend is None:
-            raise RuntimeError("LiveAvatar model was not loaded")
-        if input.take_id != self._take_id:
-            conditions = input.conditions
-            if conditions is None:
-                raise ValueError("A new take requires image and audio conditions")
-            self.reset()
-            try:
-                self._backend.start(
-                    image=conditions.image,
-                    audio=conditions.audio,
-                    pose=conditions.pose,
-                    prompt=conditions.prompt,
-                    negative_prompt=conditions.negative_prompt,
-                    seed=conditions.seed,
-                    max_chunks=conditions.max_chunks,
-                )
-            except Exception as error:
-                raise TakeFailed(
-                    input.take_id, str(error) or type(error).__name__
-                ) from error
-            self._take_id = input.take_id
-        if self._complete:
-            raise RuntimeError("The take completed; start a new take before generating")
-        try:
-            media = self._backend.next()
-        except Exception as error:
-            raise TakeFailed(
-                input.take_id, str(error) or type(error).__name__
-            ) from error
-        if media is None:
-            self._complete = True
-            return LiveAvatarResult(
-                take_id=input.take_id,
-                video=None,
-                audio=None,
-                chunks=self._chunks,
-                frames=self._frames,
-                complete=True,
-            )
-        video, audio = media
-        expected = 45 if self._chunks == 0 else 48
-        if (
-            video.dtype != np.uint8
-            or video.ndim != 4
-            or video.shape[0] != expected
-            or video.shape[-1] != 3
-        ):
-            raise ValueError("Native clip must contain 45/48 RGB frames")
-        if (
-            audio.dtype != np.float32
-            or audio.shape != (1, expected * 48000 // 25)
-            or not np.isfinite(audio).all()
-            or (np.abs(audio) > 1).any()
-        ):
-            raise ValueError(
-                "Native clip requires synchronized finite mono 48 kHz audio"
-            )
-        self._chunks += 1
-        self._frames += len(video)
-        return LiveAvatarResult(
-            take_id=input.take_id,
-            video=video,
-            audio=audio,
-            chunks=self._chunks,
-            frames=self._frames,
-            complete=False,
+    def generate(self, input: AvatarInput) -> AvatarResult:
+        """Render one block.
+
+        Binds ``input.avatar`` first when ``input.avatar_id`` is not the portrait this model last bound,
+        which starts a new clip. Then renders the block from the block's speech.
+
+        Raises:
+            NoAvatar: A new clip is asked for and the input carries no portrait.
+            RuntimeError: ``load`` has not run.
+        """
+        engine = self._engine()
+        if input.avatar_id != self.avatar_id or not engine.bound:
+            if input.avatar is None:
+                raise NoAvatar("no portrait to start a clip from")
+            engine.bind(crop_portrait(input.avatar, engine.width, engine.height))
+            self.avatar_id = input.avatar_id
+            self._tail[:] = 0
+        block = engine.block
+        frames = engine.render(self._to_encoder_rate(input.audio))
+        t = engine.timing
+        timing = {
+            "audio_ms": t.audio_ms,
+            "dit_ms": t.dit_ms,
+            "decode_ms": t.decode_ms,
+            "total_ms": t.total_ms,
+        }
+        return AvatarResult(
+            frames=frames, block=block, avatar_id=input.avatar_id, timing=timing
         )
 
     def reset(self) -> None:
-        if self._backend is not None:
-            self._backend.close()
-        self._take_id = None
-        self._chunks = self._frames = 0
-        self._complete = False
+        """Forget the bound portrait. The next ``generate`` binds again and starts a fresh clip."""
+        self.avatar_id = None
+        if self.engine is not None:
+            self.engine.reset()
+
+    @property
+    def size(self) -> tuple[int, int]:
+        """The output ``(width, height)``."""
+        engine = self._engine()
+        return engine.width, engine.height
+
+    def _engine(self) -> BlockEngine:
+        if self.engine is None:
+            raise RuntimeError("load() has not run")
+        return self.engine
+
+    def _to_encoder_rate(self, audio: np.ndarray) -> np.ndarray:
+        """Resample one block of 24 kHz int16 speech to the encoder's 16 kHz float, carrying the edge."""
+        from scipy.signal import resample_poly
+
+        if audio.shape != (BLOCK_SAMPLES,):
+            raise ValueError(
+                f"a block carries {BLOCK_SAMPLES} samples at {SAMPLE_RATE} Hz"
+            )
+        x = np.concatenate([self._tail, audio.astype(np.float32) / 32768.0])
+        self._tail = x[-_RESAMPLE_CONTEXT:]
+        y = resample_poly(x, ENCODER_RATE // 8000, SAMPLE_RATE // 8000)
+        return np.clip(
+            y[_RESAMPLE_CONTEXT * ENCODER_RATE // SAMPLE_RATE :], -1, 1
+        ).astype(np.float32)
+
+    def _warmup(self, avatar: bytes, blocks: int) -> None:
+        voiced = speech_like(BLOCK_SAMPLES)
+        silence = np.zeros(BLOCK_SAMPLES, dtype=np.int16)
+        for n in range(blocks):
+            audio = voiced if n % 2 == 0 else silence
+            self.generate(
+                AvatarInput(
+                    audio=audio,
+                    silent=n % 2 == 1,
+                    listening=False,
+                    avatar=avatar,
+                    avatar_id=-1,
+                )
+            )
+        self.reset()
+
+
+def crop_portrait(data: bytes, width: int, height: int) -> np.ndarray:
+    """Decode a portrait, scale it to cover ``width`` x ``height``, and crop the centre. RGB uint8."""
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data)) as image:
+        image = image.convert("RGB")
+        scale = max(width / image.width, height / image.height)
+        size = (
+            max(width, round(image.width * scale)),
+            max(height, round(image.height * scale)),
+        )
+        image = image.resize(size, Image.Resampling.LANCZOS)
+        left, top = (size[0] - width) // 2, (size[1] - height) // 2
+        return np.asarray(
+            image.crop((left, top, left + width, top + height)), dtype=np.uint8
+        )
+
+
+def read_audio(path: Path) -> np.ndarray:
+    """Decode any audio file ffmpeg reads to mono float32 at the encoder's rate."""
+    import subprocess
+
+    raw = subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-nostdin",
+            "-i",
+            str(path),
+            "-ac",
+            "1",
+            "-ar",
+            str(ENCODER_RATE),
+            "-f",
+            "f32le",
+            "-",
+        ],
+        capture_output=True,
+        check=True,
+    ).stdout
+    return np.frombuffer(raw, dtype=np.float32).copy()
+
+
+def speech_like(n: int) -> np.ndarray:
+    """A voiced-looking int16 signal for warm-up blocks; a block's cost does not depend on its words."""
+    t = np.arange(n) / SAMPLE_RATE
+    envelope = 0.5 + 0.5 * np.sin(2 * np.pi * 3.0 * t)
+    tone = np.sin(2 * np.pi * 180.0 * t) + 0.5 * np.sin(2 * np.pi * 360.0 * t)
+    return (6000 * envelope * tone).astype(np.int16)

@@ -1,338 +1,293 @@
-import asyncio
+"""LiveAvatar's application half and the model half's CPU helpers, without a GPU or weights.
+
+The application half is driven through its planning and landing with a fake model and a hand-set clock; speech
+arrives the way the LiveKit transport cuts a byte stream. Run from the model folder::
+
+    PYTHONPATH=. python -m pytest tests/ -q
+"""
+
+from __future__ import annotations
+
 import io
-import subprocess
+import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
-import soundfile as sf
 from PIL import Image
-from reactor_runtime import ApplicationError, CommandError, StepOutcome, UploadedFile
-from reactor_runtime.interface.model.contract import ModelContract
+from reactor_runtime import ClientInfo, CommandError, InputFrame, UploadedFile
+from reactor_runtime.interface.internal.reactor_core import MediaOps
+from reactor_runtime.manifest import check_livekit_block, load_config
 
-from liveavatar_model import LiveAvatarModel, TakeFailed
-from liveavatar_pipeline import LiveAvatar
-from liveavatar_types import LiveAvatarOutput, LiveAvatarState, StateUpdate
+from avatar_app import SAMPLE_RATE, AvatarSettings, PlaybackFinished, PlaybackStarted
+from avatar_contract import AvatarInput, AvatarResult
+from liveavatar_app import LiveAvatar
+from liveavatar_model import BLOCK_SAMPLES, LiveAvatarModel, crop_portrait
 
+pytestmark = pytest.mark.asyncio
 
-def image_upload():
-    buf = io.BytesIO()
-    Image.new("RGB", (64, 64), "red").save(buf, format="PNG")
-    return UploadedFile(name="test.png", mime_type="image/png", data=buf.getvalue())
-
-
-def audio_upload(seconds=2):
-    buf = io.BytesIO()
-    sf.write(buf, np.zeros(int(16000 * seconds)), 16000, format="WAV")
-    return UploadedFile(name="test.wav", mime_type="audio/wav", data=buf.getvalue())
+HERE = Path(__file__).resolve().parents[1]
+BLOCK_FRAMES = 12
+FRAME_SAMPLES = 240  # 10 ms at 24 kHz, the size the transport cuts a byte stream into
 
 
-@pytest.fixture
-def model(tmp_path):
-    from unittest.mock import Mock
+class FakeModel:
+    """The model by shape: records each block and returns ``frames`` frames per block."""
 
-    model = LiveAvatar()
-    model._engine = LiveAvatarModel()
-    model._engine.shutdown = Mock()
-    model.state = LiveAvatarState()
-    model.state._directory = type("Directory", (), {"name": str(tmp_path)})()
-    return model
+    fps = 25
+    block_frames = BLOCK_FRAMES
+    sample_rate = SAMPLE_RATE
 
+    def __init__(self) -> None:
+        self.blocks: list[AvatarInput] = []
+        self.resets = 0
+        self.frames = BLOCK_FRAMES
 
-def test_contract():
-    import inspect
+    def generate(self, input: AvatarInput) -> AvatarResult:
+        self.blocks.append(input)
+        frames = np.zeros((self.frames, 8, 8, 3), dtype=np.uint8)
+        return AvatarResult(
+            frames=frames, block=len(self.blocks) - 1, avatar_id=input.avatar_id
+        )
 
-    commands = ModelContract.of(LiveAvatar).commands
-    assert set(commands) == {
-        "set_avatar_image",
-        "set_audio",
-        "set_pose_video",
-        "set_prompt",
-        "start",
-        "set_generation_options",
-        "stop",
-        "reset",
-    }
-    assert LiveAvatar.fps == 25
-    assert list(inspect.signature(LiveAvatar.start).parameters) == ["self"]
-    assert LiveAvatarOutput.__tracks__["main_audio"].rate == 48000
-    assert StateUpdate.from_state(LiveAvatarState()).ready is False
+    def reset(self) -> None:
+        self.resets += 1
 
 
-def test_wire_stop_does_not_override_runtime_shutdown():
-    import inspect
+class Clock:
+    def __init__(self) -> None:
+        self.now = 100.0
 
-    assert not inspect.iscoroutinefunction(LiveAvatar.stop)
-    assert inspect.iscoroutinefunction(LiveAvatar.stop_take)
-
-
-@pytest.mark.asyncio
-async def test_empty_upstream_exception_has_visible_reason(model):
-    class FailingBackend:
-        def start(self, **kwargs):
-            pass
-
-        def next(self):
-            raise AssertionError()
-
-        def close(self):
-            pass
-
-    model._engine._backend = FailingBackend()
-    model.state._image = model._path("reference.png")
-    model.state._audio = model._path("audio.wav")
-    model.state._running = True
-    with pytest.raises(TakeFailed) as caught:
-        model.generate(await model.process_input())
-    assert await model.process_output(StepOutcome(error=caught.value)) is None
-    assert model.state._error == "AssertionError"
-    assert not model.state._running
+    def __call__(self) -> float:
+        return self.now
 
 
-@pytest.mark.asyncio
-async def test_waits_for_uploads(model):
-    with pytest.raises(CommandError):
-        await model.start()
-    await model.set_avatar_image(image_upload())
-    with pytest.raises(CommandError):
-        await model.start()
-    await model.set_audio(audio_upload())
-    assert StateUpdate.from_state(model.state).ready
-    await model.set_generation_options(seed=42, max_chunks=2)
-    assert not model.state._running
-    with pytest.raises(ApplicationError):
-        await model.process_input()
-    await model.start()
-    assert model.state._running
-    with pytest.raises(CommandError):
-        await model.set_prompt(prompt="new", negative_prompt="")
-    with pytest.raises(CommandError):
-        await model.set_generation_options(seed=42, max_chunks=2)
-    with pytest.raises(CommandError):
-        await model.start()
-    await model.stop_take()
-    assert model.state._image is not None
-    await model.reset()
-    assert model.state._image is None and not StateUpdate.from_state(model.state).ready
+class Harness:
+    """The app with a live session, a fake model, and what it sent, flushed and emitted."""
 
+    def __init__(self, **settings: Any) -> None:
+        self.app = app = LiveAvatar()
+        self.model = FakeModel()
+        self.clock = Clock()
+        self.sent: list[Any] = []
+        self.flushes: list[bool] = []
+        self.chunks: list[Any] = []
+        app.settings = AvatarSettings(**settings)
+        app.model = self.model
+        app.block_frames = BLOCK_FRAMES
+        app.samples_per_frame = SAMPLE_RATE // 25
+        app.block_samples = BLOCK_SAMPLES
+        app.default_avatar = b"portrait"
+        app._init_loop_state()
+        app.clock = self.clock
+        app.session.active = True
+        app._on_loop_ready()
+        app.bind_output(
+            broadcast=self.sent.append,
+            addressed=lambda *args: None,
+            media=self.chunks.append,
+            media_ops=MediaOps(
+                flush=self.flushes.append,
+                set_rate=lambda fps: None,
+                set_depth=lambda n: None,
+            ),
+        )
 
-@pytest.mark.asyncio
-async def test_invalid_upload_does_not_replace_input(model):
-    await model.set_avatar_image(image_upload())
-    original = model.state._image.read_bytes()
-    with pytest.raises(CommandError):
-        await model.set_avatar_image(UploadedFile("bad.png", "image/png", b"broken"))
-    assert model.state._image.read_bytes() == original
-    await model.set_audio(audio_upload())
-    original = model.state._audio.read_bytes()
-    with pytest.raises(CommandError):
-        await model.set_audio(audio_upload(0.2))
-    assert model.state._audio.read_bytes() == original
-    assert set(Path(model.state._directory.name).iterdir()) == {
-        model.state._image,
-        model.state._audio,
-    }
-
-
-@pytest.mark.asyncio
-async def test_inference_one_clip_per_turn(model):
-    class Backend:
-        def __init__(self):
-            self.calls = 0
-
-        def start(self, **kwargs):
-            self.kwargs = kwargs
-
-        def next(self):
-            self.calls += 1
-            return (
-                (np.zeros((45, 32, 32, 3), np.uint8), np.zeros((1, 86400), np.float32))
-                if self.calls == 1
-                else None
+    def speak(self, stream: str, samples: np.ndarray, *, end: bool = False) -> None:
+        meta = json.dumps(
+            {"stream_id": stream, "attributes": {"sample_rate": "24000"}}
+        ).encode()
+        buffer = self.app.media.agent_audio
+        for i in range(0, samples.size, FRAME_SAMPLES):
+            buffer.push(
+                InputFrame(
+                    data=samples[i : i + FRAME_SAMPLES].reshape(1, -1), metadata=meta
+                )
+            )
+        if end:
+            ended = json.dumps({"stream_id": stream, "ended": True}).encode()
+            buffer.push(
+                InputFrame(data=np.zeros((1, 0), dtype=np.int16), metadata=ended)
             )
 
-        def close(self):
-            pass
+    async def step(self) -> Any:
+        """One turn of the loop with the clock unmoved: plan, render here, land. ``"wait"`` if it would wait."""
+        plan = self.app._plan(self.clock.now)
+        if plan is None:
+            return "wait"
+        result = self.model.generate(plan.input)
+        plan.elapsed = 0.4
+        return await self.app._land(plan, result)
 
-    backend = Backend()
-    model._engine._backend = backend
-    await model.set_avatar_image(image_upload())
-    await model.set_audio(audio_upload())
-    await model.set_generation_options(seed=9, max_chunks=3)
-    await model.start()
-    result = await model.process_output(
-        StepOutcome(result=model.generate(await model.process_input()))
+
+def voiced(n: int) -> np.ndarray:
+    t = np.arange(n) / SAMPLE_RATE
+    return (8000 * np.sin(2 * np.pi * 220 * t)).astype(np.int16)
+
+
+def png() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (600, 400), (120, 90, 60)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+# -- the contract -------------------------------------------------------------------------------------------------
+
+
+async def test_the_contract_is_lkits_avatar_shape() -> None:
+    contract = LiveAvatar.__reactor_contract__
+    assert set(contract.commands) == {
+        "clear_buffer",
+        "user_speaking_state",
+        "set_avatar",
+    }
+    assert {"playback_started", "playback_finished"} <= set(contract.messages)
+    assert set(contract.tracks) == {"agent_audio", "main_video", "main_audio"}
+
+
+async def test_the_manifest_livekit_block_names_the_contract() -> None:
+    config = load_config(HERE / "reactor.yaml")
+    check_livekit_block(config.livekit, LiveAvatar.__reactor_contract__)
+    assert config.livekit.media_inputs == {"lk.audio_stream": "agent_audio"}
+
+
+# -- speech into blocks -------------------------------------------------------------------------------------------
+
+
+async def test_a_block_of_speech_becomes_a_speech_block_with_its_audio() -> None:
+    h = Harness()
+    speech = voiced(BLOCK_SAMPLES)
+    h.speak("s1", speech)
+    out = await h.step()
+    block = h.model.blocks[-1]
+    assert not block.silent and np.array_equal(block.audio, speech)
+    assert np.array_equal(out.main_audio.ravel(), speech)
+
+
+async def test_an_utterance_end_renders_its_short_tail_padded_with_silence() -> None:
+    h = Harness()
+    h.speak("s1", voiced(BLOCK_SAMPLES // 2), end=True)
+    await h.step()
+    block = h.model.blocks[-1]
+    assert np.count_nonzero(block.audio[BLOCK_SAMPLES // 2 :]) == 0
+    assert np.count_nonzero(block.audio[: BLOCK_SAMPLES // 2]) > 0
+
+
+async def test_a_shorter_first_block_gives_the_rest_of_its_speech_to_the_next() -> None:
+    h = Harness()
+    h.model.frames = 9
+    h.speak("s1", voiced(2 * BLOCK_SAMPLES), end=True)
+    first = await h.step()
+    assert first.main_audio.size == 9 * 960
+    h.model.frames = BLOCK_FRAMES
+    h.clock.now += 0.4
+    await h.step()
+    second = h.model.blocks[-1].audio
+    assert np.array_equal(
+        second[: 3 * 960], voiced(2 * BLOCK_SAMPLES)[9 * 960 : 12 * 960]
     )
-    assert isinstance(result, LiveAvatarOutput)
-    assert backend.calls == 1
-    assert model.state._frames == 45 and model.state._chunks == 1
-    assert backend.kwargs["seed"] == 9
-    await model.process_output(
-        StepOutcome(result=model.generate(await model.process_input()))
-    )
-    assert not model.state._running
 
 
-@pytest.mark.asyncio
-async def test_reset_keeps_upload_directory_and_emits_one_final_snapshot(model):
-    from unittest.mock import AsyncMock
-
-    await model.set_avatar_image(image_upload())
-    await model.set_audio(audio_upload())
-    directory = model.state._directory
-    model.send = AsyncMock()
-    await model.reset()
-    assert model.state._directory is directory
-    assert list(Path(directory.name).iterdir()) == []
-    assert model.send.call_count == 1
-    assert not model.send.call_args.args[0].ready
-    await model.set_avatar_image(image_upload())
-    assert model.state._image.is_file()
+async def test_without_speech_the_avatar_idles_then_listens() -> None:
+    h = Harness(listen_after_blocks=1)
+    for _ in range(3):
+        await h.step()
+        h.clock.now += 0.5
+    flags = [(b.silent, b.listening) for b in h.model.blocks]
+    assert flags == [(True, False), (True, True), (True, True)]
 
 
-@pytest.mark.asyncio
-async def test_session_cleanup_and_new_session_defaults(tmp_path):
-    from unittest.mock import Mock
-
-    model = LiveAvatar()
-    model._work = tmp_path
-    model._engine = Mock()
-    model.state = LiveAvatarState()
-    await model.on_session_started()
-    directory = model._path("example").parent
-    model.state._seed = 99
-    model.state._take_id = 7
-    await model.on_session_ended()
-    assert not directory.exists()
-    # Runtime creates a new InputState for each new session.
-    model.state = LiveAvatarState()
-    await model.on_session_started()
-    assert model.state._seed == 420
-    assert model.state._take_id == 0
-    assert model.state._image is model.state._audio is None
-    await model.on_session_ended()
+async def test_idle_blocks_wait_while_enough_video_is_queued() -> None:
+    h = Harness()
+    h.app.session.render_s = 0.2
+    await h.step()
+    assert await h.step() == "wait"
+    h.clock.now += 0.3
+    assert await h.step() != "wait"
 
 
-@pytest.mark.asyncio
-async def test_application_hooks_with_fake_model(model):
-    from unittest.mock import Mock
-
-    from liveavatar_model import LiveAvatarResult
-
-    model._engine = Mock()
-    with pytest.raises(ApplicationError):
-        await model.process_input()
-    model._engine.generate.assert_not_called()
-    await model.set_avatar_image(image_upload())
-    await model.set_audio(audio_upload())
-    await model.start()
-    step = await model.process_input()
-    assert step.conditions is not None
-    result = LiveAvatarResult(
-        step.take_id,
-        np.zeros((45, 2, 2, 3), np.uint8),
-        np.zeros((1, 86400), np.float32),
-        1,
-        45,
-        False,
-    )
-    model._engine.generate.return_value = result
-    assert model.generate(step) is result
-    await model.process_output(StepOutcome(result=result))
-    assert (await model.process_input()).conditions is None
+# -- playback reports and interrupts ------------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_audio_timeout_preserves_selection_and_cleans_upload(model, monkeypatch):
-
-    await model.set_audio(audio_upload())
-    original = model.state._audio.read_bytes()
-
-    def timeout(*args, **kwargs):
-        Path(args[0][-1]).write_bytes(b"partial WAV")
-        raise subprocess.TimeoutExpired("ffmpeg", kwargs["timeout"])
-
-    monkeypatch.setattr(subprocess, "run", timeout)
-    with pytest.raises(CommandError, match="timed out"):
-        await model.set_audio(audio_upload())
-    assert model.state._audio.read_bytes() == original
-    assert list(Path(model.state._directory.name).iterdir()) == [model.state._audio]
+async def test_playback_is_reported_started_and_finished_on_the_clock() -> None:
+    h = Harness()
+    h.speak("s1", voiced(BLOCK_SAMPLES), end=True)
+    await h.step()
+    await h.app.report_playback()
+    assert isinstance(h.sent[-1], PlaybackStarted)
+    h.clock.now += 0.5
+    await h.app.report_playback()
+    assert isinstance(h.sent[-1], PlaybackFinished) and not h.sent[-1].interrupted
+    assert h.sent[-1].playback_position == pytest.approx(0.48)
 
 
-@pytest.mark.asyncio
-async def test_oversized_image_refused_before_conversion(model, monkeypatch):
-    from unittest.mock import MagicMock
+async def test_clear_buffer_cuts_the_utterance_and_reports_how_far_it_played() -> None:
+    h = Harness()
+    h.speak("s1", voiced(3 * BLOCK_SAMPLES))
+    await h.step()
+    h.clock.now += 0.2
+    await h.app.clear_buffer()
+    report = h.sent[-1]
+    assert isinstance(report, PlaybackFinished) and report.interrupted
+    assert report.playback_position == pytest.approx(0.2)
+    assert h.flushes[-1] is True
+    h.speak("s1", voiced(BLOCK_SAMPLES))
+    await h.step()
+    assert h.model.blocks[-1].silent
 
-    image = image_upload()
-    decoded = MagicMock(width=10000, height=10000)
-    decoded.__enter__.return_value = decoded
-    monkeypatch.setattr(Image, "open", lambda _: decoded)
-    with pytest.raises(CommandError, match="40 million"):
-        await model.set_avatar_image(image)
-    decoded.convert.assert_not_called()
-    assert model.state._image is None
+
+async def test_a_speech_block_rendered_across_an_interrupt_is_dropped() -> None:
+    h = Harness()
+    h.speak("s1", voiced(2 * BLOCK_SAMPLES))
+    plan = h.app._plan(h.clock.now)
+    h.app.session.rendering = plan
+    await h.app.clear_buffer()
+    assert await h.app._land(plan, h.model.generate(plan.input)) is None
 
 
-@pytest.mark.asyncio
-async def test_failed_and_cleared_pose_uploads_remove_staged_media(model):
-    clip = (
-        await asyncio.to_thread(
-            subprocess.run,
-            [
-                "ffmpeg",
-                "-v",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=s=32x32:r=25",
-                "-frames:v",
-                "2",
-                "-c:v",
-                "mpeg4",
-                "-f",
-                "mp4",
-                "-movflags",
-                "frag_keyframe+empty_moov",
-                "pipe:1",
-            ],
-            capture_output=True,
-            check=True,
+# -- commands -----------------------------------------------------------------------------------------------------
+
+
+async def test_set_avatar_accepts_an_image_from_the_starting_input_only() -> None:
+    h = Harness()
+    image = UploadedFile(name="me.png", mime_type="image/png", data=png())
+    with pytest.raises(CommandError) as refused:
+        await h.app.set_avatar(image=image, client=ClientInfo(id=1, joined_at=0.0))
+    assert refused.value.code == "not_allowed"
+    with pytest.raises(CommandError) as wrong:
+        await h.app.set_avatar(
+            image=UploadedFile(name="a.txt", mime_type="text/plain", data=b"x"),
+            client=ClientInfo(id=0, joined_at=0.0, system=True),
         )
-    ).stdout
-    await model.set_pose_video(UploadedFile("pose.mp4", "video/mp4", clip))
-    selected = model.state._pose
-    with pytest.raises(CommandError, match="readable video track"):
-        await model.set_pose_video(UploadedFile("broken.mp4", "video/mp4", b"broken"))
-    assert selected.read_bytes() == clip
-    assert list(selected.parent.iterdir()) == [selected]
-    await model.set_pose_video(None)
-    assert model.state._pose is None and not selected.exists()
+    assert wrong.value.code == "unsupported_media"
+    await h.app.set_avatar(
+        image=image, client=ClientInfo(id=0, joined_at=0.0, system=True)
+    )
+    await h.step()
+    assert h.model.blocks[-1].avatar == image.data
 
 
-@pytest.mark.asyncio
-async def test_idle_controls_keep_workers_and_active_disconnect_shuts_them_down(
-    tmp_path,
-):
-    from unittest.mock import Mock
+async def test_user_speaking_state_makes_idle_blocks_listen() -> None:
+    h = Harness(listen_after_blocks=5)
+    h.app.user_speaking_state(state="speaking")
+    await h.step()
+    assert h.model.blocks[-1].listening
 
-    app = LiveAvatar()
-    app._work = tmp_path
-    runner = app._engine = Mock()
-    app.state = LiveAvatarState()
-    await app.on_session_started()
-    await app.stop_take()
-    await app.reset()
-    await app.on_session_ended()
-    assert app._engine is runner
-    runner.shutdown.assert_not_called()
 
-    app.state = LiveAvatarState()
-    await app.on_session_started()
-    await app.set_avatar_image(image_upload())
-    await app.set_audio(audio_upload())
-    await app.start()
-    directory = Path(app.state._directory.name)
-    await app.on_session_ended()
-    runner.shutdown.assert_called_once_with()
-    assert app._engine is None and not directory.exists()
+# -- the model half's CPU helpers ---------------------------------------------------------------------------------
+
+
+async def test_crop_portrait_covers_and_centres_the_output_size() -> None:
+    frame = crop_portrait(png(), 512, 512)
+    assert frame.shape == (512, 512, 3) and frame.dtype == np.uint8
+
+
+async def test_speech_resamples_to_the_encoders_block_without_an_edge() -> None:
+    model = LiveAvatarModel()
+    tone = voiced(2 * BLOCK_SAMPLES)
+    a = model._to_encoder_rate(tone[:BLOCK_SAMPLES])
+    b = model._to_encoder_rate(tone[BLOCK_SAMPLES:])
+    assert a.shape == b.shape == (BLOCK_SAMPLES * 2 // 3,)
+    joined = np.concatenate([a, b])
+    assert np.abs(np.diff(joined)).max() < 0.05

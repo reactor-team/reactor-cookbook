@@ -1,15 +1,35 @@
 $schema: reactor/v2
 model:
   name: liveavatar
-  version: v0.3.11
-  description: Audio-driven avatar clips from an uploaded identity image and audio.
+  version: v0.4.0
+  description: |
+    A talking avatar from one portrait that lip-syncs, live, to speech another participant streams
+    to it, at 512x512 and 25 FPS on one B200. It joins a LiveKit room as a LiveKit avatar: speech
+    on `lk.audio_stream`, an interrupt on `lk.clear_buffer`, and the playback reports back to the
+    agent as `lk.playback_started` and `lk.playback_finished`.
   resources:
     gpu:
       type: NVIDIA_B200
-      count: 3
+      count: 1
 runtime:
-  import: liveavatar_pipeline:LiveAvatar
+  import: liveavatar_app:LiveAvatar
+  config: config.yml
   weights_path: ~/.cache/reactor_registry/liveavatar
+  # A LiveKit room reaches the avatar the way LiveKit's avatar protocol does: speech as byte streams
+  # on lk.audio_stream, an interrupt as the lk.clear_buffer RPC, and the playback reports as RPC calls
+  # back to the sender. Data packets on avatar.<command> run the other commands
+  # (avatar.user_speaking_state).
+  livekit:
+    rpc:
+      - method: lk.clear_buffer
+        command: clear_buffer
+      - method: lk.playback_finished
+        message: playback_finished
+      - method: lk.playback_started
+        message: playback_started
+    topics: [avatar]
+    media_inputs:
+      lk.audio_stream: agent_audio
 build:
   runtime_version: "3.11.9"
   python_version: "3.12"
@@ -19,15 +39,11 @@ build:
     - https://download.pytorch.org/whl/cu128
   system_packages: [ffmpeg, git, build-essential, libsndfile1, libgl1, libglib2.0-0]
   run:
-    - pip install --no-cache-dir --no-deps --force-reinstall flash-attn-4==4.0.0b30
-    - python -c 'from flash_attn import flash_attn_func; from flash_attn.cute import flash_attn_func as fa4; print("FA2/FA4 imports verified")'
-    - --mount=type=bind,source=.,target=/port python /port/liveavatar_assets.py --checkout /opt/liveavatar-source
+    - git clone https://github.com/Alibaba-Quark/LiveAvatar.git /opt/liveavatar-source && git -C /opt/liveavatar-source checkout --detach c3c47d031d8bf3247428333c1fe610579c71a551
   runtime_env:
-    ENABLE_COMPILE: "false"
-    LIVEAVATAR_TURBO: "1"
-    LIVEAVATAR_STEPS: "4"
     LIVEAVATAR_SOURCE: /opt/liveavatar-source
-    LIVEAVATAR_LOCAL_WEIGHTS_ONLY: "1"
+    ENABLE_COMPILE: "false"
     HF_HUB_OFFLINE: "1"
     TRANSFORMERS_OFFLINE: "1"
-    OMP_NUM_THREADS: "4"
+    OMP_NUM_THREADS: "8"
+    TOKENIZERS_PARALLELISM: "false"
