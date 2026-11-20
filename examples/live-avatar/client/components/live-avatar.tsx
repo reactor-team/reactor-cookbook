@@ -61,11 +61,25 @@ export function LiveAvatar() {
   const callRef = useRef<string | null>(null);
   const startedAt = useRef<number | null>(null);
 
+  // Ask the page's server what is configured, and keep asking until it answers: a dev server compiles the route on
+  // its first request, and a server that was down comes back.
   useEffect(() => {
-    fetch("/api/status")
-      .then((r) => r.json())
-      .then(setStatus)
-      .catch(() => setStatus(null));
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const resp = await fetch("/api/status", { cache: "no-store" });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        if (!stopped) setStatus(await resp.json());
+      } catch {
+        if (!stopped) timer = setTimeout(poll, 2000);
+      }
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -229,7 +243,7 @@ export function LiveAvatar() {
           )}
         </section>
 
-        <aside className="side">
+        <aside className="panel">
           <div className="field">
             <span className="label">Face</span>
             <div className="faces">
@@ -299,7 +313,12 @@ export function LiveAvatar() {
           {error && <p className="error">{error}</p>}
 
           <div className="room">
-            <span className="label">The room</span>
+            <div className="room-head">
+              <span className="label">The room</span>
+              <span className="room-state">
+                {room.connected ? `${[room.you, room.agent, room.avatar].filter(Boolean).length} of 3 joined` : "Not in a call"}
+              </span>
+            </div>
             <RoomDiagram view={room} />
           </div>
 

@@ -99,23 +99,24 @@ textarea {
   background: var(--flora);
 }
 
+/* The stage and the panel are one unit, centred, both as tall as the space below the bar allows. */
 .layout {
+  --unit: min(calc(100vh - 52px - 40px), calc(100vw - 360px - 88px));
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 28px;
-  min-height: 0;
-  padding: 8px 32px 32px;
+  grid-template-columns: var(--unit) 340px;
+  grid-template-rows: var(--unit);
+  justify-content: center;
+  align-content: start;
+  gap: 20px;
+  padding: 0 32px 40px;
 }
 
 /* -- the stage ------------------------------------------------------------------------------------------- */
 
 .stage {
   position: relative;
-  justify-self: center;
-  align-self: center;
+  width: 100%;
   height: 100%;
-  max-width: 100%;
-  aspect-ratio: 1;
   border-radius: 18px;
   overflow: hidden;
   background: var(--surface);
@@ -216,17 +217,17 @@ textarea {
   }
 }
 
-/* -- the side column ------------------------------------------------------------------------------------- */
+/* -- the panel ------------------------------------------------------------------------------------------ */
 
-.side {
+.panel {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
   min-height: 0;
-  padding: 24px;
+  overflow: hidden;
+  padding: 22px;
   border-radius: 18px;
   background: var(--surface);
-  overflow: hidden;
 }
 
 .field {
@@ -236,18 +237,18 @@ textarea {
 
 .label {
   font-size: 12px;
-  color: var(--faint);
+  color: var(--muted);
 }
 
 .faces {
   display: flex;
-  gap: 8px;
+  justify-content: space-between;
 }
 
 .face {
   position: relative;
-  width: 46px;
-  height: 46px;
+  width: 48px;
+  height: 48px;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -345,16 +346,32 @@ button:disabled {
 
 .room {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   min-height: 0;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.room-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.room-state {
+  font-size: 12px;
+  color: var(--faint);
 }
 
 @media (max-width: 860px) {
   .layout {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) auto;
+    --unit: min(calc(100vw - 48px), calc(100vh - 52px - 300px));
+    grid-template-columns: var(--unit);
+    grid-template-rows: var(--unit) auto;
+    padding: 0 24px 24px;
   }
 
   .room {
@@ -365,44 +382,31 @@ button:disabled {
 /* -- room diagram ---------------------------------------------------------------------------------------- */
 
 .room-diagram {
-  flex: 1 1 auto;
+  display: block;
+  flex: 1 1 0;
   width: 100%;
   min-height: 0;
+  max-height: 300px;
 }
 
-.room-diagram .room-box {
-  fill: none;
-  stroke: var(--line);
-  stroke-dasharray: 3 4;
-}
-
-.room-diagram .room-box.is-live {
-  stroke: rgba(199, 192, 153, 0.35);
-}
-
-.room-diagram .room-label,
-.room-diagram .llm text,
-.room-diagram .link-label,
-.room-diagram .node-detail {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  fill: var(--faint);
-}
-
-.room-diagram .llm rect,
 .room-diagram .node rect {
-  fill: var(--surface-2);
+  fill: var(--surface);
+  stroke: rgba(255, 255, 255, 0.1);
 }
 
 .room-diagram .node-title {
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 500;
   fill: var(--muted);
 }
 
+.room-diagram .node-detail {
+  font-size: 11px;
+  fill: var(--faint);
+}
+
 .room-diagram .node.is-on rect {
   stroke: var(--dune);
-  stroke-width: 1;
 }
 
 .room-diagram .node.is-on .node-title {
@@ -410,29 +414,30 @@ button:disabled {
 }
 
 .room-diagram .link {
-  stroke: rgba(255, 255, 255, 0.16);
-  stroke-width: 1;
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 1.2;
 }
 
-.room-diagram .link.is-on {
-  stroke: rgba(199, 192, 153, 0.5);
+.room-diagram .link.is-muted {
+  stroke-dasharray: 2 4;
 }
 
-.room-diagram .arrow-head {
-  fill: rgba(255, 255, 255, 0.3);
-}
-
-.room-diagram .link-group.is-muted .link {
-  stroke-dasharray: 2 3;
-}
-
-.room-diagram .link-group.is-active .link {
+.room-diagram .link.is-active {
   stroke: var(--dune);
   stroke-dasharray: 5 4;
   animation: flow 0.8s linear infinite;
 }
 
-.room-diagram .link-group.is-active .link-label {
+.room-diagram .arrow-head {
+  fill: rgba(255, 255, 255, 0.35);
+}
+
+.room-diagram .link-label {
+  font-size: 12px;
+  fill: var(--faint);
+}
+
+.room-diagram .link-label.is-active {
   fill: var(--dune);
 }
 
