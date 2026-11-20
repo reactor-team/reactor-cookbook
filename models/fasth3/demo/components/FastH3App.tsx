@@ -5,6 +5,7 @@ import {
   ReactorView,
   useReactor,
   useReactorMessage,
+  type ReactorError,
 } from "@reactor-team/js-sdk";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -87,30 +88,44 @@ interface LivePromptItem {
   effectiveClipIndex?: number;
 }
 
+const TOKEN_REFRESH_SKEW_MS = 60_000;
+let cachedToken: { jwt: string; expiresAtMs: number } | null = null;
+let pendingToken: Promise<string> | null = null;
+
+/**
+ * Return one token for the whole session. The SDK asks before every request,
+ * and a session only accepts the token that created it, so the token is
+ * minted once and reused until shortly before it expires.
+ */
 async function fetchToken(): Promise<string> {
-  const response = await fetch("/api/token");
-  const body = (await response.json().catch(() => ({}))) as {
-    jwt?: string;
-    error?: string;
-  };
-  if (!response.ok || !body.jwt) {
-    throw new Error(body.error ?? `Token request failed: ${response.status}`);
+  if (cachedToken && Date.now() < cachedToken.expiresAtMs - TOKEN_REFRESH_SKEW_MS) {
+    return cachedToken.jwt;
   }
-  return body.jwt;
+  pendingToken ??= (async () => {
+    try {
+      const response = await fetch("/api/token", { cache: "no-store" });
+      const body = (await response.json().catch(() => ({}))) as {
+        jwt?: string;
+        expires_at?: number;
+        error?: string;
+      };
+      if (!response.ok || !body.jwt || !body.expires_at) {
+        throw new Error(body.error ?? `Token request failed: ${response.status}`);
+      }
+      cachedToken = { jwt: body.jwt, expiresAtMs: body.expires_at * 1000 };
+      return body.jwt;
+    } finally {
+      pendingToken = null;
+    }
+  })();
+  return pendingToken;
 }
 
 function unwrap(raw: unknown): ModelEvent {
   const envelope = raw as {
     type?: string;
     data?: Record<string, unknown>;
-    error?: { code?: string; message?: string };
   };
-  if (envelope?.error) {
-    return {
-      type: "command_error",
-      reason: envelope.error.message ?? envelope.error.code ?? "Command rejected",
-    };
-  }
   if (
     envelope &&
     typeof envelope === "object" &&
@@ -193,7 +208,8 @@ function FastH3Workspace({ config }: { config: DemoConfig }) {
   const disconnect = useReactor((state) => state.disconnect);
   const sendCommand = useReactor((state) => state.sendCommand);
   const status = useReactor((state) => state.status);
-  const lastError = useReactor((state) => state.lastError);
+  const reactor = useReactor((state) => state.internal.reactor);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [world, setWorld] = useState<WorldState | null>(null);
   const [visibleClip, setVisibleClip] = useState<VisibleClip | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -370,7 +386,7 @@ function FastH3Workspace({ config }: { config: DemoConfig }) {
       appendLog(`Clip ${String(message.clip_index)} complete`);
       return;
     }
-    if (message.type === "channel_failed" || message.type === "command_error") {
+    if (message.type === "channel_failed") {
       appendLog(String(message.reason ?? "Channel failed"), "error");
       return;
     }
@@ -380,6 +396,7 @@ function FastH3Workspace({ config }: { config: DemoConfig }) {
   useEffect(() => {
     if (status === "ready" && connectedAt === null) {
       setConnectedAt(Date.now());
+      setConnectionError(null);
       appendLog("WebRTC connected");
     } else if (status !== "ready" && connectedAt !== null) {
       appendLog(`WebRTC disconnected after ${connectedFor}s`, "error");
@@ -403,26 +420,42 @@ function FastH3Workspace({ config }: { config: DemoConfig }) {
   }, [connectedAt]);
 
   useEffect(() => {
-    if (lastError) appendLog(lastError.message, "error");
-  }, [appendLog, lastError]);
+    const onError = (error: ReactorError) => {
+      // A refused command is reported by the call that sent it.
+      if (error.operation === "sendCommand") return;
+      setConnectionError(error.message);
+      appendLog(error.message, "error");
+    };
+    reactor.on("error", onError);
+    return () => reactor.off("error", onError);
+  }, [appendLog, reactor]);
 
   const valid = useMemo(
     () => new Set(world?.valid_commands ?? []),
     [world?.valid_commands],
   );
   const connected = status === "ready";
+  // `sendCommand` never rejects. A refused command resolves `undefined` and
+  // emits its `ReactorError`, carrying the model's code, on the `error` event
+  // while the call is in flight; only this client is told.
   const command = useCallback(
     async (name: string, params: Record<string, unknown> = {}) => {
+      let refusal: ReactorError | null = null;
+      const onError = (error: ReactorError) => {
+        if (error.operation === "sendCommand" && error.message.startsWith(`command '${name}' failed`)) {
+          refusal = error;
+        }
+      };
+      reactor.on("error", onError);
       try {
         await sendCommand(name, params);
-      } catch (error) {
-        appendLog(
-          error instanceof Error ? error.message : `${name} failed`,
-          "error",
-        );
+      } finally {
+        reactor.off("error", onError);
       }
+      const error = refusal as ReactorError | null;
+      if (error) appendLog(error.message, "error");
     },
-    [appendLog, sendCommand],
+    [appendLog, reactor, sendCommand],
   );
 
   return (
@@ -445,7 +478,7 @@ function FastH3Workspace({ config }: { config: DemoConfig }) {
         </span>
         <span className="ml-auto flex items-center gap-2 text-xs text-dim">
           <span
-            className={`size-2 rounded-full ${connected ? "bg-live" : lastError ? "bg-error" : "bg-faint"}`}
+            className={`size-2 rounded-full ${connected ? "bg-live" : connectionError ? "bg-error" : "bg-faint"}`}
           />
           {statusLabel(status)}
           {connected ? ` · ${connectedFor}s` : ""}
@@ -748,7 +781,7 @@ export function FastH3App({ config }: { config: DemoConfig }) {
       modelTracks={[...TRACKS]}
       local={local}
       {...(config.apiUrl ? { apiUrl: config.apiUrl } : {})}
-      {...(local ? {} : { getJwt: fetchToken })}
+      {...(local ? {} : { jwtToken: fetchToken })}
       connectOptions={{ autoConnect: false }}
     >
       <FastH3Workspace config={config} />

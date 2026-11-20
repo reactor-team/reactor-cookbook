@@ -77,7 +77,8 @@ the wire and per-inference latency.
 Over the production wire, this path scored 56.8% / 60.2% episode success at
 replan 16 / 8 against 56.4% / 59.2% for the vendor's own socket (1000 paired
 episodes, seed-matched; the vendor's published anchor is 57.28%). Measured
-on an earlier runtime version.
+on the earlier SDK 0.8 transport and runtime. Those scores have not been reproduced
+with the current native SDK; they are not validation of this migration.
 
 ## Check the wiring
 
@@ -92,15 +93,11 @@ tracks frame-for-frame in arrival order).
 
 ## Failure modes
 
-- **The session dies between tasks.** The runtime disconnects a client that
-  sends nothing for 20 s, and RoboCasa can take longer than that building
-  the next task's environment. The client therefore pings every 10 s for
-  the whole session (`reactor-sdk==0.8.0` leaves keepalive to the client).
-- **Soft, blurry observations tank success.** aiortc's default H264 bitrate
-  (1 Mbps, hard max 3) visibly degrades the views; measured cost was ~25
-  points of episode success, concentrated in visual-state tasks. The client
-  pins 10 Mbps (`XR1_EVAL_H264_BITRATE` to override); on localhost/LAN
-  there is no reason to starve the encoder.
+- **The session dies between tasks.** The native Python SDK owns transport keepalive.
+  Check the connection status and error log; the client no longer sends manual pings.
+- **Observation quality changes.** Encoding is managed by the native SDK. The old
+  `XR1_EVAL_H264_BITRATE` aiortc override is no longer supported. Re-evaluate image
+  quality and task success before comparing with historical results.
 - **Predictions stop arriving deep into a long run.** Sessions were observed
   to stall after roughly 1.4k predictions, so the client recycles its
   WebRTC session every 600 (`XR1_CLIENT_SESSION_RECYCLE`; `0` disables).

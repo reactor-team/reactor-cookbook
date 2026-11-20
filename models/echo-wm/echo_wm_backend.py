@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
+from echo_wm_assets import EchoWMConfig
+from echo_wm_attention import (
+    AttentionBenchmark,
+    benchmark_attention_backends,
+    resolve_attention_backend,
+    set_attention_backend,
+)
+from echo_wm_camera import CameraChunk
 from helpers.action_camera import default_k_pix
 from helpers.action_condition import (
     _INTERNAL_TRANSLATION_CALIBRATION,
+    _TEMPORAL_COMPRESSION,
+    _normalize_trajectory,
     action_config,
 )
 from ltx_causal import (
@@ -37,15 +48,6 @@ from ltx_pipelines.utils import ModelLedger, combined_image_conditionings
 from ltx_pipelines.utils.args import ImageConditioningInput
 from ltx_pipelines.utils.helpers import create_noised_state, noise_video_state
 from ltx_pipelines.utils.types import PipelineComponents
-
-from echo_wm_assets import EchoWMConfig
-from echo_wm_attention import (
-    AttentionBenchmark,
-    benchmark_attention_backends,
-    resolve_attention_backend,
-    set_attention_backend,
-)
-from echo_wm_camera import CameraChunk
 
 
 class EchoWMBackend:
@@ -129,6 +131,8 @@ class EchoWMBackend:
         self._buffers: _RolloutBuffers | None = None
         self._action_cond: dict[str, torch.Tensor] | None = None
         self._generator: torch.Generator | None = None
+        self._path_decode: _PathDecode | None = None
+        self._generated_blocks = 0
         self._chunk_index = 0
         self._seed = config.seed
         self._last_profile: dict[str, float] = {}
@@ -149,10 +153,50 @@ class EchoWMBackend:
         return dict(self._last_profile)
 
     @torch.inference_mode()
-    def reset(self, *, image: Path, prompt: str, seed: int, fov_degrees: float) -> None:
-        """Initialize upstream conditioning, buffers, and bounded caches."""
-        self.end_session(release_cuda_cache=False)
+    def reset(
+        self,
+        *,
+        image: Path,
+        prompt: str,
+        seed: int,
+        fov_degrees: float,
+        chunks: int | None = None,
+        camera_path: np.ndarray | None = None,
+    ) -> None:
+        """Initialize upstream conditioning, buffers, and bounded caches.
+
+        A finite ``camera_path`` holds every per-frame camera-to-world pose of
+        the rollout. It is conditioned and decoded exactly as upstream's
+        ``inference_wm_causal.py`` does for a complete video.
+        """
         config = self._config
+        horizon = config.max_chunks if chunks is None else chunks
+        if (
+            not isinstance(horizon, int)
+            or isinstance(horizon, bool)
+            or not 1 <= horizon <= config.max_chunks
+        ):
+            raise ValueError(
+                "Rollout chunks must be an integer within the configured capacity"
+            )
+        if camera_path is not None and camera_path.shape != (
+            1 + config.frames_per_chunk * horizon,
+            4,
+            4,
+        ):
+            raise ValueError("Camera path length must match the rollout chunks")
+        self.end_session(release_cuda_cache=False)
+        self._total_video_latents = 1 + config.video_chunk_size * horizon
+        self._total_pixel_frames = 1 + config.frames_per_chunk * horizon
+        self._video_blocks = causal_video_blocks(
+            self._total_video_latents, config.video_chunk_size
+        )
+        self._audio_blocks = causal_audio_blocks(
+            self._total_video_latents, config.video_chunk_size
+        )
+        self._audio_latents = causal_audio_frames(
+            self._total_video_latents, config.video_chunk_size
+        )
         encoded_prompt = self._encode_prompt(prompt)
         output_shape = VideoPixelShape(
             1,
@@ -193,7 +237,15 @@ class EchoWMBackend:
             self._dtype,
             self._device,
         )
-        action_cond = self._empty_action_condition(fov_degrees)
+        action_cond = (
+            self._empty_action_condition(fov_degrees)
+            if camera_path is None
+            else self._path_action_condition(camera_path, fov_degrees)
+        )
+        # Upstream decodes the finished video with the conditioning-noise RNG.
+        noise_generator = generator
+        # Native causal_rollout starts a fresh RNG after conditioning/noise setup.
+        generator = torch.Generator(device=self._device).manual_seed(seed)
         buffers = _RolloutBuffers.create(
             video_state.clean_latent,
             audio_state.clean_latent,
@@ -223,6 +275,24 @@ class EchoWMBackend:
         self._buffers = buffers
         self._action_cond = action_cond
         self._generator = generator
+        self._path_decode = (
+            None
+            if camera_path is None
+            else _PathDecode.create(
+                buffers.video_output,
+                self._components.video_patchifier,
+                self._video_decoder,
+                VideoLatentShape(
+                    batch=1,
+                    channels=128,
+                    frames=self._total_video_latents,
+                    height=config.height // 32,
+                    width=config.width // 32,
+                ),
+                noise_generator,
+            )
+        )
+        self._generated_blocks = 1
         self._chunk_index = 0
         self._seed = seed
         self._last_profile = {}
@@ -230,27 +300,49 @@ class EchoWMBackend:
     @torch.inference_mode()
     def generate_chunk(
         self,
-        camera: CameraChunk,
+        camera: CameraChunk | None,
         *,
         fov_degrees: float,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Generate, cache, decode, and return one native audio-video block."""
-        forward = self._require_forward()
-        buffers = self._require_buffers()
-        generator = self._require_generator()
+        """Generate, cache, decode, and return one native audio-video block.
+
+        A rollout started with a camera path takes no per-chunk camera. It
+        generates ahead until upstream's whole-video tiled decode has finished
+        this chunk's frames.
+        """
+        self._require_forward()
         next_index = self._chunk_index + 1
         if next_index >= len(self._video_blocks):
             raise RuntimeError("Echo-WM rollout reached its configured chunk capacity")
-        video_block = self._video_blocks[next_index]
-        audio_block = self._audio_blocks[next_index]
-        self._update_camera(camera, video_block, fov_degrees)
-        events = (
-            [torch.cuda.Event(enable_timing=True) for _ in range(5)]
-            if self._config.profile_cuda
-            else []
-        )
-        if events:
-            events[0].record()
+        timer = _CudaTimer(self._config.profile_cuda)
+        timer.mark()
+        if self._path_decode is None:
+            if camera is None:
+                raise ValueError("Echo-WM held controls require a camera chunk")
+            self._update_camera(camera, self._video_blocks[next_index], fov_degrees)
+            self._generate_block(timer)
+            video = self._decode_video(self._video_blocks[next_index][1])
+        else:
+            if camera is not None:
+                raise ValueError("A camera path rollout takes no per-chunk camera")
+            video = self._decode_path_chunk(next_index, timer)
+        timer.mark("video_decode_seconds")
+        audio = self._decode_audio(self._audio_blocks[next_index][1], int(video.shape[0]))
+        timer.mark("audio_decode_seconds")
+        self._last_profile = timer.profile()
+        self._chunk_index = next_index
+        return video, audio
+
+    def _generate_block(self, timer: _CudaTimer) -> None:
+        """Denoise the next native block, store it, and commit it to the caches."""
+        forward = self._require_forward()
+        buffers = self._require_buffers()
+        generator = self._require_generator()
+        index = self._generated_blocks
+        if index >= len(self._video_blocks):
+            raise RuntimeError("Echo-WM rollout reached its configured chunk capacity")
+        video_block = self._video_blocks[index]
+        audio_block = self._audio_blocks[index]
         video_sample, audio_sample = _denoise_av_block(
             forward,
             buffers.initial_video,
@@ -260,8 +352,7 @@ class EchoWMBackend:
             self._sigmas,
             generator,
         )
-        if events:
-            events[1].record()
+        timer.mark("denoise_seconds")
         video_start, video_end = video_block
         audio_start, audio_end = audio_block
         buffers.video_output[
@@ -270,26 +361,22 @@ class EchoWMBackend:
         ] = video_sample
         buffers.audio_output[:, audio_start:audio_end] = audio_sample
         forward(video_sample, video_block, 0.0, audio_sample, audio_block, 0.0)
-        if events:
-            events[2].record()
-        video = self._decode_video(video_end)
-        if events:
-            events[3].record()
-        audio = self._decode_audio(audio_end, int(video.shape[0]))
-        if events:
-            events[4].record()
-            events[4].synchronize()
-            self._last_profile = {
-                "denoise_seconds": events[0].elapsed_time(events[1]) / 1000.0,
-                "cache_commit_seconds": events[1].elapsed_time(events[2]) / 1000.0,
-                "video_decode_seconds": events[2].elapsed_time(events[3]) / 1000.0,
-                "audio_decode_seconds": events[3].elapsed_time(events[4]) / 1000.0,
-                "cuda_total_seconds": events[0].elapsed_time(events[4]) / 1000.0,
-            }
-        else:
-            self._last_profile = {}
-        self._chunk_index = next_index
-        return video, audio
+        timer.mark("cache_commit_seconds")
+        self._generated_blocks = index + 1
+
+    def _decode_path_chunk(self, index: int, timer: _CudaTimer) -> np.ndarray:
+        """Return one chunk of upstream's whole-video decode, generating ahead."""
+        decode = self._path_decode
+        if decode is None:
+            raise RuntimeError("Echo-WM rollout has no camera path")
+        frame_end = 1 + self._config.frames_per_chunk * index
+        frame_start = 0 if index == 1 else frame_end - self._config.frames_per_chunk
+        while decode.decoded_frames < frame_end:
+            while self._video_blocks[self._generated_blocks - 1][1] < decode.required_latents:
+                self._generate_block(timer)
+            decode.advance()
+            timer.mark("video_decode_seconds")
+        return decode.take(frame_start, frame_end)
 
     def end_session(self, *, release_cuda_cache: bool = True) -> None:
         """Release rollout tensors while retaining loaded model components."""
@@ -297,6 +384,8 @@ class EchoWMBackend:
         self._buffers = None
         self._action_cond = None
         self._generator = None
+        self._path_decode = None
+        self._generated_blocks = 0
         self._chunk_index = 0
         self._last_profile = {}
         if release_cuda_cache:
@@ -330,6 +419,32 @@ class EchoWMBackend:
             1, self._total_video_latents, 1, 1
         )
         return {"ucpe_viewmats": viewmats, "ucpe_Ks": intrinsics}
+
+    def _path_action_condition(
+        self, camera_path: np.ndarray, fov_degrees: float
+    ) -> dict[str, torch.Tensor]:
+        """Build the camera condition with upstream's own tensor arithmetic.
+
+        This mirrors ``helpers.action_condition._build_action_condition`` for
+        ``build_causal_action_condition`` after its Action DSL has produced the
+        per-frame float32 poses.
+        """
+        c2ws = torch.from_numpy(
+            np.ascontiguousarray(camera_path, dtype=np.float32)
+        ).unsqueeze(0).to(device=self._device, dtype=torch.float32)
+        K = (
+            default_k_pix(self._config.width, self._config.height, fov_degrees)
+            .unsqueeze(0)
+            .to(device=self._device, dtype=torch.float32)
+        )
+        c2ws = _normalize_trajectory(c2ws)
+        latent_frames = self._total_video_latents
+        viewmats = c2ws[:, ::_TEMPORAL_COMPRESSION][:, :latent_frames]
+        Ks = K.unsqueeze(1).expand(-1, latent_frames, -1, -1).contiguous()
+        return {
+            "ucpe_viewmats": viewmats.to(dtype=torch.float32),
+            "ucpe_Ks": Ks.to(dtype=torch.float32),
+        }
 
     def _update_camera(
         self,
@@ -451,3 +566,109 @@ class EchoWMBackend:
         if self._generator is None:
             raise RuntimeError("Echo-WM rollout was not initialized")
         return self._generator
+
+
+class _CudaTimer:
+    """Attribute CUDA time between consecutive marks to named stages."""
+
+    def __init__(self, enabled: bool) -> None:
+        self._enabled = enabled
+        self._marks: list[tuple[str | None, torch.cuda.Event]] = []
+
+    def mark(self, stage: str | None = None) -> None:
+        if not self._enabled:
+            return
+        event = torch.cuda.Event(enable_timing=True)
+        event.record()
+        self._marks.append((stage, event))
+
+    def profile(self) -> dict[str, float]:
+        if len(self._marks) < 2:
+            return {}
+        self._marks[-1][1].synchronize()
+        result = {
+            name: 0.0
+            for name in (
+                "denoise_seconds",
+                "cache_commit_seconds",
+                "video_decode_seconds",
+                "audio_decode_seconds",
+            )
+        }
+        for (_, start), (stage, end) in zip(self._marks, self._marks[1:]):
+            if stage is not None:
+                result[stage] += start.elapsed_time(end) / 1000.0
+        result["cuda_total_seconds"] = (
+            self._marks[0][1].elapsed_time(self._marks[-1][1]) / 1000.0
+        )
+        return result
+
+
+class _PathDecode:
+    """Stream upstream's whole-video tiled VAE decode as latents become final.
+
+    Upstream decodes the finished latent video once with
+    ``TilingConfig.default()``. Its tiled decoder reads each temporal tile only
+    when that tile is decoded, so decoding the same full-length latent view
+    lazily yields the same frames once every latent a tile reads is generated.
+    """
+
+    def __init__(
+        self,
+        frames: Iterator[torch.Tensor],
+        requirements: list[int],
+    ) -> None:
+        self._frames = frames
+        self._requirements = requirements
+        self._pending: list[torch.Tensor] = []
+        self._pending_start = 0
+        self._yields = 0
+        self.decoded_frames = 0
+
+    @classmethod
+    def create(
+        cls,
+        video_tokens: torch.Tensor,
+        patchifier: Any,
+        decoder: Any,
+        shape: VideoLatentShape,
+        generator: torch.Generator,
+    ) -> _PathDecode:
+        # Unpatchify is a view, so blocks written to the token buffer appear here.
+        latent = patchifier.unpatchify(video_tokens, output_shape=shape)
+        if latent.untyped_storage().data_ptr() != video_tokens.untyped_storage().data_ptr():
+            raise RuntimeError("Echo-WM latent video must view the rollout buffer")
+        tiling = TilingConfig.default()
+        groups = decoder._group_tiles_by_temporal_slice(
+            decoder._prepare_tiles(latent, tiling)
+        )
+        ends = [max(tile.in_coords[2].stop for tile in group) for group in groups]
+        # The decoder yields a group's frames after decoding the following group.
+        requirements = [
+            max(ends[: min(index + 2, len(ends))]) for index in range(len(ends))
+        ]
+        return cls(
+            decode_video(latent, decoder, tiling_config=tiling, generator=generator),
+            requirements,
+        )
+
+    @property
+    def required_latents(self) -> int:
+        """Latent frames the next decoded output reads."""
+        return self._requirements[min(len(self._requirements) - 1, self._yields)]
+
+    def advance(self) -> None:
+        """Decode the next upstream temporal tile group and keep its frames."""
+        frames = next(self._frames)
+        self._yields += 1
+        self._pending.append(frames)
+        self.decoded_frames += int(frames.shape[0])
+
+    def take(self, start: int, end: int) -> np.ndarray:
+        """Return decoded RGB frames [start, end) and release earlier frames."""
+        pending = torch.cat(self._pending, dim=0)
+        frames = pending[start - self._pending_start : end - self._pending_start]
+        result = np.ascontiguousarray(frames.cpu().numpy(), dtype=np.uint8)
+        self._pending = [pending[end - self._pending_start :]]
+        self._pending_start = end
+        return result

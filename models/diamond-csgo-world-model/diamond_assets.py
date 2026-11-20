@@ -8,6 +8,7 @@ import os
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from types import ModuleType
@@ -16,10 +17,19 @@ from typing import Any
 import numpy as np
 import yaml
 
-from diamond_types import AdapterConfig
-
 UPSTREAM_ENV = "DIAMOND_PATH"
 _INFERENCE_IMPORT_STUBS = ("ale_py", "wandb")
+
+
+@dataclass(frozen=True)
+class AdapterConfig:
+    """Hold the adapter settings read from diamond.yaml."""
+
+    repo_id: str
+    revision: str
+    device: str
+    profile: str
+    seed: int
 
 
 @contextmanager

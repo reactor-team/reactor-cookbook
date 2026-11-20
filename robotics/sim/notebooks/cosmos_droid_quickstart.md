@@ -48,7 +48,7 @@ shared, order-sensitive connection lifecycle: register handlers, await
 [shared lifecycle notes](./README.md#session-lifecycle) for the failure modes.
 
 ```python
-client = CosmosDroidClient()      # model="cosmos-nano-policy-droid", 15 fps
+client = CosmosDroidClient()      # model="reactor/cosmos-nano-policy-droid", 15 fps
 await client.connect()
 ```
 
@@ -66,9 +66,9 @@ This model's wire: three tracks, three commands, one reply type, and no
 | → | `set_executed_step_json {executed_step_json}` | ≤8000 chars, per chunk |
 | ← | `action_prediction {action: [32,8], step}` | 7 absolute joint positions (rad) + gripper |
 
-There is no episode state to manage: no KV cache, no `reset`. The task and
-the proprio are sent with every prediction, so a new episode or a task change
-needs nothing extra: just call `predict()` with the new task.
+The API exposes `reset` for its flow-control counter. This helper maintains
+that counter across task changes. For a separate episode, close it and create a
+fresh client; resetting only the server would leave the helper’s counter stale.
 
 ## Get actions
 

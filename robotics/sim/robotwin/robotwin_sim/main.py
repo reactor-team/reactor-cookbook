@@ -7,7 +7,7 @@
 #   Gateway  ──▶  Bridge (reactor-sdk)  ──▶  api.reactor.inc  ──▶  xwam
 #
 # Run the gateway in its own virtualenv (the sim's env pins numpy 1.23.5,
-# which reactor-sdk cannot use; see README.md "Two virtualenvs"):
+# which this gateway cannot use; see README.md "Two virtualenvs"):
 #
 #   export REACTOR_API_KEY=...
 #   python -m robotwin_sim.main --port 10086

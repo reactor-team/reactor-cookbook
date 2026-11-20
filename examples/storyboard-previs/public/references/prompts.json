@@ -1,0 +1,17 @@
+{
+  "tool": "Built-in image generation",
+  "assets": [
+    [
+      "traveler",
+      "Use case: photorealistic-natural. Asset type: fictional character reference photo for a Hollywood previsualization storyboard called Desert Signal. Generate a single realistic photograph, not a contact sheet. A fictional woman radio field engineer, about 35, olive skin, dark brown eyes, dark wavy hair tied back loosely, distinctive straight nose, subtle sun freckles, wearing a weathered sand-colored canvas field jacket, dark charcoal cotton shirt and a thin canvas shoulder strap. Waist-up three-quarter portrait with face clearly visible, neutral attentive expression, hands out of frame. Background softly defocused pale desert dunes. Soft dawn side-light, cinematic but natural muted sand and steel-blue palette, fine 35mm film texture, real skin texture, no beauty retouching, no logos, no words, no watermark. Horizontal 3:2 composition. Consistency reference for identity and costume; no celebrity resemblance."
+    ],
+    [
+      "station",
+      "Use case: photorealistic-natural. Asset type: location reference for a Hollywood previsualization storyboard called Desert Signal. Single photorealistic cinematic wide location scouting photograph of a remote desert radio station: one slender 20-meter weathered lattice antenna with guy wires beside a small low concrete equipment hut, at the edge of pale wind-sculpted sand dunes and a dry flat. Empty location, no people. Dawn sun low on the left, long shadows, thin distant haze, enormous pale blue sky. Muted sand and steel-blue palette, natural 35mm film texture. Ground-level wide lens, physically plausible scale and architecture, atmospheric but clear fine details. Horizontal 16:9 composition. No words, no logos, no watermark, no sci-fi machinery, no city."
+    ],
+    [
+      "receiver",
+      "Use case: photorealistic-natural. Asset type: hero prop reference for a Hollywood previsualization storyboard called Desert Signal. Single realistic close-up photograph of a weathered portable analog shortwave receiver placed on a folded sand-colored canvas field jacket on pale desert sand. Olive-gray rectangular metal housing, two black knurled tuning knobs, a narrow amber analog frequency window with subtle tick markings, small speaker grille and a coiled black cable. Camera at a three-quarter angle clearly showing the complete radio. Light dust in seams and fine wear on metal edges, plausible practical film prop, not science fiction. Soft dawn sidelight from left, muted warm sand and steel blue shadow palette, shallow depth of field, fine 35mm film grain. No people, no hands, no brand names, no readable text, no watermark. Horizontal 3:2 composition."
+    ]
+  ]
+}

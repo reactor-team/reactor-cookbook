@@ -43,7 +43,7 @@ shared, order-sensitive connection lifecycle: register handlers, await
 [shared lifecycle notes](./README.md#session-lifecycle) for the failure modes.
 
 ```python
-client = LingbotVaClient()      # model="lingbot-va", 20 fps tracks, 128x128
+client = LingbotVaClient()      # model="reactor/lingbot-va", 20 fps tracks, 128x128
 await client.connect()          # handlers -> connect -> await READY -> tracks -> ping
 ```
 

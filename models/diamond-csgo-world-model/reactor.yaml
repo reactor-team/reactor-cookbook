@@ -1,9 +1,9 @@
 # Reactor model specification for the DIAMOND CSGO recipe.
-$schema: reactor/v1
+$schema: reactor/v2
 
 model:
   name: diamond-csgo-world-model
-  version: v0.1.0
+  version: v0.1.3
   description: |
     Play DIAMOND's Counter-Strike world model with native keyboard and mouse input.
   resources:
@@ -33,7 +33,7 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.2.5"
+  runtime_version: "3.5.0"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"

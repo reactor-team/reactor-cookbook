@@ -1,8 +1,47 @@
 # Robotics
 
-Examples for connecting Reactor-hosted robot policies to simulation environments.
+Examples for hosted robot policies and action-conditioned simulation.
 
-- [`rldx-1/`](./rldx-1): RLDX-1 client with capture-time alignment, frame-attached robot state, and action correlation.
-- [`sim/`](./sim): policy quickstarts and closed-loop simulator integrations.
+## Policy inference
 
-Each integration documents its simulator, policy contract, setup, and validation steps.
+These quickstarts cover DROID and YAM policies.
+Reactor receives camera observations, measured robot state, and a task, then
+returns predicted actions. Your client owns the simulator or robot controller.
+
+| Model family | Embodiment | First actions |
+| --- | --- | --- |
+| Cosmos Nano | DROID | [Cosmos quickstart](https://docs.reactor.inc/robotics/cosmos/nano-policy-droid/quickstart) |
+| DreamZero | DROID | [DreamZero quickstart](https://docs.reactor.inc/robotics/dreamzero/droid/quickstart) |
+| FLUX Action | DROID | [FLUX Action quickstart](https://docs.reactor.inc/robotics/flux-action/droid/quickstart) |
+| Praxis-1 | DROID | [Praxis-1 DROID quickstart](https://docs.reactor.inc/robotics/praxis/droid/quickstart) |
+| Praxis-1 | YAM | [Praxis-1 YAM quickstart](https://docs.reactor.inc/robotics/praxis/yam/quickstart) |
+
+Start with the [first-action scripts](./sim/notebooks): an API key is enough;
+you do not need a local GPU, simulator, or model weights. Synthetic observations
+verify connectivity and action shape, not task performance.
+
+For a closed loop, see the [simulator integrations](./sim). The
+[FLUX Action client](./flux3-action-droid) also supports checkpoint selection
+and replaying your own NPZ observations. Use each model's guide for its camera
+names, state layout, action units, and execution protocol.
+
+### Praxis-1 closed loop
+
+The [Praxis-1 client](./praxis-1) drives `reactor/praxis-1-droid` (one Franka
+arm) and `reactor/praxis-1-yam` (two YAM arms) in a 15 Hz closed loop. You
+implement a small robot interface; the client stamps every camera frame and
+state row with one capture time, sends the executed rows, and echoes each
+chunk's step. `--mode stepped` runs the same loop in a stepped session instead:
+one call per chunk carries its frames, the state and the echo, with no stamps.
+Its demo runs against a synthetic robot with an API key only.
+
+## Action-conditioned simulation
+
+[Cosmos3 Nano Sim Bimanual](./simulation/cosmos-bimanual) takes an AgiBot scene
+image and controller poses/gripper values, and returns generated scene video.
+Run the hosted rollout example to initialize, change controls, and reset a world.
+This complements policy inference: you supply the actions rather than receive them.
+
+[Cosmos3 Nano Sim Transfer](./simulation/cosmos-transfer) renders prepared
+simulator controls as RGB observations. Try recorded-video rendering and reliable
+incremental depth results, with synthetic input fixtures you can generate locally.

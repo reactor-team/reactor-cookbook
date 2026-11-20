@@ -17,7 +17,9 @@ This example demonstrates how to:
   committed, without slowing or discarding the queue;
 - turn image-based props into persistent textual scene instructions while
   FastH3 has no reference-image input;
-- receive synchronized `main_video` and `main_audio` WebRTC tracks; and
+- receive synchronized `main_video` and `main_audio` WebRTC tracks;
+- read a refused command, with its code and reason, from the call that sent
+  it (see `sendFastH3Command` in `lib/h3-contract.ts`); and
 - optionally use OpenAI GPT-5.6 Luna to plan the next beat and dialogue, with
   direct FastH3 prompting as the fallback.
 

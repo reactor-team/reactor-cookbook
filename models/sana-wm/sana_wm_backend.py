@@ -6,17 +6,13 @@ import gc
 import importlib
 import io
 import math
-import os
 import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from PIL import Image
-from reactor_runtime import UploadedFile
-
-from sana_wm_assets import resolve_model_assets, resolve_pi3x_assets
-from sana_wm_types import Control, SanaWMConfig
+from sana_wm_assets import SanaWMConfig, resolve_model_assets, resolve_pi3x_assets
 
 FPS = 16
 PIXEL_FRAMES_PER_CHUNK = 24
@@ -24,10 +20,6 @@ LATENT_FRAMES_PER_CHUNK = 3
 _SINK_FRAMES = 1
 _VAE_TIME_STRIDE = 8
 _DENOISING_STEPS = [1000, 960, 889, 727, 0]
-
-
-class TrajectoryCompleteError(RuntimeError):
-    """Signal that a finite uploaded trajectory has no complete chunk left."""
 
 
 def _prepend_import_path(path: Path) -> None:
@@ -38,34 +30,30 @@ def _prepend_import_path(path: Path) -> None:
     sys.path.insert(0, value)
 
 
-def _open_image(source: Path | UploadedFile) -> Image.Image:
-    """Decode a path or Reactor upload as an oriented RGB image."""
+def _open_image(source: Path | bytes) -> Image.Image:
+    """Decode a path or encoded image bytes as an oriented RGB image."""
     from PIL import ImageOps
 
-    if isinstance(source, UploadedFile):
-        stream: str | io.BytesIO = io.BytesIO(source.data)
+    if isinstance(source, bytes):
+        stream: str | io.BytesIO = io.BytesIO(source)
     else:
         stream = str(source)
     with Image.open(stream) as image:
         return ImageOps.exif_transpose(image).convert("RGB")
 
 
-def load_numpy_upload(file: UploadedFile) -> np.ndarray:
+def load_numpy_upload(data: bytes, name: str = "Calibration") -> np.ndarray:
     """Decode one upload as a non-pickled NumPy array."""
     try:
-        return np.load(io.BytesIO(file.data), allow_pickle=False)
+        return np.load(io.BytesIO(data), allow_pickle=False)
     except Exception as exc:
-        raise ValueError(f"{file.name} is not a valid NumPy .npy file") from exc
+        raise ValueError(f"{name} is not a valid NumPy .npy file") from exc
 
 
 class SanaStreamingBackend:
     """Own model weights and the three persistent upstream streaming caches."""
 
     def __init__(self, config: SanaWMConfig) -> None:
-        os.environ.setdefault("DISABLE_XFORMERS", "1")
-        os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
-        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-        os.environ.setdefault("DPM_TQDM", "True")
         _prepend_import_path(config.source_path)
 
         self._config = config
@@ -75,9 +63,6 @@ class SanaStreamingBackend:
         self._device = self._torch.device("cuda")
         self._wm = importlib.import_module(
             "inference_video_scripts.wm.inference_sana_wm"
-        )
-        self._camera_control = importlib.import_module(
-            "inference_video_scripts.wm.camera_control"
         )
         self._sampler_module = importlib.import_module(
             "diffusion.scheduler.self_forcing_flow_euler_sampler"
@@ -89,6 +74,12 @@ class SanaStreamingBackend:
         self._chunk_module = importlib.import_module("diffusion.utils.chunk_utils")
         self._pyrallis = importlib.import_module("pyrallis")
         self._transforms = importlib.import_module("torchvision.transforms")
+        if config.upstream_fast_defaults:
+            # Upstream's streaming entry point applies these backend settings before
+            # Pi3X or any model runs; TF32 matmuls and the SDPA selection change numerics.
+            importlib.import_module(
+                "inference_video_scripts.wm.inference_sana_wm_streaming"
+            )._apply_fast_defaults()
 
         streaming_root, text_encoder_root = resolve_model_assets(config)
         self._install_pinned_text_encoder(text_encoder_root)
@@ -102,7 +93,7 @@ class SanaStreamingBackend:
             root=streaming_root / "refiner_diffusers",
             gemma_root=streaming_root / "gemma3_12b",
             sink_size=_SINK_FRAMES,
-            seed=config.seed,
+            seed=config.refiner_seed,
             block_size=LATENT_FRAMES_PER_CHUNK,
             kv_max_frames=config.refiner_kv_max_frames,
         )
@@ -113,8 +104,17 @@ class SanaStreamingBackend:
             refiner=refiner,
         )
         self._base_forward_long = self._pipeline.model.forward_long
+        if config.torch_compile:
+            # Upstream never compiles the causal VAE: it corrupts the decoder cache.
+            refiner = self._pipeline.refiner
+            refiner.transformer = self._torch.compile(
+                refiner.transformer,
+                mode=config.torch_compile_mode,
+                dynamic=config.torch_compile_dynamic,
+            )
 
-        self._total_frames = 1 + config.max_chunks * PIXEL_FRAMES_PER_CHUNK
+        self._rollout_chunks = config.max_chunks
+        self._last_good_frame: np.ndarray | None = None
         self._stage1_iter: Any = None
         self._refiner_runner: Any = None
         self._vae_decoder: Any = None
@@ -123,24 +123,7 @@ class SanaStreamingBackend:
         self._chunk_plucker: Any = None
         self._intrinsics: np.ndarray | None = None
         self._poses: list[np.ndarray] = []
-        self._trajectory: np.ndarray | None = None
-        self._trajectory_cursor = 1
-        self._integrator: Any = None
-        self._velocity: Any = None
-        self._last_controls: set[str] = set()
         self._chunk_index = 0
-
-    @property
-    def chunk_index(self) -> int:
-        """Return the count of chunks completed in the active rollout."""
-        return self._chunk_index
-
-    @property
-    def trajectory_frames(self) -> int | None:
-        """Return the finite trajectory length, or null for live controls."""
-        if self._trajectory is None:
-            return None
-        return int(self._trajectory.shape[0])
 
     def _install_pinned_text_encoder(self, root: Path) -> None:
         """Make the upstream builder load its Gemma encoder from a pinned snapshot."""
@@ -173,54 +156,58 @@ class SanaStreamingBackend:
 
     def reset(
         self,
-        image_source: Path | UploadedFile,
+        image_source: Path | bytes,
         prompt: str,
         seed: int,
         *,
-        intrinsics_source: Path | UploadedFile | None,
-        trajectory: np.ndarray | None,
+        intrinsics_source: Path | bytes | None,
+        chunks: int,
     ) -> None:
-        """Initialize fresh upstream caches from an image, prompt, and camera source."""
+        """Initialize fresh upstream caches for a rollout of `chunks` native chunks.
+
+        Upstream draws the Stage-1 noise for the whole clip at once, so the
+        rollout length is part of the sampled noise: a finite trajectory sizes
+        it exactly like `inference_sana_wm_streaming.py --num_frames`.
+        """
+        if not 1 <= chunks <= self._config.max_chunks:
+            raise ValueError(
+                f"rollout chunks must be in [1, {self._config.max_chunks}]; got {chunks}"
+            )
         with self._torch.inference_mode():
             self._initialize_rollout(
                 image_source,
                 prompt,
                 seed,
                 intrinsics_source=intrinsics_source,
-                trajectory=trajectory,
+                chunks=chunks,
             )
 
     def _initialize_rollout(
         self,
-        image_source: Path | UploadedFile,
+        image_source: Path | bytes,
         prompt: str,
         seed: int,
         *,
-        intrinsics_source: Path | UploadedFile | None,
-        trajectory: np.ndarray | None,
+        intrinsics_source: Path | bytes | None,
+        chunks: int,
     ) -> None:
         """Build per-world state while the public reset holds inference mode."""
         self._release_rollout()
+        self._rollout_chunks = chunks
+        total_frames = 1 + chunks * PIXEL_FRAMES_PER_CHUNK
         image = _open_image(image_source)
         cropped, src_size, resized_size, crop_offset = self._wm.resize_and_center_crop(
             image
         )
-        intrinsics = self._resolve_intrinsics(image, intrinsics_source)
+        intrinsics = self._resolve_intrinsics(image, intrinsics_source, total_frames)
         intrinsics = self._wm.transform_intrinsics_for_crop(
             intrinsics,
             src_size,
             resized_size,
             crop_offset,
         )
-        self._intrinsics = self._fit_intrinsics(intrinsics, self._total_frames)
-        self._trajectory = self._normalize_trajectory(trajectory)
-        self._trajectory_cursor = 1
+        self._intrinsics = self._fit_intrinsics(intrinsics, total_frames)
         self._poses = [np.eye(4, dtype=np.float32)]
-        self._integrator = self._camera_control.CameraPoseIntegrator(
-            math.radians(self._config.pitch_limit_degrees)
-        )
-        self._velocity = self._camera_control.VelocityState()
-        self._last_controls = set()
         self._chunk_index = 0
 
         refiner_prompt, refiner_mask = self._pipeline._get_streaming_refiner_prompt(
@@ -243,7 +230,7 @@ class SanaStreamingBackend:
             prompt, ""
         )
 
-        latent_t = 1 + self._config.max_chunks * LATENT_FRAMES_PER_CHUNK
+        latent_t = 1 + chunks * LATENT_FRAMES_PER_CHUNK
         latent_h = self._wm.TARGET_HEIGHT // self._pipeline.config.vae.vae_stride[-1]
         latent_w = self._wm.TARGET_WIDTH // self._pipeline.config.vae.vae_stride[-1]
         generator = self._torch.Generator(device=self._device).manual_seed(seed)
@@ -330,7 +317,7 @@ class SanaStreamingBackend:
             source_sink_frames=_SINK_FRAMES,
             block_size=LATENT_FRAMES_PER_CHUNK,
             kv_max_frames=self._config.refiner_kv_max_frames,
-            seed=seed,
+            seed=self._config.refiner_seed,
             spatial_shape=(latent_h, latent_w),
             n_active_frames=latent_t - _SINK_FRAMES,
             latent_channels=int(self._z.shape[1]),
@@ -344,15 +331,16 @@ class SanaStreamingBackend:
     def _resolve_intrinsics(
         self,
         image: Image.Image,
-        source: Path | UploadedFile | None,
+        source: Path | bytes | None,
+        frames: int,
     ) -> np.ndarray:
         """Load native NumPy calibration or estimate it with pinned Pi3X."""
         if source is None:
             return self._estimate_intrinsics(image)
-        if isinstance(source, UploadedFile):
+        if isinstance(source, bytes):
             array = load_numpy_upload(source).astype(np.float32)
             return self._intrinsics_array_to_vec4(array)
-        return self._wm.load_intrinsics(source, 1)
+        return self._wm.load_intrinsics(source, frames)
 
     def _intrinsics_array_to_vec4(self, array: np.ndarray) -> np.ndarray:
         """Convert every upstream-supported calibration shape to `(F, 4)`."""
@@ -442,26 +430,18 @@ class SanaStreamingBackend:
             )
         return np.array([[fx, fy, cx, cy]], dtype=np.float32)
 
-    def _normalize_trajectory(self, trajectory: np.ndarray | None) -> np.ndarray | None:
-        """Express a command-validated camera trajectory relative to its first pose."""
-        if trajectory is None:
-            return None
-        values = np.asarray(trajectory, dtype=np.float32)
-        first_inverse = np.linalg.inv(values[0]).astype(np.float32)
-        return np.matmul(first_inverse[None], values).astype(np.float32)
-
-    def generate_chunk(self, controls: set[Control]) -> np.ndarray:
+    def generate_chunk(self, poses: np.ndarray) -> np.ndarray:
         """Advance all three native caches once and return 24 RGB frames."""
         with self._torch.inference_mode():
-            return self._generate_chunk(controls)
+            return self._generate_chunk(poses)
 
-    def _generate_chunk(self, controls: set[Control]) -> np.ndarray:
+    def _generate_chunk(self, poses: np.ndarray) -> np.ndarray:
         """Run one chunk while the public entry point holds inference mode."""
         if self._stage1_iter is None or self._refiner_runner is None:
             raise RuntimeError("SANA-WM rollout is not initialized")
-        if self._chunk_index >= self._config.max_chunks:
+        if self._chunk_index >= self._rollout_chunks:
             raise StopIteration("SANA-WM rollout reached its configured chunk bound")
-        self._append_camera_poses(set(controls))
+        self._poses.extend(poses)
         self._write_camera_conditioning(self._chunk_index)
         chunk_idx, latent_view, start_f, end_f = next(self._stage1_iter)
         if int(chunk_idx) != self._chunk_index:
@@ -494,8 +474,10 @@ class SanaStreamingBackend:
             else refined
         )
         pixels = self._vae_decoder.decode_chunk(decode_input)
+        # Upstream `_pixel_chunk_to_cpu_uint8`: the arithmetic stays in the VAE's
+        # bfloat16 output dtype and the cast truncates.
         frames = (
-            (pixels.float() * 127.5 + 127.5)
+            ((pixels + 1.0) * 127.5)
             .clamp(0, 255)
             .to(self._torch.uint8)
             .permute(0, 2, 3, 4, 1)
@@ -505,6 +487,7 @@ class SanaStreamingBackend:
         )
         if self._chunk_index == 0:
             frames = frames[1:]
+        frames = self._guard_blank_frames(frames)
         if frames.shape != (
             PIXEL_FRAMES_PER_CHUNK,
             self._wm.TARGET_HEIGHT,
@@ -515,27 +498,20 @@ class SanaStreamingBackend:
         self._chunk_index += 1
         return frames
 
-    def _append_camera_poses(self, controls: set[str]) -> None:
-        """Append exactly one chunk of native camera-to-world poses."""
-        if self._trajectory is not None:
-            end = self._trajectory_cursor + PIXEL_FRAMES_PER_CHUNK
-            if end > self._trajectory.shape[0]:
-                raise TrajectoryCompleteError
-            self._poses.extend(self._trajectory[self._trajectory_cursor : end])
-            self._trajectory_cursor = end
-            return
-        target = self._camera_control.controls_to_target_velocity(
-            controls,
-            translation_speed=self._config.translation_speed,
-            rotation_speed_rad=math.radians(self._config.rotation_speed_degrees),
-        )
-        for _ in range(PIXEL_FRAMES_PER_CHUNK):
-            if controls - self._last_controls:
-                self._velocity.snap_to(target)
-            else:
-                self._velocity.step_toward(target, 1.0 / FPS)
-            self._last_controls = set(controls)
-            self._poses.append(self._integrator.step(self._velocity).astype(np.float32))
+    def _guard_blank_frames(self, frames: np.ndarray) -> np.ndarray:
+        """Carry the last good frame over uniform frames, as upstream's stream does."""
+        flat = frames.reshape(frames.shape[0], -1)
+        uniform = flat.max(axis=1) == flat.min(axis=1)
+        if not uniform.any():
+            self._last_good_frame = frames[-1]
+            return frames
+        frames = frames.copy()
+        for index in range(frames.shape[0]):
+            if uniform[index] and self._last_good_frame is not None:
+                frames[index] = self._last_good_frame
+            elif not uniform[index]:
+                self._last_good_frame = frames[index]
+        return frames
 
     def _write_camera_conditioning(self, chunk_index: int) -> None:
         """Populate the current Stage-1 slice with upstream ray and Plücker features."""
@@ -601,6 +577,7 @@ class SanaStreamingBackend:
         self._z = None
         self._raymap = None
         self._chunk_plucker = None
+        self._last_good_frame = None
         gc.collect()
         self._torch.cuda.empty_cache()
 

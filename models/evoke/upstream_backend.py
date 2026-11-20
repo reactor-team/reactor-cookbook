@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import os
 import subprocess
 import tempfile
@@ -14,23 +15,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from reactor_runtime import UploadedFile
-from reactor_runtime.log import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 _RESPONSE_PREFIX = "REACTOR_EVOKE_RESPONSE "
-_UPLOAD_SUFFIXES = {
-    "image/bmp": ".bmp",
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-    "video/mp4": ".mp4",
-    "video/quicktime": ".mov",
-    "video/webm": ".webm",
-    "application/x-npz": ".npz",
-    "application/octet-stream": ".npz",
-}
 
 
 @dataclass(frozen=True)
@@ -94,19 +82,26 @@ class EvokeWorkerBackend:
         self,
         *,
         mode: str,
-        media: Path | UploadedFile | None,
-        pose: UploadedFile | None,
+        media: Path | bytes | None,
+        pose: Path | bytes | None,
+        media_suffix: str,
+        pose_suffix: str,
         prompt: str,
         seed: int,
         source_fps: int = 30,
         source_height: int = 720,
         source_width: int = 1280,
+        camera_path: np.ndarray | None = None,
     ) -> None:
-        """Start a fresh rollout without reloading model weights."""
+        """Start a fresh rollout without reloading model weights.
+
+        ``camera_path`` is a complete uploaded c2w path. The worker conditions
+        it once with the released pose-track recipe and owns it for the rollout.
+        """
         previous_uploads = self._session_uploads
         self._session_uploads = []
-        media_path = self._materialize(media, "media")
-        pose_path = self._materialize(pose, "pose")
+        media_path = self._materialize(media, "media", media_suffix)
+        pose_path = self._materialize(pose, "pose", pose_suffix)
         try:
             self._request(
                 "reset",
@@ -118,6 +113,9 @@ class EvokeWorkerBackend:
                 source_fps=int(source_fps),
                 source_height=int(source_height),
                 source_width=int(source_width),
+                camera_path=None
+                if camera_path is None
+                else np.asarray(camera_path, dtype=np.float32).tolist(),
             )
         finally:
             for path in previous_uploads:
@@ -178,16 +176,15 @@ class EvokeWorkerBackend:
                     process.kill()
         self._temporary.cleanup()
 
-    def _materialize(self, value: Path | UploadedFile | None, stem: str) -> Path | None:
+    def _materialize(
+        self, value: Path | bytes | None, stem: str, suffix: str
+    ) -> Path | None:
         if value is None:
             return None
         if isinstance(value, Path):
             return value
-        suffix = _UPLOAD_SUFFIXES.get(value.mime_type.lower())
-        if suffix is None:
-            suffix = Path(value.name).suffix.lower() or ".bin"
         path = self._root / f"{stem}_{self._request_id + 1}{suffix}"
-        path.write_bytes(value.data)
+        path.write_bytes(value)
         self._session_uploads.append(path)
         return path
 
@@ -220,7 +217,7 @@ class EvokeWorkerBackend:
                 if not line.startswith(_RESPONSE_PREFIX):
                     self._recent_output.append(line)
                     if line:
-                        logger.info("EVOKE worker", output=line[-1200:])
+                        logger.info("EVOKE worker: %s", line[-1200:])
                     continue
                 response = json.loads(line.removeprefix(_RESPONSE_PREFIX))
                 if int(response.get("id", -2)) != request_id:

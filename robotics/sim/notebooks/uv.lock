@@ -249,18 +249,20 @@ i2rt = [
 requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python", marker = "extra == 'i2rt'", specifier = ">=4.10" },
-    { name = "reactor-sdk", specifier = ">=1.1.1" },
+    { name = "reactor-sdk", specifier = ">=1.13.0,<2" },
 ]
 provides-extras = ["i2rt"]
 
 [[package]]
 name = "reactor-sdk"
-version = "1.2.0"
+version = "1.13.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ab/da/49890b0c45e4a6e1112cc5b8fe414fab71685a269d83d874d1c639715c8b/reactor_sdk-1.2.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:19a9ad4c5ead2dcbd71fdcc52cb00718e2f5ec4273b45c9b7db534dbd31bbd10", size = 9005382, upload-time = "2026-09-01T14:57:16.789Z" },
-    { url = "https://files.pythonhosted.org/packages/d1/24/4a0a67708efad17692ddb658efc6abb715912790b66cea78db42267b12a4/reactor_sdk-1.2.0-py3-none-macosx_13_0_x86_64.whl", hash = "sha256:d7d48e35586fd144109e76f2aeefce3277039736f9c5b2d4af1ecffe370e11f8", size = 10245464, upload-time = "2026-09-01T14:57:18.984Z" },
-    { url = "https://files.pythonhosted.org/packages/36/4b/0496f3f9da142b9429da7f4dfc391c42cd64eb220e793ba8040c8f3d477c/reactor_sdk-1.2.0-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:70958afa0e2eaf13b97c29e5af30be498dd037a822d422c490b323fb42676d27", size = 10369118, upload-time = "2026-09-01T14:57:20.975Z" },
-    { url = "https://files.pythonhosted.org/packages/39/a2/adf0fb336364d192f52dd409111beadfbb60d49c379f9e5314af718cba1f/reactor_sdk-1.2.0-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:9077b1d4eed0cabd8868260ceec5125ee68babe62f94b60e33098274774b6756", size = 11036639, upload-time = "2026-09-01T14:57:23.127Z" },
-    { url = "https://files.pythonhosted.org/packages/6c/2a/4188bfa55c7a872b40fbcf90624a7deae0ce800c349420a6c1e428403431/reactor_sdk-1.2.0-py3-none-win_amd64.whl", hash = "sha256:3abe89378f69c358a3f1fb9766350a11eda58dec9318ede1040ee02c15bd9964", size = 9763426, upload-time = "2026-09-01T14:57:25.232Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/05/b5ce1d141681496a3b873239c3fb3f2d600f0757ad4b3e708a2c60c0c1da/reactor_sdk-1.13.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:a0c31d60a7727c958ffc595fff532338f68fc6e664021bbe12facad018e3a78d", size = 9315801, upload-time = "2026-10-24T02:05:01.942Z" },
+    { url = "https://files.pythonhosted.org/packages/62/29/560409e8b5dfb41aeead0886d1eb294e4ecc6c425a4982eb00c0da3bce9e/reactor_sdk-1.13.0-py3-none-macosx_13_0_x86_64.whl", hash = "sha256:a52a607de5238f41daf198102ba78205137e5efd1305dee659f474b0684b327a", size = 10571191, upload-time = "2026-10-24T02:05:04.239Z" },
+    { url = "https://files.pythonhosted.org/packages/31/f1/50e2a30383fe0ee53d3cd6c375ff55ccdcc0605049bd4e7b5d0c01b00a8c/reactor_sdk-1.13.0-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:3f60a3b3a2e5a825cbb344cdd189592b19c0a0a5a8bd94a911ae21434074533e", size = 10693467, upload-time = "2026-10-24T02:05:06.557Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/8a/7bcc0749786f8d7f5b3902066c158db0b20f4bc91849f0b762658dbcad4e/reactor_sdk-1.13.0-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:bc06bda2d699a8c401aba0da7fc19435389ece9476064a988e86454305727bad", size = 11362193, upload-time = "2026-10-24T02:05:08.805Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/0c/726c40362afe0ef2bfc7d8b7f66dae55ee6cf8f0374efa6f36de4cafe637/reactor_sdk-1.13.0-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:2f58379a99f3e592f50f9780eeeb874a91ed604d0d58d46e2ffdd6f65d1b21b3", size = 10725695, upload-time = "2026-10-24T02:05:11.075Z" },
+    { url = "https://files.pythonhosted.org/packages/11/99/c325a011dc02895b90d697da670d81c560f7f91646690ed36a7f71f8f26e/reactor_sdk-1.13.0-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:73c44462fca3f3eab24792c73cace7d5828784a3f2a4ad6463423b197b6aa077", size = 11416540, upload-time = "2026-10-24T02:05:13.492Z" },
+    { url = "https://files.pythonhosted.org/packages/00/98/a99d5205f27311fb0497ab506d9a13308ab6af41938f85b1428c406054e9/reactor_sdk-1.13.0-py3-none-win_amd64.whl", hash = "sha256:abcaad57c1c3b02931bc9444fe99e1ac00586222f8509acceec9411bc2091610", size = 10018983, upload-time = "2026-10-24T02:05:15.646Z" },
 ]

@@ -5,9 +5,9 @@ Blackwell GPUs it builds video faster than the video plays. This model turns
 that into a continuous stream: it always builds the next clip while the current
 one is on the wire, so `main_video` and `main_audio` never run dry.
 
-The unit of work is a whole clip, not a frame, which is why this subclasses
-``ReactorModel`` and owns its own ``run()`` loop rather than using
-``ReactorPipeline``. Command handlers then run on their own coroutines
+The unit of work is a whole clip. This uses Reactor Runtime 3.5's
+``ReactorApp`` custom ``run()`` interface to retain one-clip lookahead.
+Command handlers run on their own coroutines
 concurrent with ``run()``, so `pause` and `stop` answer immediately even while a
 clip is being built.
 
@@ -39,8 +39,9 @@ from typing import Any
 import yaml
 from reactor_runtime import (
     ClientInfo,
+    CommandError,
     InputField,
-    ReactorModel,
+    ReactorApp,
     connected,
     event,
     get_weights_path,
@@ -68,7 +69,6 @@ from fasth3_types import (
     ClipComplete,
     ClipLengthAccepted,
     ClipStarted,
-    CommandError,
     FastH3Output,
     LiveChatStatus,
     LivePromptQueued,
@@ -407,7 +407,7 @@ def _require_weights(root: Path, model_path: Path) -> None:
         )
 
 
-class FastH3(ReactorModel):
+class FastH3(ReactorApp):
     """Stream an endless video-and-audio channel from a text prompt."""
 
     # Pinned: `_emit_paced` is a strict 24 fps metronome and every emit omits
@@ -532,8 +532,7 @@ class FastH3(ReactorModel):
 
         self.generator = VideoGenerator.from_config(self._generator_config())
 
-        # Session-scoped state. A ReactorPipeline would get a fresh `self.state`
-        # per session from the runtime; a ReactorModel owns that itself, so the
+        # Session-scoped state for the custom channel loop. The
         # defaults live in one reset function called here (so a command racing
         # ahead of `session_started` reads defaults, never another session's
         # values) and again from the `@session_started` hook.
@@ -1548,22 +1547,6 @@ class FastH3(ReactorModel):
         """Broadcast the snapshot to every connected client."""
         await self.send(self._snapshot())
 
-    async def _refuse(self, command: str, reason: str) -> None:
-        """Reject a command: tell every client, and leave its reply bodyless.
-
-        A handler returns only the message its annotation names, and reports
-        a failure by broadcasting `command_error` and returning without a
-        value. The runtime answers that with a correlated bodyless
-        acknowledgement, so an awaiting client resolves rather than hanging —
-        and unlike a raised runtime ``CommandError``, whose failure frame is
-        withheld from v0 clients, the broadcast reaches every SDK generation.
-
-        Logged as well, so refusals are visible server-side and not only in the
-        client's message.
-        """
-        logger.info("command refused", command=command, reason=reason)
-        await self.send(CommandError(command=command, reason=reason))
-
     # ------------------------------------------------------------ lifecycle
 
     @session_started
@@ -1602,8 +1585,9 @@ class FastH3(ReactorModel):
             "the last consumed prompt repeats. Empty text cancels prompts still "
             "waiting; while idle it also clears the active prompt. Emits "
             "`prompt_accepted` and `state_update`, including queue depth and the "
-            "clip where this request takes effect, or `command_error` when the "
-            f"combined content and style exceed {PROMPT_TOKEN_WIDTH} model tokens."
+            "clip where this request takes effect. Fails with `prompt_too_long` "
+            f"when the combined content and style exceed {PROMPT_TOKEN_WIDTH} model "
+            "tokens."
         ),
     )
     async def set_prompt(
@@ -1625,8 +1609,7 @@ class FastH3(ReactorModel):
             try:
                 self._validate_condition(value, self._style_prompt)
             except ValueError as error:
-                await self._refuse("set_prompt", str(error))
-                return None
+                raise CommandError("prompt_too_long", str(error)) from error
             # Automatic prompts are speculative. A human direction becomes the
             # next unassigned branch and invalidates any fallback scenes behind it.
             self._fallback_prompt_queue.clear()
@@ -1699,9 +1682,9 @@ class FastH3(ReactorModel):
             "to each content prompt without changing the prompt shown to clients. "
             "Blank text disables the shared style instruction. A clip already "
             "assigned to the generator keeps its captured style. Emits "
-            "`style_accepted` and `state_update`, including the first affected clip, "
-            "or `command_error` when the combined condition exceeds the model's "
-            f"{PROMPT_TOKEN_WIDTH}-token budget."
+            "`style_accepted` and `state_update`, including the first affected clip. "
+            "Fails with `style_too_long` when the style and any active or queued "
+            f"prompt together exceed the model's {PROMPT_TOKEN_WIDTH}-token budget."
         ),
     )
     async def set_style(
@@ -1728,8 +1711,7 @@ class FastH3(ReactorModel):
             for prompt in prompts:
                 self._validate_condition(prompt, value)
         except ValueError as error:
-            await self._refuse("set_style", str(error))
-            return None
+            raise CommandError("style_too_long", str(error)) from error
 
         effective_index, effective_seconds = self._prompt_effective()
         self._style_prompt = value
@@ -1806,8 +1788,9 @@ class FastH3(ReactorModel):
             "size for the whole channel, so this is only valid while nothing is "
             "streaming — send it before `start` or after `stop`. Emits "
             "`canvas_accepted`, carrying the exact pixel size, and "
-            "`state_update`, or `command_error` if a channel is streaming or the "
-            "ratio is not one this model offers."
+            "`state_update`. Fails with `already_streaming` while a channel is "
+            "streaming, or `invalid_aspect` if the ratio is not one this model "
+            "offers."
         ),
     )
     async def set_canvas(
@@ -1824,16 +1807,14 @@ class FastH3(ReactorModel):
     ) -> CanvasAccepted:
         """Set the session's canvas; refused once a channel is live."""
         if self._running:
-            await self._refuse(
-                "set_canvas",
+            raise CommandError(
+                "already_streaming",
                 "The video size is fixed for the life of a channel; send `stop` first.",
             )
-            return None
         try:
             height, width = clip_plan.canvas_for_choice(aspect)
         except ValueError as error:
-            await self._refuse("set_canvas", str(error))
-            return None
+            raise CommandError("invalid_aspect", str(error)) from error
         self._aspect = aspect
         await self._send_state_update()
         return CanvasAccepted(aspect=aspect, width=width, height=height)
@@ -1846,20 +1827,19 @@ class FastH3(ReactorModel):
             "`channel_started` and `state_update` at once, then a `clip_started` "
             "as each clip reaches the output tracks. The first clip has to be "
             "built before anything can stream, so expect several seconds of no "
-            "video, or `command_error` if a channel is already streaming or no "
-            "prompt is set."
+            "video. Fails with `already_streaming` if a channel is already "
+            "streaming, or `no_prompt` if no prompt is set."
         ),
     )
     async def start(self) -> None:
         """Arm the channel loop; it begins on its next poll."""
         if self._running:
-            await self._refuse(
-                "start", "A channel is already streaming; send `stop` to end it first."
+            raise CommandError(
+                "already_streaming",
+                "A channel is already streaming; send `stop` to end it first.",
             )
-            return
         if not self._ready():
-            await self._refuse("start", "No prompt is set; send `set_prompt` first.")
-            return
+            raise CommandError("no_prompt", "No prompt is set; send `set_prompt` first.")
         self._started = True
         self._do_reset = False
         self._channel_started_at = time.monotonic()
@@ -1872,18 +1852,16 @@ class FastH3(ReactorModel):
             "Freeze the output stream on its current frame. Valid only while a "
             "channel is streaming and not already paused. The model keeps "
             "building ahead, so `resume` continues instantly. Emits "
-            "`channel_paused` and `state_update`, or `command_error` if no "
-            "channel is streaming or it is already paused."
+            "`channel_paused` and `state_update`. Fails with `not_streaming` if no "
+            "channel is streaming, or `already_paused` if it is already paused."
         ),
     )
     async def pause(self) -> ChannelPaused:
         """Hold the stream; the channel itself is unaffected."""
         if not self._running:
-            await self._refuse("pause", "No channel is streaming.")
-            return None
+            raise CommandError("not_streaming", "No channel is streaming.")
         if self._paused:
-            await self._refuse("pause", "The stream is already paused.")
-            return None
+            raise CommandError("already_paused", "The stream is already paused.")
         self._paused = True
         await self._send_state_update()
         return ChannelPaused(seconds_sent=round(self._seconds_sent, 2))
@@ -1893,15 +1871,14 @@ class FastH3(ReactorModel):
         description=(
             "Continue a paused stream exactly where it froze, with no warm-up "
             "and without skipping ahead to catch up. Valid only while paused. "
-            "Emits `channel_resumed` and `state_update`, or `command_error` if "
-            "the stream is not paused."
+            "Emits `channel_resumed` and `state_update`. Fails with `not_paused` "
+            "if the stream is not paused."
         ),
     )
     async def resume(self) -> ChannelResumed:
         """Release a paused stream."""
         if not self._paused:
-            await self._refuse("resume", "The stream is not paused.")
-            return None
+            raise CommandError("not_paused", "The stream is not paused.")
         self._paused = False
         await self._send_state_update()
         return ChannelResumed(seconds_sent=round(self._seconds_sent, 2))
@@ -1914,14 +1891,14 @@ class FastH3(ReactorModel):
             "streaming. The stream stops within about a second, but the clip "
             "already being built cannot be cancelled, so `state_update.running` "
             "can stay true for a few seconds longer. Emits `channel_stopped` "
-            "and `state_update`, or `command_error` if no channel is streaming."
+            "and `state_update`. Fails with `not_streaming` if no channel is "
+            "streaming."
         ),
     )
     async def stop_channel(self) -> None:
         """Wind the channel down, keeping the conditions."""
         if not self._running:
-            await self._refuse("stop", "No channel is streaming.")
-            return
+            raise CommandError("not_streaming", "No channel is streaming.")
         self._started = False
         self._cancel_story_task()
         self._stop_only = True

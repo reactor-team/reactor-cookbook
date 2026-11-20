@@ -72,7 +72,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--echo-delay", type=float, default=0.1,
                    help="settle window before echoing, so post-execution frames land first")
     p.add_argument("--model", default=DEFAULT_MODEL,
-                   help="Reactor model name; try the unqualified name if connect fails")
+                   help="Reactor model name, as owner/name")
     # lingbot-va serves from api.reactor.inc. The wrong host answers with a
     # 429 that reads as missing capacity, which has cost debugging time more
     # than once.
@@ -138,21 +138,20 @@ def _run(args: argparse.Namespace) -> None:
         )
         recorder.start()
 
-    bridge.start()
-
-    # Don't start stepping until the model is actually there. The first
-    # chunk is what unblocks the rollout anyway.
-    log.info("connecting to %s", args.model)
-    if not bridge.ready.wait(timeout=args.connect_timeout):
-        bridge.stop()
-        raise SystemExit(f"bridge did not become ready within {args.connect_timeout:.0f}s")
-    if bridge.failed is not None:
-        raise SystemExit(f"bridge failed to connect: {bridge.failed}")
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, lambda *_: driver.stop())
-
     try:
+        bridge.start()
+
+        # Don't start stepping until the model is actually there. The first
+        # chunk is what unblocks the rollout anyway.
+        log.info("connecting to %s", args.model)
+        if not bridge.ready.wait(timeout=args.connect_timeout):
+            raise SystemExit(f"bridge did not become ready within {args.connect_timeout:.0f}s")
+        if bridge.failed is not None:
+            raise SystemExit(f"bridge failed to connect: {bridge.failed}")
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, lambda *_: driver.stop())
+
         log.info("connected; running (Ctrl-C to stop)")
         driver.run()
     finally:

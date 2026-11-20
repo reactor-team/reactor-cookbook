@@ -1,0 +1,6 @@
+WorldPlay2 on the Reactor runtime.
+
+The upstream WorldPlay2 release (https://github.com/WorldPlay2/WorldPlay2) declares
+CC-BY-NC-4.0 in UPSTREAM_LICENSE.txt. Reused upstream code retains its licence.
+Files derived from Wan2.2 (https://github.com/Wan-Video/Wan2.2) retain the Alibaba
+Wan Team copyright notices. Modified files are identified in their headers.

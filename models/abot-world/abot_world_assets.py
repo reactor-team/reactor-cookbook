@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -11,16 +12,13 @@ import sys
 import tempfile
 from collections.abc import Mapping
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 import yaml
-from reactor_runtime import get_weights_path
-from reactor_runtime.log import get_logger
 
-from abot_world_types import ABotWorldConfig, ExampleScene, ModelAsset
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 SOURCE_ENV = "ABOT_WORLD_PATH"
 SNAPSHOT_MARKER = ".reactor-snapshot.json"
@@ -44,7 +42,41 @@ _SOURCE_FILES = (
 )
 
 
-def read_config(config_path: Path | None) -> ABotWorldConfig:
+@dataclass(frozen=True)
+class ModelAsset:
+    """Describe one pinned public model snapshot and its local directory."""
+
+    path: Path
+    repo_id: str
+    revision: str
+
+
+@dataclass(frozen=True)
+class ExampleScene:
+    """Pair one built-in starting image with its scene prompt."""
+
+    image: Path
+    prompt: str
+
+
+@dataclass(frozen=True)
+class ABotWorldConfig:
+    """Hold validated source, checkpoint, stream, and example settings."""
+
+    source_path: Path
+    source_url: str
+    source_revision: str
+    checkpoint: ModelAsset
+    seed: int
+    height: int
+    width: int
+    max_chunks: int
+    examples: tuple[ExampleScene, ...]
+
+
+def read_config(
+    config_path: Path | None, weights_root: Path | None = None
+) -> ABotWorldConfig:
     """Read and validate the ABot-World adapter YAML."""
     if config_path is None:
         raise ValueError("ABot-World requires runtime.config in reactor.yaml")
@@ -55,9 +87,14 @@ def read_config(config_path: Path | None) -> ABotWorldConfig:
     source = _mapping(document.get("source"), "source")
     checkpoint_document = _mapping(document.get("checkpoint"), "checkpoint")
     stream = _mapping(document.get("stream"), "stream")
-    source_path = _source_path(source.get("path"))
+    weights_root = (
+        weights_root if weights_root is not None else config_path.resolve().parent
+    )
+    source_path = _source_path(source.get("path"), weights_root)
     checkpoint = ModelAsset(
-        path=_weights_path(checkpoint_document.get("path"), "checkpoint.path"),
+        path=_weights_path(
+            checkpoint_document.get("path"), "checkpoint.path", weights_root
+        ),
         repo_id=_repo_id(checkpoint_document.get("repo_id"), "checkpoint.repo_id"),
         revision=_revision(checkpoint_document.get("revision"), "checkpoint.revision"),
     )
@@ -97,10 +134,10 @@ def read_config(config_path: Path | None) -> ABotWorldConfig:
     )
 
 
-def prepare_assets(config: ABotWorldConfig) -> None:
+def prepare_assets(config: ABotWorldConfig, weights_root: Path) -> None:
     """Prepare the pinned upstream checkout, model snapshot, and built-in images."""
     _ensure_source_checkout(config)
-    _ensure_checkpoint(config.checkpoint)
+    _ensure_checkpoint(config.checkpoint, weights_root)
     missing_examples = [
         str(scene.image) for scene in config.examples if not scene.image.is_file()
     ]
@@ -166,10 +203,10 @@ def _ensure_source_checkout(config: ABotWorldConfig) -> None:
     source_path = config.source_path
     if not source_path.exists():
         logger.info(
-            "downloading ABot-World source checkout",
-            url=config.source_url,
-            revision=config.source_revision,
-            destination=str(source_path),
+            "downloading ABot-World source checkout %s revision=%s to %s",
+            config.source_url,
+            config.source_revision,
+            source_path,
         )
         source_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
@@ -199,7 +236,7 @@ def _ensure_source_checkout(config: ABotWorldConfig) -> None:
         )
 
 
-def _ensure_checkpoint(asset: ModelAsset) -> None:
+def _ensure_checkpoint(asset: ModelAsset, weights_root: Path) -> None:
     """Download the pinned public checkpoint when files or identity are incomplete."""
     marker = asset.path / SNAPSHOT_MARKER
     expected = {"repo_id": asset.repo_id, "revision": asset.revision}
@@ -209,10 +246,10 @@ def _ensure_checkpoint(asset: ModelAsset) -> None:
     ):
         return
     logger.info(
-        "downloading ABot-World checkpoint",
-        repo_id=asset.repo_id,
-        revision=asset.revision,
-        destination=str(asset.path),
+        "downloading ABot-World checkpoint %s revision=%s to %s",
+        asset.repo_id,
+        asset.revision,
+        asset.path,
     )
     snapshot_download = importlib.import_module("huggingface_hub").snapshot_download
     asset.path.mkdir(parents=True, exist_ok=True)
@@ -220,7 +257,7 @@ def _ensure_checkpoint(asset: ModelAsset) -> None:
         repo_id=asset.repo_id,
         revision=asset.revision,
         local_dir=asset.path,
-        cache_dir=get_weights_path() / "huggingface",
+        cache_dir=weights_root / "huggingface",
     )
     unresolved = [str(path) for path in required if not _is_nonempty_file(path)]
     if unresolved:
@@ -263,24 +300,24 @@ def _repository_url(value: object, name: str) -> str:
     return url
 
 
-def _source_path(value: object) -> Path:
+def _source_path(value: object, weights_root: Path) -> Path:
     """Resolve the upstream checkout under the runtime's weights root."""
     configured = os.environ.get(SOURCE_ENV)
     raw = configured if configured else str(value or "")
     if not raw:
         raise ValueError("source.path must be non-empty")
     path = Path(raw).expanduser()
-    candidate = path if path.is_absolute() else get_weights_path() / path
+    candidate = path if path.is_absolute() else weights_root / path
     return Path(os.path.abspath(candidate))
 
 
-def _weights_path(value: object, name: str) -> Path:
+def _weights_path(value: object, name: str, weights_root: Path) -> Path:
     """Resolve one model asset directory under the runtime's weights root."""
     raw = str(value or "")
     if not raw:
         raise ValueError(f"{name} must be non-empty")
     path = Path(raw).expanduser()
-    candidate = path if path.is_absolute() else get_weights_path() / path
+    candidate = path if path.is_absolute() else weights_root / path
     return Path(os.path.abspath(candidate))
 
 

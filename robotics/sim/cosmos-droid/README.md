@@ -3,6 +3,12 @@
 Drives NVIDIA's RoboLab DROID manipulation benchmark from a Reactor-served
 `cosmos-nano-policy-droid`, with the simulator completely unmodified.
 
+## Python SDK
+
+This example uses the Python SDK version recorded in its lockfile. It publishes camera frames through native
+SDK tracks; the SDK owns transport keepalive. On Linux, the glibc wheel requires
+glibc 2.34 or newer. The simulator has its own hardware and dependency requirements.
+
 ## Why a gateway
 
 `libero` wraps its simulator as a Python library and owns the rollout
@@ -50,9 +56,9 @@ RoboLab requests a chunk, executes all 32 absolute joint-position actions at
 
 Two properties keep the protocol simple:
 
-- The model is stateless per request: no KV cache, no reset event on the
-  wire at all. A new episode or task change needs no ceremony; the prompt
-  and proprio are sent with every prediction.
+- The API exposes `reset` for its flow-control counter. This gateway maintains
+  the counter across task changes; restart the gateway/session for strict episode
+  separation. Do not reset only the server while retaining client counters.
 - Whole-chunk execution is the measured optimum for this policy. A
   replan-horizon sweep found success strictly *increases* with open-loop
   horizon (mid-chunk replanning collapses it), and that serving latency
@@ -65,7 +71,7 @@ The gateway needs no simulator, no GPU and no model weights. With
 [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv sync --python 3.12
+uv sync --frozen --python 3.12
 ```
 
 ## Run

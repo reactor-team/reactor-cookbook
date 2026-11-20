@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -15,10 +16,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
-from reactor_runtime import get_weights_path
-from reactor_runtime.log import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 SOURCE_ENV = "EVOKE_PATH"
 WORKER_PYTHON = Path(".reactor-venv/bin/python")
@@ -87,7 +86,9 @@ class EvokeConfig:
         return self.source_path / "examples/i2v/image.jpg"
 
 
-def read_config(config_path: Path | None) -> EvokeConfig:
+def read_config(
+    config_path: Path | None, weights_root: Path | None = None
+) -> EvokeConfig:
     """Read and validate the EVOKE adapter YAML."""
     if config_path is None:
         raise ValueError("EVOKE requires runtime.config in reactor.yaml")
@@ -99,8 +100,11 @@ def read_config(config_path: Path | None) -> EvokeConfig:
     inference = _mapping(document.get("inference"), "inference")
     motion = _mapping(document.get("motion"), "motion")
     stream = _mapping(document.get("stream"), "stream")
-    source_path = _source_path(source.get("path"))
-    max_chunks = int(stream.get("max_chunks", 512))
+    source_path = _source_path(
+        source.get("path"),
+        weights_root if weights_root is not None else config_path.resolve().parent,
+    )
+    max_chunks = int(stream.get("max_chunks", 2048))
     if max_chunks < 12:
         raise ValueError("stream.max_chunks must be at least 12")
     translation_speed = float(motion.get("translation_units_per_second", 1.0))
@@ -145,10 +149,10 @@ def ensure_source_checkout(config: EvokeConfig) -> None:
     source_path = config.source_path
     if not source_path.exists():
         logger.info(
-            "downloading EVOKE source checkout",
-            url=config.source_url,
-            revision=config.source_revision,
-            destination=str(source_path),
+            "downloading EVOKE source checkout %s revision=%s to %s",
+            config.source_url,
+            config.source_revision,
+            source_path,
         )
         source_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
@@ -199,7 +203,7 @@ def ensure_worker_environment(config: EvokeConfig) -> None:
         raise RuntimeError("uv is required to prepare the EVOKE worker environment")
     environment_dir = config.worker_python.parents[1]
     environment = os.environ.copy()
-    logger.info("preparing EVOKE worker environment", destination=str(environment_dir))
+    logger.info("preparing EVOKE worker environment: %s", environment_dir)
     _run_uv(
         [
             uv,
@@ -279,7 +283,7 @@ def _ensure_stateful_patch(source_path: Path) -> None:
         raise RuntimeError(
             f"EVOKE source is incompatible with the stateful patch: {detail}"
         )
-    logger.info("applying EVOKE stateful rollout patch", source=str(source_path))
+    logger.info("applying EVOKE stateful rollout patch: %s", source_path)
     _run_git(["-C", str(source_path), "apply", str(patch)])
 
 
@@ -324,10 +328,10 @@ def _ensure_snapshot(
     if _json_matches(marker, identity) and all(_nonempty(path) for path in required):
         return
     logger.info(
-        "downloading EVOKE model asset",
-        asset=name,
-        repo_id=asset.repo_id,
-        destination=str(local_dir),
+        "downloading EVOKE model asset %s repo=%s to %s",
+        name,
+        asset.repo_id,
+        local_dir,
     )
     downloader = Path(__file__).with_name("download_snapshot.py")
     command = [
@@ -396,12 +400,10 @@ def _repository_url(value: object, name: str) -> str:
     return url
 
 
-def _source_path(value: object) -> Path:
+def _source_path(value: object, weights_root: Path) -> Path:
     override = os.environ.get(SOURCE_ENV)
     configured = Path(override if override else str(value)).expanduser()
-    candidate = (
-        configured if configured.is_absolute() else get_weights_path() / configured
-    )
+    candidate = configured if configured.is_absolute() else weights_root / configured
     return Path(os.path.abspath(candidate))
 
 

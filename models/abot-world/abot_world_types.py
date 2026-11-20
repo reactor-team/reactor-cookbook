@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 
 from reactor_runtime import (
@@ -19,38 +17,6 @@ DEFAULT_PROMPT = (
     "A realistic outdoor world scene with a navigable path, natural lighting, "
     "detailed ground texture, and stable forward motion."
 )
-
-
-@dataclass(frozen=True)
-class ModelAsset:
-    """Describe one pinned public model snapshot and its local directory."""
-
-    path: Path
-    repo_id: str
-    revision: str
-
-
-@dataclass(frozen=True)
-class ExampleScene:
-    """Pair one built-in starting image with its scene prompt."""
-
-    image: Path
-    prompt: str
-
-
-@dataclass(frozen=True)
-class ABotWorldConfig:
-    """Hold validated source, checkpoint, stream, and example settings."""
-
-    source_path: Path
-    source_url: str
-    source_revision: str
-    checkpoint: ModelAsset
-    seed: int
-    height: int
-    width: int
-    max_chunks: int
-    examples: tuple[ExampleScene, ...]
 
 
 class ABotWorldOutput(Output):
@@ -226,6 +192,7 @@ class ABotWorldState(InputState):
     )
     _pressed_keys: frozenset[str] = frozenset()
     _activated_keys: frozenset[str] = frozenset()
-    _reset_requested: bool = False
+    _world_id: int = 0
+    _applied_world_id: int | None = None
     _limit_reached: bool = False
     _seed: int = 0

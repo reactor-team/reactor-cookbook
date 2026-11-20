@@ -1,0 +1,4 @@
+schema.json
+test-output/
+__pycache__/
+.pytest_cache/

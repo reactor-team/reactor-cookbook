@@ -3,33 +3,20 @@
 from __future__ import annotations
 
 import secrets
-import time
-from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Protocol
-
-import numpy as np
-from reactor_runtime import (
-    ClientInfo,
-    CommandError,
-    InputField,
-    ReactorPipeline,
-    UploadedFile,
-    connected,
-    disconnected,
-    event,
-    session_ended,
-    session_started,
-)
-from reactor_runtime.log import get_logger
 
 from dreamx_assets import prepare_runtime_assets, read_config
-from dreamx_camera import FRAMES_PER_CHUNK
+from dreamx_camera import (
+    FRAMES_PER_CHUNK,
+    CameraPath,
+    DreamXCameraController,
+    load_camera_path,
+)
 from dreamx_images import validate_uploaded_image
 from dreamx_types import (
     ActionChanged,
+    CameraPathSelected,
     ChunkGenerated,
-    DreamXConfig,
     DreamXWorldOutput,
     DreamXWorldState,
     ImageSelected,
@@ -38,31 +25,32 @@ from dreamx_types import (
     RolloutResetQueued,
     StateUpdate,
 )
+from dreamx_world_model import (
+    DreamXAnchor,
+    DreamXConfig,
+    DreamXInput,
+    DreamXModel,
+    DreamXResult,
+)
+from reactor_runtime import (
+    ApplicationError,
+    ClientInfo,
+    CommandError,
+    InputField,
+    ReactorApp,
+    StepOutcome,
+    UploadedFile,
+    connected,
+    disconnected,
+    event,
+    session_ended,
+    session_started,
+)
 
-logger = get_logger(__name__)
-
-FPS = 16
 _CAMERA_KEYS = ["w", "a", "s", "d", "i", "j", "k", "l"]
 
 
-class _Backend(Protocol):
-    """Define the blocking DreamX model operations used by the Reactor loop."""
-
-    @property
-    def local_attention_frames(self) -> int:
-        """Return the native rolling KV window in latent frames."""
-
-    def reset(self, seed: int, image: Path | UploadedFile) -> None:
-        """Start a fresh causal rollout from an image."""
-
-    def generate_chunk(self, prompt: str, pressed_keys: frozenset[str]) -> np.ndarray:
-        """Generate one native RGB chunk for prompt and keyboard conditions."""
-
-    def end_session(self) -> None:
-        """Release causal state owned by the completed session."""
-
-
-class DreamXWorld(ReactorPipeline):
+class DreamXWorld(ReactorApp):
     """Generate an image-, prompt-, and keyboard-controllable DreamX world."""
 
     state: DreamXWorldState
@@ -71,7 +59,8 @@ class DreamXWorld(ReactorPipeline):
     def __init__(self) -> None:
         super().__init__()
         self._config: DreamXConfig | None = None
-        self._backend: _Backend | None = None
+        self._engine = DreamXModel()
+        self._camera: DreamXCameraController | None = None
         self._scene_prompts: dict[Path, str] = {}
         self._selected_input: Path | UploadedFile | None = None
         self._image_source: ImageSource | None = None
@@ -79,6 +68,7 @@ class DreamXWorld(ReactorPipeline):
         self._chunk_index = 0
         self._active_prompt = ""
         self._generating = False
+        self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
         """Prepare pinned public assets and load DreamX-World once on the GPU.
@@ -88,21 +78,11 @@ class DreamXWorld(ReactorPipeline):
         """
         config = read_config(config_path)
         scene_prompts = prepare_runtime_assets(config)
-        from dreamx_backend import DreamXBackend
-
-        backend = DreamXBackend(config)
         self._config = config
         self._scene_prompts = scene_prompts
-        self._backend = backend
+        self._camera = DreamXCameraController(config.motion_speed)
+        self._engine.load(config)
         self._seed = config.seed
-        logger.info(
-            "DreamX-World model ready",
-            source_revision=config.source_revision,
-            checkpoint_revision=config.dreamx.revision,
-            latent_frames_per_chunk=3,
-            local_attention_frames=backend.local_attention_frames,
-            fps=FPS,
-        )
 
     @session_started
     def on_session_started(self) -> None:
@@ -110,8 +90,9 @@ class DreamXWorld(ReactorPipeline):
         config = self._require_config()
         self.state.prompt = ""
         self._clear_controls()
-        self.state._reset_requested = False
+        self.state._applied_world_id = None
         self._selected_input = None
+        self._camera_path = None
         self._image_source = None
         self._seed = config.seed
         self._chunk_index = 0
@@ -121,14 +102,13 @@ class DreamXWorld(ReactorPipeline):
     @session_ended
     def on_session_ended(self) -> None:
         """Release image and causal rollout state when the shared session ends."""
-        backend = self._backend
         try:
-            if backend is not None:
-                backend.end_session()
+            self._engine.reset()
         finally:
             self._clear_controls()
-            self.state._reset_requested = False
+            self.state._applied_world_id = None
             self._selected_input = None
+            self._camera_path = None
             self._image_source = None
             self._chunk_index = 0
             self._active_prompt = ""
@@ -151,8 +131,10 @@ class DreamXWorld(ReactorPipeline):
             "Select an uploaded image and queue a fresh world. Valid at any time; the image "
             "applies to chunk 1, clears rollout progress, releases held keys, and starts "
             "continuous generation. Emits "
-            "`image_selected`, `state_update`, and then `chunk_generated` on success, or "
-            "`command_error` when the upload is invalid."
+            "`image_selected`, `state_update`, and then `chunk_generated`. Fails with "
+            "`unsupported_media`, `invalid_image`, or `image_too_large` when the upload is not "
+            "a supported image, empty or undecodable, or over the size or pixel limit, or "
+            "`prompt_required` when no prompt is available."
         ),
     )
     async def set_image(
@@ -225,8 +207,8 @@ class DreamXWorld(ReactorPipeline):
             "Queue a new scene or event prompt without clearing causal visual history. Valid "
             "after an image is selected; the text refreshes cross-attention at the next native "
             "chunk boundary while preserving the rolling visual KV cache. Emits "
-            "`prompt_queued` and broadcasts `state_update` on success, or `command_error` when "
-            "the prompt is empty or no image is selected."
+            "`prompt_queued` and broadcasts `state_update`. Fails with `prompt_required` when "
+            "the prompt is empty, or `image_required` when no image is selected."
         ),
     )
     async def set_prompt(
@@ -258,7 +240,8 @@ class DreamXWorld(ReactorPipeline):
         description=(
             "Hold or release one native DreamX camera key for subsequent chunks. Valid after "
             "an image is selected. Emits `action_changed` and `state_update` after changing "
-            "the complete held-key set. Unsupported values are rejected before state changes."
+            "the complete held-key set. Unsupported values are rejected before state changes. "
+            "Fails with `image_required` before an image is selected."
         ),
     )
     async def set_key_state(
@@ -282,6 +265,10 @@ class DreamXWorld(ReactorPipeline):
     ) -> ActionChanged:
         """Update one held camera key and report the complete native input state."""
         self._require_selected_image()
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active", "Select an image to return to keyboard controls."
+            )
         if pressed:
             self.state._pressed_keys = self.state._pressed_keys.union((key,))
         else:
@@ -301,8 +288,8 @@ class DreamXWorld(ReactorPipeline):
             "Restart from the selected image and queued prompt. Valid after image selection; "
             "the reset applies before the next native chunk, clears every autoregressive and "
             "VAE cache, releases held keys, and resumes continuous generation. Emits "
-            "`rollout_reset_queued` and broadcasts `state_update` on success, or "
-            "`command_error` when no image is selected."
+            "`rollout_reset_queued` and broadcasts `state_update`. Fails with "
+            "`image_required` when no image is selected."
         ),
     )
     async def reset(
@@ -332,75 +319,103 @@ class DreamXWorld(ReactorPipeline):
         await self.send(self._state_update())
         return message
 
-    async def inference(self) -> AsyncGenerator[DreamXWorldOutput | None, None]:
-        """Generate and emit one upstream-native chunk at a time."""
-        backend = self._backend
-        config = self._require_config()
-        if backend is None:
-            raise RuntimeError("DreamX-World was not loaded")
-
-        while True:
-            selected = self._selected_input
-            if selected is None:
-                yield None
-                continue
-
-            started = time.perf_counter()
-            if self.state._reset_requested:
-                self.state._reset_requested = False
-                self._generating = True
-                await self.send(self._state_update())
-                try:
-                    backend.reset(self._seed, selected)
-                finally:
-                    self._generating = False
-                self._chunk_index = 0
-                self._active_prompt = ""
-
-            prompt = self.state.prompt.strip()
-            if not prompt:
-                raise RuntimeError("DreamX-World requires a non-empty prompt")
-            pressed_keys = self.state._pressed_keys
-            self._generating = True
-            try:
-                frames = backend.generate_chunk(
-                    prompt,
-                    pressed_keys,
-                )
-            finally:
-                self._generating = False
-
-            self._chunk_index += 1
-            self._active_prompt = prompt
-            elapsed = time.perf_counter() - started
-            await self.send(
-                ChunkGenerated(
-                    chunk=self._chunk_index,
-                    frames=int(frames.shape[0]),
-                    prompt=prompt,
-                    pressed_keys=[key for key in _CAMERA_KEYS if key in pressed_keys],
-                    inference_seconds=round(elapsed, 3),
-                )
+    @event(
+        name="set_camera_path",
+        description="Queue a finite camera-to-world trajectory from the selected image. JSON poses are sampled once per output RGB frame. Reset rewinds the path; selecting an image restores keyboard controls. Emits `camera_path_selected` and `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path.",
+    )
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
+            description="JSON with poses[N,4,4], N=12*chunks-3. Finite orthonormal camera-to-world transforms; at most 2 MiB. Native camera intrinsics are retained.",
+        ),
+    ) -> CameraPathSelected:
+        self._require_selected_image()
+        try:
+            path = load_camera_path(
+                trajectory.data, self._require_config().max_chunks_per_rollout
             )
-            await self.send(self._state_update())
-            yield DreamXWorldOutput(main_video=frames)
+        except (ValueError, TypeError, OverflowError) as error:
+            raise CommandError("invalid_camera_path", str(error)) from error
+        self._camera_path = path
+        self._request_reset()
+        self._chunk_index = 0
+        await self.send(self._state_update())
+        return CameraPathSelected(chunks=len(path.chunks), frames=path.frames)
 
-            if (
-                self._chunk_index >= config.max_chunks_per_rollout
-                and not self.state._reset_requested
-                and selected is self._selected_input
-            ):
-                completed = self._chunk_index
-                self._request_reset()
-                await self.send(
-                    RolloutResetQueued(
-                        trigger="automatic_chunk_limit",
-                        seed=self._seed,
-                        completed_chunks=completed,
-                        applies_to_chunk=1,
-                    )
+    async def process_input(self) -> DreamXInput:
+        """Snapshot one native step after an image is selected."""
+        if self._selected_input is None:
+            raise ApplicationError("Select an image before generating.")
+        prompt = self.state.prompt.strip()
+        if not prompt:
+            raise ApplicationError("DreamX-World requires a non-empty prompt.")
+        if self._camera is None:
+            raise RuntimeError("DreamX-World was not loaded")
+        new_world = self.state._world_id != self.state._applied_world_id
+        if (
+            not new_world
+            and self._chunk_index >= self._require_config().max_chunks_per_rollout
+        ):
+            raise ApplicationError("Rollout complete; reset or select an image.")
+        anchor = None
+        if new_world:
+            self._camera.reset()
+            image = self._selected_input
+            anchor = DreamXAnchor(
+                image.data if isinstance(image, UploadedFile) else image,
+                self._seed,
+                len(self._camera_path.chunks)
+                if self._camera_path is not None
+                else self._require_config().max_chunks_per_rollout,
+            )
+        if self._camera_path is not None:
+            index = 0 if new_world else self._chunk_index
+            if index >= len(self._camera_path.chunks):
+                raise ApplicationError(
+                    "Camera path complete; reset or select an image."
                 )
-                await self.send(self._state_update())
+            camera = self._camera_path.chunks[index]
+        else:
+            camera = self._camera.plan_chunk(
+                self.state._pressed_keys, first_chunk=new_world
+            )
+        snapshot = DreamXInput(
+            world_id=self.state._world_id,
+            anchor=anchor,
+            prompt=prompt,
+            poses=camera.poses,
+            reference_pose=camera.reference_pose,
+        )
+        self._generating = True
+        return snapshot
+
+    def generate(self, input: DreamXInput) -> DreamXResult:
+        return self._engine.generate(input)
+
+    async def process_output(self, outcome: StepOutcome) -> DreamXWorldOutput:
+        """Publish a completed chunk while retaining its native rollout state."""
+        self._generating = False
+        if outcome.error is not None:
+            # Contract violations and GPU failures cannot be repaired by a silent reset.
+            raise outcome.error
+        result: DreamXResult = outcome.result
+        self.state._applied_world_id = result.world_id
+        self._chunk_index = result.chunk_index
+        self._active_prompt = result.prompt
+        await self.send(
+            ChunkGenerated(
+                chunk=self._chunk_index,
+                frames=int(result.frames.shape[0]),
+                prompt=result.prompt,
+                pressed_keys=[
+                    key for key in _CAMERA_KEYS if key in self.state._pressed_keys
+                ],
+                inference_seconds=round(outcome.elapsed, 3),
+            )
+        )
+        await self.send(self._state_update())
+        return DreamXWorldOutput(main_video=result.frames)
 
     def _select_image(
         self,
@@ -410,6 +425,7 @@ class DreamXWorld(ReactorPipeline):
     ) -> None:
         """Queue one selected image and prompt as a fresh continuous rollout."""
         self._selected_input = image
+        self._camera_path = None
         self._image_source = source
         self.state.prompt = prompt
         self._request_reset()
@@ -420,7 +436,7 @@ class DreamXWorld(ReactorPipeline):
         """Queue a fresh backend rollout and clear controls consumed by the old one."""
         self.output.flush()
         self._clear_controls()
-        self.state._reset_requested = True
+        self.state._world_id += 1
 
     def _clear_controls(self) -> None:
         """Release every native DreamX camera key."""
@@ -428,7 +444,7 @@ class DreamXWorld(ReactorPipeline):
 
     def _next_chunk(self) -> int:
         """Return the one-based chunk expected to consume newly queued controls."""
-        if self.state._reset_requested:
+        if self.state._world_id != self.state._applied_world_id:
             return 1
         return self._chunk_index + 1 + int(self._generating)
 
@@ -437,6 +453,16 @@ class DreamXWorld(ReactorPipeline):
         config = self._config
         selected = self._selected_input
         image_name = selected.name if selected is not None else None
+        complete = bool(
+            config is not None
+            and self.state._world_id == self.state._applied_world_id
+            and self._chunk_index
+            >= (
+                len(self._camera_path.chunks)
+                if self._camera_path
+                else config.max_chunks_per_rollout
+            )
+        )
         return StateUpdate(
             image_source=self._image_source,
             image_name=image_name,
@@ -446,11 +472,22 @@ class DreamXWorld(ReactorPipeline):
                 key for key in _CAMERA_KEYS if key in self.state._pressed_keys
             ],
             seed=self._seed,
-            reset_queued=self.state._reset_requested,
+            reset_queued=(
+                selected is not None
+                and self.state._world_id != self.state._applied_world_id
+            ),
             generating=self._generating,
             completed_chunks=self._chunk_index,
-            next_chunk=None if selected is None else self._next_chunk(),
+            next_chunk=None if selected is None or complete else self._next_chunk(),
             max_chunks=config.max_chunks_per_rollout if config is not None else 0,
+            camera_path_chunks=len(self._camera_path.chunks)
+            if self._camera_path
+            else 0,
+            camera_path_complete=bool(
+                self._camera_path
+                and self._chunk_index >= len(self._camera_path.chunks)
+                and self.state._world_id == self.state._applied_world_id
+            ),
         )
 
     def _require_config(self) -> DreamXConfig:

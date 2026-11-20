@@ -1,0 +1,9 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
+[project]
+name = "reactor-rho-yam-client"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["numpy>=2,<3", "pillow>=12,<13", "reactor-sdk==1.9.0"]
+
+[dependency-groups]
+dev = ["pytest>=9,<10"]

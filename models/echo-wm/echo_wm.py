@@ -3,25 +3,8 @@
 from __future__ import annotations
 
 import secrets
-import time
-from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Literal, Protocol
-
-import numpy as np
-from reactor_runtime import (
-    ClientInfo,
-    CommandError,
-    InputField,
-    ReactorPipeline,
-    UploadedFile,
-    connected,
-    disconnected,
-    event,
-    session_ended,
-    session_started,
-)
-from reactor_runtime.log import get_logger
+from typing import Literal
 
 from echo_wm_assets import (
     EchoWMConfig,
@@ -32,11 +15,12 @@ from echo_wm_assets import (
     prepare_assets,
     read_config,
 )
-from echo_wm_camera import CameraChunk, EchoCameraPlanner, MotionConfig
-from echo_wm_images import materialized_image, validate_uploaded_image
+from echo_wm_camera import CameraPath, EchoCameraPlanner, MotionConfig, load_camera_path
+from echo_wm_images import validate_uploaded_image
+from echo_wm_model import EchoAnchor, EchoInput, EchoModel, EchoResult
 from echo_wm_schema import (
-    AutomaticResetQueued,
     CameraMotionChanged,
+    CameraPathSelected,
     ChunkCompleted,
     EchoWMOutput,
     EchoWMState,
@@ -45,33 +29,27 @@ from echo_wm_schema import (
     RolloutResetQueued,
     StateUpdate,
 )
+from reactor_runtime import (
+    ApplicationError,
+    ClientInfo,
+    CommandError,
+    InputField,
+    ReactorApp,
+    StepOutcome,
+    UploadedFile,
+    connected,
+    disconnected,
+    event,
+    get_weights_path,
+    session_ended,
+    session_started,
+)
+from reactor_runtime.log import get_logger
 
 logger = get_logger(__name__)
 
 
-class _Backend(Protocol):
-    """Define the blocking upstream operations used by the Reactor loop."""
-
-    def reset(self, *, image: Path, prompt: str, seed: int, fov_degrees: float) -> None:
-        """Start a fresh bounded causal rollout."""
-
-    def generate_chunk(
-        self,
-        camera: CameraChunk,
-        *,
-        fov_degrees: float,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Generate one native synchronized audio-video block."""
-
-    @property
-    def last_profile(self) -> dict[str, float]:
-        """Return CUDA stage timings for the latest chunk."""
-
-    def end_session(self, *, release_cuda_cache: bool = True) -> None:
-        """Release rollout state while retaining model weights."""
-
-
-class EchoWM(ReactorPipeline):
+class EchoWM(ReactorApp):
     """Generate a prompt-, image-, and pure-camera-controlled audiovisual world."""
 
     state: EchoWMState
@@ -82,7 +60,7 @@ class EchoWM(ReactorPipeline):
     def __init__(self) -> None:
         super().__init__()
         self._config: EchoWMConfig | None = None
-        self._backend: _Backend | None = None
+        self._engine = EchoModel()
         self._planner: EchoCameraPlanner | None = None
         self._examples: tuple[ExampleScene, ...] = ()
         self._selected_image: Path | UploadedFile | None = None
@@ -92,6 +70,7 @@ class EchoWM(ReactorPipeline):
         self._seed = 0
         self._chunk_index = 0
         self._generating = False
+        self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
         """Prepare public assets and load Echo-WM weights once at startup.
@@ -99,12 +78,10 @@ class EchoWM(ReactorPipeline):
         Args:
             config_path: Path to ``echo_wm.yaml`` from ``reactor.yaml``.
         """
-        config = read_config(config_path)
+        config = read_config(config_path, get_weights_path())
         configure_cache_environment(config)
         prepare_assets(config)
         activate_source(config)
-        from echo_wm_backend import EchoWMBackend
-
         self._config = config
         self._examples = load_examples(config)
         self._seed = config.seed
@@ -117,43 +94,18 @@ class EchoWM(ReactorPipeline):
                 pitch_limit_degrees=config.pitch_limit_degrees,
             )
         )
-        backend = EchoWMBackend(config)
-        self._backend = backend
-        benchmark = backend.attention_benchmark
-        if benchmark is not None:
-            logger.info(
-                "Echo-WM attention verification complete",
-                pytorch_milliseconds=round(benchmark.pytorch_milliseconds, 4),
-                flash_attention_4_milliseconds=round(
-                    benchmark.flash_attention_4_milliseconds, 4
-                ),
-                speedup=round(benchmark.speedup, 3),
-                max_absolute_error=round(benchmark.max_absolute_error, 6),
-                mean_absolute_error=round(benchmark.mean_absolute_error, 6),
-                normalized_root_mean_square_error=round(
-                    benchmark.normalized_root_mean_square_error, 6
-                ),
-            )
-        self._warmup()
-        logger.info(
-            "Echo-WM Flash ready",
-            source_revision=config.source_revision,
-            checkpoint_revision=config.checkpoint.revision,
-            frames_per_chunk=config.frames_per_chunk,
-            max_chunks=config.max_chunks,
-            attention_backend=config.attention_backend,
-            attention_modules=backend.attention_modules,
-        )
+        self._engine.load(config)
 
     @session_started
     def on_session_started(self) -> None:
         """Initialize an empty continuous world before the first viewer connects."""
         config = self._require_loaded()
         self.state.prompt = ""
-        self.state._reset_requested = False
+        self.state._applied_world_id = None
         self.state._fov_degrees = config.fov_degrees
         self._clear_camera()
         self._selected_image = None
+        self._camera_path = None
         self._image_source = None
         self._image_name = None
         self._active_prompt = None
@@ -165,15 +117,15 @@ class EchoWM(ReactorPipeline):
     def on_session_ended(self) -> None:
         """Release causal state when the shared session ends."""
         self._clear_camera()
-        self.state._reset_requested = False
+        self.state._applied_world_id = None
         self._selected_image = None
+        self._camera_path = None
         self._image_source = None
         self._image_name = None
         self._active_prompt = None
         self._chunk_index = 0
         self._generating = False
-        if self._backend is not None:
-            self._backend.end_session()
+        self._engine.reset()
 
     @connected
     async def on_connected(self, client: ClientInfo) -> None:
@@ -192,8 +144,9 @@ class EchoWM(ReactorPipeline):
             "Select an uploaded first frame and start a fresh audiovisual world with continuous "
             "generation. Supply a prompt or leave it blank to use the configured image-neutral "
             "default. Emits "
-            "`image_selected` and broadcasts `state_update` on success, or `command_error` "
-            "when the upload is invalid."
+            "`image_selected` and broadcasts `state_update`. Fails with `unsupported_media`, "
+            "`invalid_image`, or `image_too_large` when the upload is not a supported image, "
+            "empty or undecodable, or over the size or pixel limit."
         ),
     )
     async def set_image(
@@ -227,6 +180,7 @@ class EchoWM(ReactorPipeline):
         if seed >= 0:
             self._seed = seed
         self._selected_image = image
+        self._camera_path = None
         self._image_source = "uploaded"
         self._image_name = image.name
         self.state.prompt = normalized
@@ -245,8 +199,8 @@ class EchoWM(ReactorPipeline):
         description=(
             "Select a different public Echo-WM example with its matching prompt, field of "
             "view, and seed, then start continuous generation from it. Emits `image_selected` "
-            "and broadcasts `state_update` on success, "
-            "or `command_error` when no example is configured."
+            "and broadcasts `state_update`. Fails with `image_unavailable` when no example is "
+            "configured."
         ),
     )
     async def random_image(self) -> ImageSelected:
@@ -260,6 +214,7 @@ class EchoWM(ReactorPipeline):
         ]
         scene = secrets.choice(candidates or list(self._examples))
         self._selected_image = scene.image
+        self._camera_path = None
         self._image_source = "built_in"
         self._image_name = scene.image.name
         self.state.prompt = scene.prompt
@@ -281,8 +236,8 @@ class EchoWM(ReactorPipeline):
             "Replace the text condition and queue a fresh rollout from the selected image. "
             "The new prompt begins at chunk one and continuous generation resumes from the "
             "fresh world. Emits `prompt_queued` and broadcasts "
-            "`state_update` on success, or `command_error` before image selection or for empty "
-            "text."
+            "`state_update`. Fails with `image_required` before image selection, or "
+            "`prompt_required` for empty text."
         ),
     )
     async def set_prompt(
@@ -310,12 +265,33 @@ class EchoWM(ReactorPipeline):
         return message
 
     @event(
+        name="set_camera_path",
+        description="Upload a finite camera-to-world path and queue a fresh world from the selected image. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path. Generation stops at the path end.",
+    )
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
+            description="JSON with poses [24 * chunks + 1, 4, 4] at 24 FPS, at most 4 MiB. The first pose anchors the world.",
+        ),
+    ) -> CameraPathSelected:
+        self._require_selected()
+        try:
+            path = load_camera_path(trajectory.data, self._require_loaded().max_chunks)
+        except (ValueError, TypeError, OverflowError) as error:
+            raise CommandError("invalid_camera_path", str(error)) from error
+        self._camera_path = path
+        self._request_reset()
+        await self.send(self._state_update())
+        return CameraPathSelected(chunks=len(path.chunks), frames=path.frames)
+
+    @event(
         name="set_camera_motion",
         description=(
             "Set Echo-WM's four native held camera axes atomically. Values are sampled at the "
             "next chunk boundary and remain active until changed or released. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` before image selection."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` before image selection."
         ),
     )
     async def set_camera_motion(
@@ -347,6 +323,11 @@ class EchoWM(ReactorPipeline):
     ) -> CameraMotionChanged:
         """Set every native camera axis and report the complete held state."""
         self._require_selected()
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select a new image to return to held camera controls.",
+            )
         self.state._forward = forward
         self.state._strafe = strafe
         self.state._pitch = pitch
@@ -359,13 +340,18 @@ class EchoWM(ReactorPipeline):
         name="release_camera",
         description=(
             "Return every held camera axis to neutral for forthcoming chunks. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` before image selection."
+            "`camera_motion_changed` and broadcasts `state_update`. Fails with "
+            "`image_required` before image selection."
         ),
     )
     async def release_camera(self) -> CameraMotionChanged:
         """Release native camera motion and report neutral state."""
         self._require_selected()
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select a new image to return to held camera controls.",
+            )
         self._clear_camera()
         message = self._camera_changed()
         await self.send(self._state_update())
@@ -375,9 +361,10 @@ class EchoWM(ReactorPipeline):
         name="set_fov",
         description=(
             "Set the horizontal camera field of view for forthcoming chunks. The value is "
-            "sampled at the next chunk boundary and remains active. Emits "
-            "`camera_motion_changed` and broadcasts `state_update` on success, or "
-            "`command_error` before image selection."
+            "sampled at the next chunk boundary and remains active; a camera path samples it "
+            "once when its rollout starts. Emits `camera_motion_changed` and broadcasts "
+            "`state_update`. Fails with `image_required` before image selection, or "
+            "`camera_path_active` while a camera path rollout is running."
         ),
     )
     async def set_fov(
@@ -391,6 +378,14 @@ class EchoWM(ReactorPipeline):
     ) -> CameraMotionChanged:
         """Set and report the held camera field of view."""
         self._require_selected()
+        if (
+            self._camera_path is not None
+            and self.state._world_id == self.state._applied_world_id
+        ):
+            raise CommandError(
+                "camera_path_active",
+                "A camera path keeps its field of view; reset or upload a path to change it.",
+            )
         self.state._fov_degrees = fov_degrees
         message = self._camera_changed()
         await self.send(self._state_update())
@@ -401,8 +396,8 @@ class EchoWM(ReactorPipeline):
         description=(
             "Queue a fresh bounded rollout from the selected image and current prompt. The "
             "command releases camera motion and continues generation from chunk one. Emits "
-            "`rollout_reset_queued` and broadcasts `state_update` on success, or "
-            "`command_error` before image selection."
+            "`rollout_reset_queued` and broadcasts `state_update`. Fails with "
+            "`image_required` before image selection."
         ),
     )
     async def reset(
@@ -424,156 +419,115 @@ class EchoWM(ReactorPipeline):
         await self.send(self._state_update())
         return message
 
-    async def inference(self) -> AsyncGenerator[EchoWMOutput | None, None]:
-        """Generate and emit one native causal audio-video block per turn."""
+    async def process_input(self) -> EchoInput:
+        """Plan camera poses and carry an anchor until the model acknowledges its world."""
+        if self._selected_image is None:
+            raise ApplicationError("Select an image before generating.")
+        new_world = self.state._world_id != self.state._applied_world_id
+        prompt = self.state.prompt.strip() if new_world else self._active_prompt
+        if not prompt:
+            raise ApplicationError("Echo-WM requires a prompt before generating.")
         config = self._require_loaded()
-        backend = self._backend
+        if not new_world and self._chunk_index >= config.max_chunks:
+            raise ApplicationError("Rollout is complete. Reset or select another image.")
+        if self._camera_path is not None and self._chunk_index >= len(
+            self._camera_path.chunks
+        ):
+            raise ApplicationError(
+                "Camera path is complete. Reset or upload another path."
+            )
         planner = self._planner
-        if backend is None or planner is None:
+        if planner is None:
             raise RuntimeError("Echo-WM was not loaded")
-
-        while True:
-            if self.state._reset_requested:
-                selected = self._selected_image
-                if selected is None:
-                    yield None
-                    continue
-                prompt = self.state.prompt.strip()
-                if not prompt:
-                    raise RuntimeError("Echo-WM requires a prompt before reset")
-                self.state._reset_requested = False
-                self._generating = True
-                await self.send(self._state_update())
-                try:
-                    with materialized_image(selected, config.runtime_dir) as image:
-                        backend.reset(
-                            image=image,
-                            prompt=prompt,
-                            seed=self._seed,
-                            fov_degrees=self.state._fov_degrees,
-                        )
-                finally:
-                    self._generating = False
-                planner.reset()
-                self._chunk_index = 0
-                self._active_prompt = prompt
-                await self.send(self._state_update())
-
-            if self._selected_image is None:
-                yield None
-                continue
-
-            sampled_prompt = self._active_prompt
-            if sampled_prompt is None:
-                raise RuntimeError("Echo-WM rollout has no active prompt")
-            sampled_controls = {
-                "forward": self.state._forward,
-                "strafe": self.state._strafe,
-                "pitch": self.state._pitch,
-                "yaw": self.state._yaw,
-            }
-            sampled_fov = self.state._fov_degrees
-            camera = planner.plan_chunk(
-                **sampled_controls,
+        anchor = None
+        if new_world:
+            selected = self._selected_image
+            image = selected.data if isinstance(selected, UploadedFile) else selected
+            anchor = EchoAnchor(
+                image=image,
+                suffix=Path(selected.name).suffix.lower() or ".png",
+                seed=self._seed,
+            )
+        camera = (
+            None
+            if self._camera_path is not None
+            else planner.plan_chunk(
+                forward=self.state._forward,
+                strafe=self.state._strafe,
+                pitch=self.state._pitch,
+                yaw=self.state._yaw,
                 frame_count=config.frames_per_chunk,
             )
-            self._generating = True
-            await self.send(self._state_update())
-            started = time.perf_counter()
-            try:
-                video, audio = backend.generate_chunk(
-                    camera,
-                    fov_degrees=sampled_fov,
-                )
-            finally:
-                self._generating = False
-            seconds = time.perf_counter() - started
-            profile = backend.last_profile
-            self._chunk_index += 1
-            logger.info(
-                "Echo-WM chunk complete",
-                chunk=self._chunk_index,
-                generation_seconds=round(seconds, 3),
-                **{name: round(value, 4) for name, value in profile.items()},
-            )
-            await self.send(
-                ChunkCompleted(
-                    chunk=self._chunk_index,
-                    video_frames=int(video.shape[0]),
-                    audio_samples=int(audio.shape[-1]),
-                    generation_seconds=round(seconds, 3),
-                    denoise_seconds=_profile_value(profile, "denoise_seconds"),
-                    cache_commit_seconds=_profile_value(
-                        profile, "cache_commit_seconds"
-                    ),
-                    video_decode_seconds=_profile_value(
-                        profile, "video_decode_seconds"
-                    ),
-                    audio_decode_seconds=_profile_value(
-                        profile, "audio_decode_seconds"
-                    ),
-                    cuda_total_seconds=_profile_value(profile, "cuda_total_seconds"),
-                    prompt=sampled_prompt,
-                    **sampled_controls,
-                )
-            )
-            if self._chunk_index >= config.max_chunks:
-                self.state._reset_requested = True
-                await self.send(
-                    AutomaticResetQueued(
-                        completed_chunks=self._chunk_index,
-                        max_chunks=config.max_chunks,
-                        seed=self._seed,
-                    )
-                )
-            await self.send(self._state_update())
-            yield EchoWMOutput(main_video=video, main_audio=audio)
-
-    def _warmup(self) -> None:
-        """Generate configured throwaway chunks before accepting a session."""
-        config = self._require_loaded()
-        backend = self._backend
-        planner = self._planner
-        if config.warmup_chunks == 0:
-            return
-        if backend is None or planner is None or not self._examples:
-            raise RuntimeError(
-                "Echo-WM warmup requires a backend, planner, and example"
-            )
-        scene = self._examples[0]
-        started = time.perf_counter()
-        logger.info("Echo-WM warming up", chunks=config.warmup_chunks)
-        try:
-            backend.reset(
-                image=scene.image,
-                prompt=scene.prompt,
-                seed=scene.seed,
-                fov_degrees=scene.fov_degrees,
-            )
-            planner.reset()
-            for _ in range(config.warmup_chunks):
-                camera = planner.plan_chunk(
-                    forward=0.0,
-                    strafe=0.0,
-                    pitch=0.0,
-                    yaw=0.0,
-                    frame_count=config.frames_per_chunk,
-                )
-                backend.generate_chunk(camera, fov_degrees=scene.fov_degrees)
-        finally:
-            backend.end_session(release_cuda_cache=False)
-            planner.reset()
-        logger.info(
-            "Echo-WM warmup complete",
-            chunks=config.warmup_chunks,
-            seconds=round(time.perf_counter() - started, 3),
         )
+        self._generating = True
+        return EchoInput(
+            world_id=self.state._world_id,
+            anchor=anchor,
+            prompt=prompt,
+            poses=(
+                self._camera_path.chunks[self._chunk_index].copy()
+                if self._camera_path is not None
+                else camera.latent_poses
+            ),
+            fov_degrees=self.state._fov_degrees,
+            rollout_chunks=len(self._camera_path.chunks)
+            if self._camera_path is not None
+            else None,
+            camera_path=self._camera_path.poses
+            if self._camera_path is not None
+            else None,
+        )
+
+    def generate(self, input: EchoInput) -> EchoResult:
+        """Forward one native audiovisual step to the independent model."""
+        return self._engine.generate(input)
+
+    async def process_output(self, outcome: StepOutcome) -> EchoWMOutput:
+        """Publish native media, generation timings, and rollout state."""
+        self._generating = False
+        if outcome.error is not None:
+            # Missing anchors and exhausted worlds are prevented by the application.
+            # Unexpected model failures must terminate the session, not hide a reset.
+            raise outcome.error
+        result: EchoResult = outcome.result
+        self.state._applied_world_id = result.world_id
+        self._active_prompt = result.prompt
+        self._chunk_index = result.chunk_index
+        profile = result.profile
+        logger.info(
+            "Echo-WM chunk complete",
+            chunk=self._chunk_index,
+            generation_seconds=round(outcome.elapsed, 3),
+            **{name: round(value, 4) for name, value in profile.items()},
+        )
+        await self.send(
+            ChunkCompleted(
+                chunk=result.chunk_index,
+                video_frames=int(result.video.shape[0]),
+                audio_samples=int(result.audio.shape[-1]),
+                generation_seconds=round(outcome.elapsed, 3),
+                denoise_seconds=_profile_value(profile, "denoise_seconds"),
+                cache_commit_seconds=_profile_value(profile, "cache_commit_seconds"),
+                video_decode_seconds=_profile_value(profile, "video_decode_seconds"),
+                audio_decode_seconds=_profile_value(profile, "audio_decode_seconds"),
+                cuda_total_seconds=_profile_value(profile, "cuda_total_seconds"),
+                prompt=result.prompt,
+                forward=self.state._forward,
+                strafe=self.state._strafe,
+                pitch=self.state._pitch,
+                yaw=self.state._yaw,
+            )
+        )
+        await self.send(self._state_update())
+        return EchoWMOutput(main_video=result.video, main_audio=result.audio)
 
     def _request_reset(self) -> None:
         """Queue a clean rollout and clear prior playout, controls, and progress."""
         self.output.flush()
         self._clear_camera()
-        self.state._reset_requested = True
+        self.state._world_id += 1
+        if self._planner is not None:
+            self._planner.reset()
         self._chunk_index = 0
 
     def _clear_camera(self) -> None:
@@ -612,8 +566,14 @@ class EchoWM(ReactorPipeline):
         """Return the one-based chunk expected to consume newly accepted input."""
         if self._selected_image is None:
             return None
-        if self.state._reset_requested:
+        if self.state._world_id != self.state._applied_world_id:
             return 1
+        if self._config is not None and self._chunk_index >= self._config.max_chunks:
+            return None
+        if self._camera_path is not None and self._chunk_index >= len(
+            self._camera_path.chunks
+        ):
+            return None
         return self._chunk_index + 1 + int(self._generating)
 
     def _state_update(self) -> StateUpdate:
@@ -625,7 +585,10 @@ class EchoWM(ReactorPipeline):
             prompt=self.state.prompt or None,
             active_prompt=self._active_prompt,
             seed=self._seed,
-            reset_queued=self.state._reset_requested,
+            reset_queued=(
+                self._selected_image is not None
+                and self.state._world_id != self.state._applied_world_id
+            ),
             generating=self._generating,
             completed_chunks=self._chunk_index,
             next_chunk=self._next_chunk(),
@@ -635,6 +598,9 @@ class EchoWM(ReactorPipeline):
             pitch=self.state._pitch,
             yaw=self.state._yaw,
             fov_degrees=self.state._fov_degrees,
+            camera_path_chunks=len(self._camera_path.chunks)
+            if self._camera_path is not None
+            else None,
         )
 
 

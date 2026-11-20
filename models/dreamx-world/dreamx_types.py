@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 
 from reactor_runtime import (
@@ -16,35 +14,6 @@ from reactor_runtime import (
 )
 
 ImageSource = Literal["uploaded", "built_in"]
-
-
-@dataclass(frozen=True)
-class RepositoryAsset:
-    """Describe one public Hugging Face repository pinned to a revision."""
-
-    path: Path
-    repo_id: str
-    revision: str
-
-
-@dataclass(frozen=True)
-class DreamXConfig:
-    """Hold validated source, checkpoint, inference, and interaction settings."""
-
-    source_path: Path
-    source_url: str
-    source_revision: str
-    upstream_config: Path
-    transformer_config: Path
-    evaluation_inputs: Path
-    random_images: tuple[Path, ...]
-    dreamx: RepositoryAsset
-    wan: RepositoryAsset
-    seed: int
-    motion_speed: float
-    color_correction_strength: float
-    max_chunks_per_rollout: int
-    default_upload_prompt: str
 
 
 class DreamXWorldOutput(Output):
@@ -98,12 +67,27 @@ class StateUpdate(ModelMessage):
     next_chunk: int | None = MessageField(
         description=(
             "One-based chunk that will consume the queued prompt and keys, or null before an "
-            "image is selected."
+            "image is selected or after the rollout limit."
         )
     )
     max_chunks: int = MessageField(
-        description="Chunk count that automatically starts a fresh rollout from the same image."
+        description="Configured rollout bound; generation stops at this limit. Uploaded paths stop at camera_path_chunks."
     )
+    camera_path_chunks: int = MessageField(
+        default=0,
+        description="Finite camera-path length, or zero for keyboard controls.",
+    )
+    camera_path_complete: bool = MessageField(
+        default=False,
+        description="Whether the uploaded path has finished; reset rewinds it.",
+    )
+
+
+class CameraPathSelected(ModelMessage):
+    """Acknowledges a finite uploaded camera path queued from the selected image."""
+
+    chunks: int = MessageField(description="Number of chunks in the path.")
+    frames: int = MessageField(description="Total RGB frames in the path.")
 
 
 class ImageSelected(ModelMessage):
@@ -149,13 +133,10 @@ class ActionChanged(ModelMessage):
 
 
 class RolloutResetQueued(ModelMessage):
-    """Emitted when a manual or automatic reset queues a fresh rollout."""
+    """Emitted when an explicit reset queues a fresh rollout."""
 
-    trigger: Literal["manual", "automatic_chunk_limit"] = MessageField(
-        description=(
-            'Reset source: "manual" for `reset` or "automatic_chunk_limit" after '
-            "`max_chunks` completes."
-        )
+    trigger: Literal["manual"] = MessageField(
+        description='Reset source: "manual" for `reset`.'
     )
     seed: int = MessageField(
         description="Random seed that will initialize the queued fresh rollout."
@@ -203,4 +184,5 @@ class DreamXWorldState(InputState):
         ),
     )
     _pressed_keys: frozenset[str] = frozenset()
-    _reset_requested: bool = False
+    _world_id: int = 0
+    _applied_world_id: int | None = None

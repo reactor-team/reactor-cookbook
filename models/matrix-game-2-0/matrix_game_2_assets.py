@@ -13,11 +13,10 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
-from PIL import Image, ImageOps, UnidentifiedImageError
+from matrix_game_2_types import MatrixGame2Config
+from PIL import Image, UnidentifiedImageError
 from reactor_runtime import CommandError, UploadedFile, get_weights_path
 from reactor_runtime.log import get_logger
-
-from matrix_game_2_types import MatrixGame2Config
 
 logger = get_logger(__name__)
 
@@ -210,20 +209,6 @@ def validate_uploaded_image(image: UploadedFile) -> None:
         raise CommandError(
             "invalid_image", f"{image.name} cannot be decoded."
         ) from error
-
-
-def load_input_image(value: Path | UploadedFile) -> Image.Image:
-    """Return one EXIF-corrected RGB image from a path or uploaded bytes."""
-    try:
-        if isinstance(value, UploadedFile):
-            source: str | io.BytesIO = io.BytesIO(value.data)
-        else:
-            source = str(value)
-        with Image.open(source) as decoded:
-            return ImageOps.exif_transpose(decoded).convert("RGB")
-    except (OSError, UnidentifiedImageError, ValueError) as error:
-        name = value.name
-        raise RuntimeError(f"failed to load Matrix starting image: {name}") from error
 
 
 def _validate_source_files(config: MatrixGame2Config) -> None:

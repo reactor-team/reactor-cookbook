@@ -9,126 +9,50 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageOps, UnidentifiedImageError
-
-from reactor_runtime import CommandError, UploadedFile
-
-_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
-_UPLOAD_MAX_PIXELS = 100_000_000
-_UPLOAD_MIME_FORMATS = {
-    "image/bmp": "BMP",
-    "image/jpeg": "JPEG",
-    "image/png": "PNG",
-    "image/webp": "WEBP",
-}
+from PIL import Image, ImageOps
 
 
-def compact_rollout_cache(
-    cache: Any,
-    *,
-    max_spatial_frames: int,
-    recent_spatial_frames: int,
-) -> None:
-    """Bound generated latents and spatial memory while retaining old keyframes."""
+def compact_rollout_cache(cache: Any) -> None:
+    """Release already streamed decode outputs; preserve native spatial memory."""
     preds = getattr(cache, "preds", None)
     if isinstance(preds, list) and len(preds) > 1:
         preds[:] = preds[-1:]
 
-    bank = getattr(cache, "spatial_bank", None)
-    if bank is None:
-        return
-    pixels = bank.pixels
-    frame_indices = bank.frame_indices
-    depths = bank.depths
-    total = len(frame_indices)
-    if len(pixels) != total or len(depths) != total:
-        raise RuntimeError("AlayaWorld spatial bank members have different lengths")
-    if total <= max_spatial_frames:
-        return
-
-    recent_count = min(recent_spatial_frames, max_spatial_frames)
-    historical_count = total - recent_count
-    historical_budget = max_spatial_frames - recent_count
-    if historical_budget == 1:
-        historical = [0]
-    elif historical_budget > 1:
-        historical = [
-            index * (historical_count - 1) // (historical_budget - 1)
-            for index in range(historical_budget)
-        ]
-    else:
-        historical = []
-    keep = historical + list(range(historical_count, total))
-
-    bank.pixels = [pixels[index] for index in keep]
-    bank.frame_indices = [frame_indices[index] for index in keep]
-    bank.depths = [depths[index] for index in keep]
-    world_points = getattr(bank, "world_points", None)
-    if isinstance(world_points, dict):
-        bank.world_points = {
-            new_index: world_points[old_index]
-            for new_index, old_index in enumerate(keep)
-            if old_index in world_points
-        }
-
-
-def validate_uploaded_image(image: UploadedFile) -> None:
-    """Reject oversized, mislabeled, or undecodable uploaded image bytes."""
-    expected_format = _UPLOAD_MIME_FORMATS.get(image.mime_type.lower())
-    if expected_format is None:
-        raise CommandError(
-            "unsupported_media",
-            f"{image.name} must declare image/jpeg, image/png, image/webp, or image/bmp.",
-        )
-    if not image.data:
-        raise CommandError("invalid_image", f"{image.name} is empty.")
-    if image.size > _UPLOAD_MAX_BYTES:
-        raise CommandError(
-            "image_too_large",
-            f"{image.name} exceeds the {_UPLOAD_MAX_BYTES // (1024 * 1024)} MiB limit.",
-        )
-    try:
-        with Image.open(io.BytesIO(image.data)) as decoded:
-            image_format = decoded.format or ""
-            width, height = decoded.size
-            if image_format != expected_format:
-                raise CommandError(
-                    "unsupported_media",
-                    f"{image.name} contains {image_format or 'unknown'} data but declares "
-                    f"{image.mime_type}.",
-                )
-            if width <= 0 or height <= 0 or width * height > _UPLOAD_MAX_PIXELS:
-                raise CommandError(
-                    "image_too_large",
-                    f"{image.name} exceeds the {_UPLOAD_MAX_PIXELS}-pixel limit.",
-                )
-            decoded.verify()
-    except CommandError:
-        raise
-    except (Image.DecompressionBombError, UnidentifiedImageError, OSError) as error:
-        raise CommandError("invalid_image", f"{image.name} cannot be decoded.") from error
-
-
 def uploaded_image_video(
-    image: UploadedFile,
+    image: bytes,
     metadata: dict[str, Any],
     *,
     target_hw: tuple[int, int],
     torch_module: Any,
+    fit_image: Any,
 ) -> Any:
-    """Decode, center-crop, and repeat an upload over the camera template."""
-    target_height, target_width = target_hw
-    with Image.open(io.BytesIO(image.data)) as decoded:
-        oriented = ImageOps.exif_transpose(decoded).convert("RGB")
-        fitted = ImageOps.fit(
-            oriented,
-            (target_width, target_height),
-            method=Image.Resampling.LANCZOS,
-        )
-        pixels = np.array(fitted, dtype=np.uint8, copy=True)
-    frame = torch_module.from_numpy(pixels).permute(2, 0, 1).float() / 127.5 - 1.0
+    """Fit an upload as upstream fits a case image, then repeat it over the template.
+
+    ``fit_image`` is upstream's resize-and-center-crop, applied to the same
+    ``[-1, 1]`` float frame that upstream builds from its decoded image.
+    """
+    frame = decode_image_rgb(image, torch_module).float() / 127.5 - 1.0
+    frame = fit_image(frame, target_hw)
     frame_count = int(camera_frames(metadata["cam_c2w"]).shape[0])
     return frame.unsqueeze(0).expand(frame_count, -1, -1, -1).contiguous()
+
+
+def decode_image_rgb(image: bytes, torch_module: Any) -> Any:
+    """Decode image bytes to a ``[3, H, W]`` uint8 tensor with EXIF orientation.
+
+    Upstream reads case images with torchvision; the same decoder keeps uploads
+    byte-identical. Formats torchvision cannot decode, such as BMP, use Pillow.
+    """
+    from torchvision.io import ImageReadMode, decode_image
+
+    data = torch_module.frombuffer(bytearray(image), dtype=torch_module.uint8)
+    try:
+        return decode_image(data, mode=ImageReadMode.RGB, apply_exif_orientation=True)
+    except RuntimeError:
+        with Image.open(io.BytesIO(image)) as decoded:
+            oriented = ImageOps.exif_transpose(decoded).convert("RGB")
+            pixels = np.array(oriented, dtype=np.uint8, copy=True)
+        return torch_module.from_numpy(pixels).permute(2, 0, 1).contiguous()
 
 
 def load_upstream_modules(source_path: Path) -> dict[str, Any]:
@@ -139,9 +63,14 @@ def load_upstream_modules(source_path: Path) -> dict[str, Any]:
     rollout = importlib.import_module("flash_alaya.utils.rollout_utils")
     return {
         "torch": importlib.import_module("torch"),
-        "load_config": importlib.import_module("flash_alaya.alaya.config.loader").load_config,
-        "pipeline_type": importlib.import_module("flash_alaya.utils.pipeline").FlashAlayaPipeline,
+        "load_config": importlib.import_module(
+            "flash_alaya.alaya.config.loader"
+        ).load_config,
+        "pipeline_type": importlib.import_module(
+            "flash_alaya.utils.pipeline"
+        ).FlashAlayaPipeline,
         "load_input_sample": rollout.load_input_sample,
+        "fit_image": rollout._fit_image_to,
         "check_input_resolution": rollout.check_input_resolution,
         "plan_rollout": rollout.plan_rollout,
         "build_engine": rollout.build_engine,
@@ -178,7 +107,9 @@ class FlashAttention4:
     PyTorch implementation that builds the equivalent banded mask.
     """
 
-    def __init__(self, flash_attention: Any, masked_fallback: Any, torch_module: Any) -> None:
+    def __init__(
+        self, flash_attention: Any, masked_fallback: Any, torch_module: Any
+    ) -> None:
         self._flash_attention = flash_attention
         self._masked_fallback = masked_fallback
         self._torch = torch_module

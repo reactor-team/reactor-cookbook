@@ -2,41 +2,41 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Protocol
 
-import numpy as np
-from reactor_runtime import (
-    ClientInfo,
-    CommandError,
-    InputField,
-    ReactorPipeline,
-    UploadedFile,
-    connected,
-    disconnected,
-    event,
-    session_ended,
-    session_started,
-)
-from reactor_runtime.log import get_logger
-
-from evoke_camera import CameraMotionPlanner, MotionConfig
+from evoke_camera import CameraMotionPlanner, CameraPath, MotionConfig, load_camera_path
 from evoke_config import EvokeConfig, prepare_runtime, read_config
 from evoke_images import (
-    normalize_output_frames,
+    upload_suffix,
     validate_uploaded_image,
     validate_uploaded_pose,
     validate_uploaded_video,
 )
+from evoke_model import EvokeAnchor, EvokeInput, EvokeModel, EvokeResult
 from evoke_types import (
+    CameraPathSelected,
     CommandApplied,
     EvokeOutput,
     EvokeState,
-    RolloutRestarted,
     StateUpdate,
 )
-from upstream_backend import EvokeWorkerBackend, WorkerSettings
+from reactor_runtime import (
+    ApplicationError,
+    ClientInfo,
+    CommandError,
+    InputField,
+    ReactorApp,
+    StepOutcome,
+    UploadedFile,
+    connected,
+    disconnected,
+    event,
+    get_weights_path,
+    session_ended,
+    session_started,
+)
+from reactor_runtime.log import get_logger
+from upstream_backend import WorkerSettings
 
 logger = get_logger(__name__)
 
@@ -45,32 +45,7 @@ FRAMES_PER_CHUNK = 36
 CAMERA_POSES_PER_CHUNK = FRAMES_PER_CHUNK
 
 
-class _Backend(Protocol):
-    def reset(
-        self,
-        *,
-        mode: str,
-        media: Path | UploadedFile | None,
-        pose: UploadedFile | None,
-        prompt: str,
-        seed: int,
-        source_fps: int = 30,
-        source_height: int = 720,
-        source_width: int = 1280,
-    ) -> None: ...
-
-    def generate_chunk(
-        self,
-        trajectory_c2w: np.ndarray | None,
-        *,
-        seed: int,
-        prompt: str,
-    ) -> np.ndarray: ...
-
-    def end_session(self) -> None: ...
-
-
-class Evoke(ReactorPipeline):
+class Evoke(ReactorApp):
     """Generate an autoregressive EVOKE world from image, video, or text conditioning."""
 
     state: EvokeState
@@ -79,7 +54,7 @@ class Evoke(ReactorPipeline):
     def __init__(self) -> None:
         super().__init__()
         self._config: EvokeConfig | None = None
-        self._backend: _Backend | None = None
+        self._engine = EvokeModel()
         self._planner: CameraMotionPlanner | None = None
         self._mode = "i2v"
         self._media: Path | UploadedFile | None = None
@@ -93,10 +68,11 @@ class Evoke(ReactorPipeline):
         self._stability_prompt = ""
         self._seed = 42
         self._chunk_index = 0
+        self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
         """Prepare public assets and load EVOKE weights once in its Python 3.10 worker."""
-        config = read_config(config_path)
+        config = read_config(config_path, get_weights_path())
         prepare_runtime(config)
         self._config = config
         self._stability_prompt = config.stability_prompt
@@ -108,7 +84,7 @@ class Evoke(ReactorPipeline):
                 rotation_degrees_per_second=config.rotation_degrees_per_second,
             )
         )
-        self._backend = EvokeWorkerBackend(
+        self._engine.load(
             WorkerSettings(
                 python_executable=config.worker_python,
                 source_path=config.source_path,
@@ -131,16 +107,18 @@ class Evoke(ReactorPipeline):
 
     @session_started
     def on_session_started(self) -> None:
-        """Initialize a built-in i2v world before its first viewer connects."""
+        """Wait for explicit image, video, or text conditioning."""
         config = self._require_config()
         self._mode = "i2v"
-        self._media = config.default_image
+        self._media = None
+        self._camera_path = None
         self._pose = None
-        self._input_source = "built_in"
-        self._input_name = config.default_image.name
+        self._input_source = "none"
+        self._input_name = ""
         self._pose_name = ""
         self.state.prompt = config.stability_prompt
-        self.state._restart_requested = True
+        self.state._world_id = 0
+        self.state._applied_world_id = None
         self._seed = config.seed
         self._chunk_index = 0
         self._clear_controls()
@@ -159,14 +137,13 @@ class Evoke(ReactorPipeline):
     @session_ended
     def on_session_ended(self) -> None:
         """Release rollout caches and session-owned uploads while retaining model weights."""
-        backend = self._backend
         try:
-            if backend is not None:
-                backend.end_session()
+            self._engine.reset()
         finally:
             self._clear_controls()
-            self.state._restart_requested = True
+            self.state._applied_world_id = None
             self._media = None
+            self._camera_path = None
             self._pose = None
             self._chunk_index = 0
 
@@ -209,8 +186,10 @@ class Evoke(ReactorPipeline):
         description=(
             "Start a fresh camera-controlled i2v world from an uploaded image. Valid at any "
             "time; it clears rollout progress and releases all camera axes. "
-            "Emits `command_applied` and broadcasts `state_update` on success, or "
-            "`command_error` for invalid image bytes."
+            "Emits `command_applied` and broadcasts `state_update`. Fails with "
+            "`unsupported_image_type`, `invalid_image_size`, `image_too_large`, or "
+            "`invalid_image` when the upload is not a supported image type, is empty or over "
+            "25 MiB, is over the pixel limit, or cannot be decoded."
         ),
     )
     async def set_image(
@@ -242,6 +221,7 @@ class Evoke(ReactorPipeline):
         validate_uploaded_image(image)
         self._mode = "i2v"
         self._media = image
+        self._camera_path = None
         self._pose = None
         self._input_source = "uploaded"
         self._input_name = image.name
@@ -260,8 +240,10 @@ class Evoke(ReactorPipeline):
             "Start a fresh v2v world from a reference video plus its camera-pose NPZ. The "
             "configured five-second prefix is encoded with the uploaded poses, then six-axis "
             "controls continue from its final pose. Emits `command_applied` and broadcasts "
-            "`state_update` on success, or `command_error` for invalid media, pose arrays, "
-            "dimensions, or frame rate."
+            "`state_update`. Fails with `unsupported_video_type` or `invalid_video_size` for an "
+            "unusable video, or `invalid_pose_size` or `invalid_pose` for an unusable pose "
+            "file. Dimensions or a frame rate outside their ranges are refused before the "
+            "command runs."
         ),
     )
     async def set_reference_video(
@@ -315,6 +297,7 @@ class Evoke(ReactorPipeline):
         validate_uploaded_pose(pose)
         self._mode = "v2v"
         self._media = video
+        self._camera_path = None
         self._pose = pose
         self._input_source = "uploaded"
         self._input_name = video.name
@@ -362,6 +345,7 @@ class Evoke(ReactorPipeline):
         """Select prompt-only generation and confirm the fresh rollout."""
         value = self._resolve_prompt(prompt)
         self._mode = "t2v"
+        self._camera_path = None
         self._media = None
         self._pose = None
         self._input_source = "none"
@@ -375,7 +359,37 @@ class Evoke(ReactorPipeline):
         await self._send_state_update()
         return message
 
+    @event(
+        name="set_camera_path",
+        description="Upload a finite camera-to-world path and queue a fresh world from the selected image or video. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `conditioning_required` without image or video conditioning, or `invalid_camera_path` for a malformed path. Generation stops at the path end.",
+    )
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(  # noqa: B008 - schema field declaration
+            moderate=True,
+            description="JSON poses [36 * chunks, 4, 4] at 24 FPS, up to 16 MiB. Pose zero is the selected conditioning's camera. Like the released launcher, EVOKE smooths the path over five frames and limits each chunk to 10 degrees and 3 units.",
+        ),
+    ) -> CameraPathSelected:
+        if self._mode == "t2v" or self._media is None:
+            raise CommandError(
+                "conditioning_required",
+                "Select image or video conditioning before a camera path.",
+            )
+        try:
+            path = load_camera_path(trajectory.data, self._require_config().max_chunks)
+        except (ValueError, TypeError, OverflowError) as error:
+            raise CommandError("invalid_camera_path", str(error)) from error
+        self._camera_path = path
+        self._request_restart()
+        await self._send_state_update()
+        return CameraPathSelected(chunks=path.chunk_count, frames=path.chunk_count * 36)
+
     async def _set_axis(self, name: str, value: float) -> CommandApplied:
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active",
+                "Select new conditioning to return to held camera controls.",
+            )
         if self._mode == "t2v":
             raise CommandError(
                 "camera_unavailable", "EVOKE t2v mode does not consume camera poses."
@@ -395,7 +409,8 @@ class Evoke(ReactorPipeline):
         description=(
             "Set backward-to-forward camera translation for camera-controlled modes. The value "
             "is sampled at the next 36-pose chunk boundary and held. Emits `command_applied` "
-            "and broadcasts `state_update` on success, or `command_error` in prompt-only t2v mode."
+            "and broadcasts `state_update`. Fails with `camera_unavailable` in prompt-only t2v "
+            "mode."
         ),
     )
     async def set_forward(
@@ -414,7 +429,7 @@ class Evoke(ReactorPipeline):
         name="set_strafe",
         description=(
             "Set left-to-right camera translation at the next native chunk boundary. Emits "
-            "`command_applied` and broadcasts `state_update` on success, or `command_error` "
+            "`command_applied` and broadcasts `state_update`. Fails with `camera_unavailable` "
             "in prompt-only t2v mode."
         ),
     )
@@ -434,7 +449,7 @@ class Evoke(ReactorPipeline):
         name="set_vertical",
         description=(
             "Set down-to-up camera translation at the next native chunk boundary. Emits "
-            "`command_applied` and broadcasts `state_update` on success, or `command_error` "
+            "`command_applied` and broadcasts `state_update`. Fails with `camera_unavailable` "
             "in prompt-only t2v mode."
         ),
     )
@@ -454,7 +469,7 @@ class Evoke(ReactorPipeline):
         name="set_pitch",
         description=(
             "Set downward-to-upward pitch at the next native chunk boundary. Emits "
-            "`command_applied` and broadcasts `state_update` on success, or `command_error` "
+            "`command_applied` and broadcasts `state_update`. Fails with `camera_unavailable` "
             "in prompt-only t2v mode."
         ),
     )
@@ -474,7 +489,8 @@ class Evoke(ReactorPipeline):
         name="set_yaw",
         description=(
             "Set left-to-right yaw at the next native chunk boundary. Emits `command_applied` "
-            "and broadcasts `state_update` on success, or `command_error` in prompt-only t2v mode."
+            "and broadcasts `state_update`. Fails with `camera_unavailable` in prompt-only t2v "
+            "mode."
         ),
     )
     async def set_yaw(
@@ -493,7 +509,7 @@ class Evoke(ReactorPipeline):
         name="set_roll",
         description=(
             "Set counterclockwise-to-clockwise roll at the next native chunk boundary. Emits "
-            "`command_applied` and broadcasts `state_update` on success, or `command_error` "
+            "`command_applied` and broadcasts `state_update`. Fails with `camera_unavailable` "
             "in prompt-only t2v mode."
         ),
     )
@@ -514,8 +530,8 @@ class Evoke(ReactorPipeline):
         description=(
             "Start a fresh rollout from the active image, video, or text conditioning. It "
             "clears generated progress and all camera axes while preserving the prompt. "
-            "Emits `command_applied` and broadcasts `state_update` on success, or "
-            "`command_error` if conditioning is missing."
+            "Emits `command_applied` and broadcasts `state_update`. Fails with "
+            "`conditioning_required` if conditioning is missing."
         ),
     )
     async def reset(
@@ -541,71 +557,78 @@ class Evoke(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[EvokeOutput | None, None]:
-        """Generate and stream one native chunk at a time from the active rollout."""
-        while True:
-            backend = self._backend
-            planner = self._planner
-            if backend is None or planner is None:
-                raise RuntimeError("EVOKE was not loaded")
-            if self.state._restart_requested:
-                backend.reset(
-                    mode=self._mode,
-                    media=self._media,
-                    pose=self._pose,
-                    prompt=self.state.prompt,
-                    seed=self._seed,
-                    source_fps=self._source_fps,
-                    source_height=self._source_height,
-                    source_width=self._source_width,
-                )
-                planner.reset()
-                self._chunk_index = 0
-                self.state._restart_requested = False
-                await self.send(self._state_update())
-
-            trajectory = None
-            if self._mode != "t2v":
-                trajectory = planner.plan_chunk(
-                    strafe=self.state.strafe,
-                    vertical=self.state.vertical,
-                    forward=self.state.forward,
-                    pitch=self.state.pitch,
-                    yaw=self.state.yaw,
-                    roll=self.state.roll,
-                    frame_count=CAMERA_POSES_PER_CHUNK,
-                )
-            frames = backend.generate_chunk(
-                trajectory,
-                seed=self._seed,
-                prompt=self.state.prompt,
+    async def process_input(self) -> EvokeInput:
+        """Snapshot controls and apply the native rollout-length boundary."""
+        if self._mode != "t2v" and self._media is None:
+            raise ApplicationError(
+                "Upload an image or select text/video conditioning first.",
             )
-            frames = normalize_output_frames(frames)
-            expected = 33 if self._mode == "t2v" and self._chunk_index == 0 else 36
-            if int(frames.shape[0]) != expected:
-                raise RuntimeError(
-                    f"EVOKE chunk {self._chunk_index + 1} produced {frames.shape[0]} frames; "
-                    f"expected {expected}"
+        planner = self._planner
+        if planner is None:
+            raise RuntimeError("EVOKE was not loaded")
+        if (
+            self.state._world_id == self.state._applied_world_id
+            and self._chunk_index >= self._require_config().max_chunks
+        ):
+            raise ApplicationError("Rollout is complete. Reset or select new conditioning.")
+        anchor = None
+        if self.state._world_id != self.state._applied_world_id:
+            anchor = EvokeAnchor(
+                mode=self._mode,
+                media=self._media.data
+                if isinstance(self._media, UploadedFile)
+                else self._media,
+                media_suffix=upload_suffix(self._media)
+                if isinstance(self._media, UploadedFile)
+                else "",
+                pose=self._pose.data if self._pose is not None else None,
+                pose_suffix=upload_suffix(self._pose) if self._pose is not None else "",
+                seed=self._seed,
+                source_fps=self._source_fps,
+                source_height=self._source_height,
+                source_width=self._source_width,
+                camera_path=self._camera_path.poses
+                if self._camera_path is not None
+                else None,
+            )
+        trajectory = None
+        if self._camera_path is not None:
+            # The worker received the whole path with the anchor and conditions it as one track.
+            if self._chunk_index >= self._camera_path.chunk_count:
+                raise ApplicationError(
+                    "Camera path is complete. Reset or upload another path."
                 )
-            self._chunk_index += 1
-            await self.send(self._state_update())
-            yield EvokeOutput(main_video=frames)
+        elif self._mode != "t2v":
+            trajectory = planner.plan_chunk(
+                strafe=self.state.strafe,
+                vertical=self.state.vertical,
+                forward=self.state.forward,
+                pitch=self.state.pitch,
+                yaw=self.state.yaw,
+                roll=self.state.roll,
+                frame_count=CAMERA_POSES_PER_CHUNK,
+            )
+        return EvokeInput(self.state._world_id, anchor, self.state.prompt, trajectory)
 
-            config = self._require_config()
-            if self._chunk_index >= config.max_chunks:
-                replaced = self._chunk_index
-                self._request_restart()
-                await self.send(
-                    RolloutRestarted(
-                        replaced_chunks=replaced,
-                        max_chunks=config.max_chunks,
-                        seed=self._seed,
-                    )
-                )
+    def generate(self, input: EvokeInput) -> EvokeResult:
+        return self._engine.generate(input)
+
+    async def process_output(self, outcome: StepOutcome) -> EvokeOutput:
+        """Publish the completed chunk and its shared state."""
+        if outcome.error is not None:
+            # A worker failure cannot be repaired by silently losing the current world.
+            raise outcome.error
+        result: EvokeResult = outcome.result
+        self.state._applied_world_id = result.world_id
+        self._chunk_index = result.chunk_index
+        await self.send(self._state_update())
+        return EvokeOutput(main_video=result.frames)
 
     def _request_restart(self) -> None:
         self.output.flush()
-        self.state._restart_requested = True
+        self.state._world_id += 1
+        if self._planner is not None:
+            self._planner.reset()
         self._chunk_index = 0
         self._clear_controls()
 
@@ -627,8 +650,19 @@ class Evoke(ReactorPipeline):
             pose_name=self._pose_name,
             seed=self._seed,
             completed_chunks=self._chunk_index,
-            next_chunk=self._chunk_index + 1,
+            next_chunk=(
+                None
+                if self._chunk_index >= config.max_chunks
+                or (
+                    self._camera_path is not None
+                    and self._chunk_index >= self._camera_path.chunk_count
+                )
+                else self._chunk_index + 1
+            ),
             max_chunks=config.max_chunks,
+            camera_path_chunks=self._camera_path.chunk_count
+            if self._camera_path is not None
+            else None,
             forward=self.state.forward,
             strafe=self.state.strafe,
             vertical=self.state.vertical,

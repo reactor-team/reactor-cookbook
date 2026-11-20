@@ -26,6 +26,8 @@ samples:
       glides smoothly forward through the ancient landscape.
 
 inference:
+  # Native sequence parallelism; expose the same number of GPUs to the service.
+  world_size: 1
   seed: 42
   # Official Fast inference resolution and flow-matching shift.
   max_area: 399360

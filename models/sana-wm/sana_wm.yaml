@@ -20,6 +20,16 @@ assets:
 
 inference:
   seed: 42
+  # Upstream `--refiner_seed`: the streaming CLI seeds the refiner separately
+  # from `--seed`, so a session seed changes only the Stage-1 noise.
+  refiner_seed: 42
+  # Upstream's streaming entry point enables TF32 matmuls, its SDPA selection
+  # and cuDNN benchmark before any model runs; these change numerics.
+  upstream_fast_defaults: true
+  # Upstream compiles the refiner transformer by default, with these settings.
+  torch_compile: true
+  torch_compile_mode: max-autotune-no-cudagraphs
+  torch_compile_dynamic: true
   # Upstream streaming defaults. Keep these values for memory evaluation.
   num_cached_blocks: 2
   refiner_kv_max_frames: 11

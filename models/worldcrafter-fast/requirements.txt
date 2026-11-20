@@ -1,0 +1,5 @@
+# Reactor Runtime is pinned by build.runtime_version in reactor.yaml.
+# Only dependencies imported by this adapter are listed here.
+numpy==2.5.4
+Pillow==12.3.0
+PyYAML==6.0.3

@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from reactor_runtime import get_weights_path
 
 
 @dataclass(frozen=True)
@@ -105,20 +104,21 @@ def _boolean(value: Any, name: str) -> bool:
     return value
 
 
-def _asset(value: Any, name: str) -> ModelAsset:
+def _asset(value: Any, name: str, root: Path) -> ModelAsset:
     raw = _mapping(value, name)
     return ModelAsset(
-        path=_local_path(raw["path"]),
+        path=_local_path(raw["path"], root),
         repo_id=str(raw["repo_id"]),
         revision=str(raw["revision"]),
         filename=str(raw["filename"]) if raw.get("filename") else None,
     )
 
 
-def read_config(path: Path | None) -> EchoWMConfig:
+def read_config(path: Path | None, weights_root: Path | None = None) -> EchoWMConfig:
     """Read and validate the Echo-WM adapter configuration."""
     if path is None:
         raise ValueError("Echo-WM requires echo_wm.yaml")
+    root = weights_root if weights_root is not None else path.resolve().parent
     document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     source = _mapping(document.get("source"), "source")
     assets = _mapping(document.get("assets"), "assets")
@@ -149,13 +149,13 @@ def read_config(path: Path | None) -> EchoWMConfig:
     if not default_upload_prompt:
         raise ValueError("inference.default_upload_prompt must be non-empty")
     return EchoWMConfig(
-        source_path=_local_path(source["path"]),
+        source_path=_local_path(source["path"], root),
         source_url=str(source["url"]),
         source_revision=str(source["revision"]),
-        checkpoint=_asset(assets.get("checkpoint"), "assets.checkpoint"),
-        gemma=_asset(assets.get("gemma"), "assets.gemma"),
-        cache_dir=_local_path(assets["cache_dir"]),
-        runtime_dir=_local_path(assets["runtime_dir"]),
+        checkpoint=_asset(assets.get("checkpoint"), "assets.checkpoint", root),
+        gemma=_asset(assets.get("gemma"), "assets.gemma", root),
+        cache_dir=_local_path(assets["cache_dir"], root),
+        runtime_dir=_local_path(assets["runtime_dir"], root),
         width=width,
         height=height,
         fps=float(inference.get("fps", 24.0)),
@@ -316,8 +316,8 @@ def activate_source(config: EchoWMConfig) -> None:
         sys.path.insert(0, resolved)
 
 
-def _local_path(value: Any) -> Path:
-    """Resolve one configured path under Reactor's mounted weights root."""
+def _local_path(value: Any, root: Path) -> Path:
+    """Resolve a configured path under the caller's explicit asset root."""
     path = Path(str(value)).expanduser()
-    candidate = path if path.is_absolute() else get_weights_path() / path
+    candidate = path if path.is_absolute() else root / path
     return Path(os.path.abspath(candidate))

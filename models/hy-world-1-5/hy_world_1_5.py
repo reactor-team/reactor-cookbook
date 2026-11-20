@@ -3,24 +3,8 @@
 from __future__ import annotations
 
 import secrets
-import time
-from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
-
-from reactor_runtime import (
-    ClientInfo,
-    CommandError,
-    InputField,
-    ReactorPipeline,
-    UploadedFile,
-    connected,
-    disconnected,
-    event,
-    session_ended,
-    session_started,
-)
-from reactor_runtime.log import get_logger
+from typing import Literal
 
 from hy_world_1_5_assets import (
     ExampleImage,
@@ -29,15 +13,25 @@ from hy_world_1_5_assets import (
     prepare_runtime_assets,
     read_config,
 )
-from hy_world_1_5_camera import CameraControl, NativeCameraPlanner
+from hy_world_1_5_camera import (
+    CameraChunk,
+    CameraControl,
+    NativeCameraPlanner,
+    load_camera_path,
+)
 from hy_world_1_5_images import (
     FRAMES_PER_CHUNK,
-    load_reference_image,
-    normalize_output_frames,
     validate_uploaded_image,
+)
+from hy_world_1_5_model import (
+    HYWorld15Anchor,
+    HYWorld15Input,
+    HYWorld15Model,
+    HYWorld15Result,
 )
 from hy_world_1_5_types import (
     CameraMotionChanged,
+    CameraPathSelected,
     ChunkCompleted,
     HYWorld15Output,
     HYWorld15State,
@@ -47,16 +41,29 @@ from hy_world_1_5_types import (
     RolloutResetQueued,
     StateUpdate,
 )
-
-if TYPE_CHECKING:
-    from hy_world_1_5_backend import HYWorld15Backend
+from reactor_runtime import (
+    ApplicationError,
+    ClientInfo,
+    CommandError,
+    InputField,
+    ReactorApp,
+    StepOutcome,
+    UploadedFile,
+    connected,
+    disconnected,
+    event,
+    get_weights_path,
+    session_ended,
+    session_started,
+)
+from reactor_runtime.log import get_logger
 
 logger = get_logger(__name__)
 
 _DEFAULT_UPLOAD_PROMPT = "Continue the world shown in the reference image."
 
 
-class HYWorld15(ReactorPipeline):
+class HYWorld15(ReactorApp):
     """Generate an image-, prompt-, and camera-controllable HY-World 1.5 world."""
 
     state: HYWorld15State
@@ -65,7 +72,7 @@ class HYWorld15(ReactorPipeline):
     def __init__(self) -> None:
         super().__init__()
         self._config: HYWorld15Config | None = None
-        self._backend: HYWorld15Backend | None = None
+        self._engine = HYWorld15Model()
         self._planner: NativeCameraPlanner | None = None
         self._examples: tuple[ExampleImage, ...] = ()
         self._selected_input: Path | UploadedFile | None = None
@@ -75,6 +82,7 @@ class HYWorld15(ReactorPipeline):
         self._chunk_index = 0
         self._active_prompt: str | None = None
         self._generating = False
+        self._camera_path: tuple[CameraChunk, ...] | None = None
 
     def load(self, config_path: Path | None) -> None:
         """Prepare public assets and load the distilled model once.
@@ -82,14 +90,10 @@ class HYWorld15(ReactorPipeline):
         Args:
             config_path: Path to ``hy_world_1_5.yaml`` from the runtime spec.
         """
-        config = read_config(config_path)
+        config = read_config(config_path, get_weights_path())
         prepare_runtime_assets(config)
-        from hy_world_1_5_backend import HYWorld15Backend
-
-        backend = HYWorld15Backend(config)
-        backend.load()
+        self._engine.load(config)
         self._config = config
-        self._backend = backend
         self._planner = NativeCameraPlanner()
         self._examples = load_examples(config)
         self._seed = config.seed
@@ -103,6 +107,7 @@ class HYWorld15(ReactorPipeline):
     def on_session_started(self) -> None:
         """Initialize an empty shared world for continuous generation."""
         config = self._require_config()
+        self._camera_path = None
         self._selected_input = None
         self._image_source = None
         self._image_name = None
@@ -111,7 +116,8 @@ class HYWorld15(ReactorPipeline):
         self._active_prompt = None
         self._generating = False
         self.state.prompt = ""
-        self.state._restart_requested = False
+        self.state._world_id = 0
+        self.state._applied_world_id = None
         self.state._limit_reached = False
         self._release_camera()
 
@@ -129,16 +135,15 @@ class HYWorld15(ReactorPipeline):
     @session_ended
     def on_session_ended(self) -> None:
         """Release causal session state while retaining loaded model weights."""
-        backend = self._backend
-        if backend is not None:
-            backend.end_session()
+        self._engine.reset()
+        self._camera_path = None
         self._selected_input = None
         self._image_source = None
         self._image_name = None
         self._chunk_index = 0
         self._active_prompt = None
         self._generating = False
-        self.state._restart_requested = False
+        self.state._applied_world_id = None
         self.state._limit_reached = False
         self._release_camera()
 
@@ -148,8 +153,8 @@ class HYWorld15(ReactorPipeline):
             "Queue a non-empty scene prompt without restarting the current world. Requires a "
             "selected image. The model rebuilds its text condition at the next causal chunk "
             "boundary while preserving latent history and geometric memory. Emits "
-            "`prompt_queued` and broadcasts `state_update` on success, or `command_error` when "
-            "the prompt is empty or no image is selected."
+            "`prompt_queued` and broadcasts `state_update`. Fails with `prompt_required` when "
+            "the prompt is empty, or `image_required` when no image is selected."
         ),
     )
     async def set_prompt(
@@ -182,8 +187,9 @@ class HYWorld15(ReactorPipeline):
         description=(
             "Atomically set all four camera controls trained by HY-World 1.5. Requires an active "
             "world before its rollout limit. Values are sampled together at the next chunk and "
-            "held for later chunks. Emits `camera_motion_changed` and broadcasts `state_update` "
-            "on success, or `command_error` when no image is selected or the limit is reached."
+            "held for later chunks. Emits `camera_motion_changed` and broadcasts `state_update`. "
+            "Fails with `image_required` when no image is selected, or `rollout_limit_reached` "
+            "when the limit is reached."
         ),
     )
     async def set_camera(
@@ -215,6 +221,7 @@ class HYWorld15(ReactorPipeline):
     ) -> CameraMotionChanged:
         """Queue one complete native camera state and report its boundary."""
         self._require_image()
+        self._require_live_camera()
         self._require_available_rollout()
         self.state._forward = forward
         self.state._strafe = strafe
@@ -229,12 +236,13 @@ class HYWorld15(ReactorPipeline):
         description=(
             "Return every held camera control to neutral. Requires a selected image and applies "
             "at the next chunk boundary. Emits `camera_motion_changed` and broadcasts "
-            "`state_update` on success, or `command_error` when no image is selected."
+            "`state_update`. Fails with `image_required` when no image is selected."
         ),
     )
     async def release_camera(self) -> CameraMotionChanged:
         """Release all native camera axes and report their boundary."""
         self._require_image()
+        self._require_live_camera()
         self._release_camera()
         message = self._camera_message()
         await self._send_state_update()
@@ -245,8 +253,8 @@ class HYWorld15(ReactorPipeline):
         description=(
             "Queue a fresh world from the selected image and current prompt. Requires a selected "
             "image. Clears progress, geometric memory, KV cache, and camera motion while "
-            "resuming continuous generation. Emits `rollout_reset_queued` and broadcasts `state_update` "
-            "on success, or `command_error` when no image is selected."
+            "resuming continuous generation. Emits `rollout_reset_queued` and broadcasts `state_update`. "
+            "Fails with `image_required` when no image is selected."
         ),
     )
     async def reset(
@@ -276,8 +284,9 @@ class HYWorld15(ReactorPipeline):
         description=(
             "Select an uploaded reference image and queue a fresh continuously generated world. "
             "The selected image queues an initial 13-frame chunk. Emits `image_selected` and "
-            "broadcasts `state_update` on "
-            "success, or `command_error` for an invalid upload."
+            "broadcasts `state_update`. Fails with `unsupported_media`, `invalid_image`, or "
+            "`image_too_large` when the upload is not a supported image, empty or undecodable, "
+            "or over the size or pixel limit."
         ),
     )
     async def set_image(
@@ -301,6 +310,7 @@ class HYWorld15(ReactorPipeline):
     ) -> ImageSelected:
         """Validate an uploaded image and queue its visible initial chunk."""
         validate_uploaded_image(image)
+        self._camera_path = None
         self._selected_input = image
         self._image_source = "uploaded"
         self._image_name = image.name
@@ -321,7 +331,7 @@ class HYWorld15(ReactorPipeline):
         description=(
             "Select an official built-in image and its matching prompt, begin continuous "
             "generation, and queue the initial 13-frame chunk. Emits `image_selected` and broadcasts "
-            "`state_update` on success, or `command_error` when no example is available."
+            "`state_update`. Fails with `image_unavailable` when no example is available."
         ),
     )
     async def random_image(self) -> ImageSelected:
@@ -333,6 +343,7 @@ class HYWorld15(ReactorPipeline):
         )
         candidates = [example for example in self._examples if example.path != current]
         selected = secrets.choice(candidates or list(self._examples))
+        self._camera_path = None
         self._selected_input = selected.path
         self._image_source = "built_in"
         self._image_name = selected.path.name
@@ -346,96 +357,123 @@ class HYWorld15(ReactorPipeline):
         await self._send_state_update()
         return message
 
-    async def inference(self) -> AsyncGenerator[HYWorld15Output | None, None]:
-        """Generate and emit one native causal chunk at a time."""
-        backend = self._require_backend()
-        planner = self._require_planner()
-        config = self._require_config()
-        while True:
-            if self.state._restart_requested:
-                selected = self._selected_input
-                if selected is None:
-                    yield None
-                    continue
-                prompt = self.state.prompt.strip()
-                if not prompt:
-                    raise RuntimeError("HY-World 1.5 requires a non-empty prompt")
-                self.state._restart_requested = False
-                self._generating = True
-                await self._send_state_update()
-                try:
-                    image = load_reference_image(selected)
-                    backend.reset(
-                        image=image,
-                        prompt=prompt,
-                        seed=self._seed,
-                    )
-                finally:
-                    self._generating = False
-                planner.reset()
-                self._chunk_index = 0
-                self._active_prompt = None
-                self.state._limit_reached = False
-                await self._send_state_update()
+    @event(
+        name="set_camera_path",
+        description="Upload a finite native camera path after selecting an image and queue a fresh world. Emits `camera_path_selected` and broadcasts `state_update`. Fails with `image_required` before image selection, or `invalid_camera_path` for a malformed path. Select another image to restore live controls; `reset` replays the path.",
+    )
+    async def set_camera_path(
+        self,
+        trajectory: UploadedFile = InputField(  # noqa: B008 - schema declaration
+            moderate=True,
+            description="JSON up to 4 MiB with viewmats (N,4,4), normalized intrinsics (N,3,3), and integer actions (N,) in [0,80]. N is a multiple of four. Each row describes one native latent time step.",
+        ),
+    ) -> CameraPathSelected:
+        """Install validated model-native conditioning without changing its sampling."""
+        self._require_image()
+        try:
+            path = load_camera_path(trajectory.data, self._require_config().max_chunks)
+        except (ValueError, TypeError, KeyError, OverflowError) as error:
+            raise CommandError("invalid_camera_path", str(error)) from error
+        self._camera_path = path
+        self._request_restart()
+        await self._send_state_update()
+        return CameraPathSelected(chunks=len(path), frames=16 * len(path) - 3)
 
-            if self.state._limit_reached:
-                yield None
-                continue
-            if self._selected_input is None:
-                yield None
-                continue
+    async def process_input(self) -> HYWorld15Input:
+        """Snapshot one native chunk's conditioning and controls."""
+        if self._selected_input is None:
+            raise ApplicationError("Select an image before generating.")
+        if self.state._limit_reached:
+            raise ApplicationError("Reset the world after reaching the rollout limit.")
+        prompt = self.state.prompt.strip()
+        if not prompt:
+            raise ApplicationError("HY-World 1.5 requires a non-empty prompt.")
+        anchor = None
+        if self.state._world_id != self.state._applied_world_id:
+            image = self._selected_input
+            anchor = HYWorld15Anchor(
+                image=image.data if isinstance(image, UploadedFile) else image,
+                seed=self._seed,
+                latent_frames=None
+                if self._camera_path is None
+                else 4 * len(self._camera_path),
+            )
+        if self._camera_path is not None and self._chunk_index >= len(
+            self._camera_path
+        ):
+            raise ApplicationError("The selected camera path is complete.")
+        camera = (
+            self._camera_path[self._chunk_index]
+            if self._camera_path is not None
+            else self._require_planner().plan(
+                CameraControl(
+                    forward=self.state._forward,
+                    strafe=self.state._strafe,
+                    pitch=self.state._pitch,
+                    yaw=self.state._yaw,
+                )
+            )
+        )
+        snapshot = HYWorld15Input(
+            world_id=self.state._world_id,
+            anchor=anchor,
+            prompt=prompt,
+            viewmats=camera.viewmats,
+            intrinsics=camera.intrinsics,
+            actions=camera.actions,
+        )
+        self._generating = True
+        return snapshot
 
-            prompt = self.state.prompt.strip()
-            control = CameraControl(
+    def generate(self, input: HYWorld15Input) -> HYWorld15Result:
+        return self._engine.generate(input)
+
+    async def process_output(self, outcome: StepOutcome) -> HYWorld15Output:
+        """Publish completed frames and their sampled controls."""
+        self._generating = False
+        if outcome.error is not None:
+            # A backend failure is not repaired by discarding geometric memory.
+            raise outcome.error
+        result: HYWorld15Result = outcome.result
+        self.state._applied_world_id = result.world_id
+        self._chunk_index = result.chunk_index
+        self._active_prompt = result.prompt
+        await self.send(
+            ChunkCompleted(
+                chunk=result.chunk_index,
+                frames=int(result.frames.shape[0]),
+                prompt=result.prompt,
+                generation_seconds=outcome.elapsed,
                 forward=self.state._forward,
                 strafe=self.state._strafe,
                 pitch=self.state._pitch,
                 yaw=self.state._yaw,
             )
-            camera = planner.plan(control)
-            chunk = self._chunk_index + 1
-            self._generating = True
-            await self._send_state_update()
-            started = time.perf_counter()
-            try:
-                frames = backend.generate_chunk(camera, prompt)
-            finally:
-                self._generating = False
-            generation_seconds = time.perf_counter() - started
-            frames = normalize_output_frames(frames, first_chunk=chunk == 1)
-
-            self._chunk_index = chunk
-            self._active_prompt = prompt
+        )
+        config = self._require_config()
+        path_complete = self._camera_path is not None and self._chunk_index >= len(
+            self._camera_path
+        )
+        if result.complete or path_complete:
+            self.state._limit_reached = True
+            self._release_camera()
             await self.send(
-                ChunkCompleted(
-                    chunk=chunk,
-                    frames=13 if chunk == 1 else 16,
-                    prompt=prompt,
-                    generation_seconds=generation_seconds,
-                    forward=control.forward,
-                    strafe=control.strafe,
-                    pitch=control.pitch,
-                    yaw=control.yaw,
+                RolloutLimitReached(
+                    completed_chunks=self._chunk_index,
+                    max_chunks=len(self._camera_path)
+                    if self._camera_path is not None
+                    else config.max_chunks,
                 )
             )
-            if self._chunk_index >= config.max_chunks:
-                self.state._limit_reached = True
-                self._release_camera()
-                await self.send(
-                    RolloutLimitReached(
-                        completed_chunks=self._chunk_index,
-                        max_chunks=config.max_chunks,
-                    )
-                )
-            await self._send_state_update()
-
-            yield HYWorld15Output(main_video=frames)
+        await self.send(self._state_update())
+        return HYWorld15Output(main_video=result.frames)
 
     def _request_restart(self) -> None:
         """Queue a fresh causal world and clear prior playout, camera, and progress."""
         self.output.flush()
         self._release_camera()
-        self.state._restart_requested = True
+        self.state._world_id += 1
+        self._require_planner().reset()
         self.state._limit_reached = False
         self._chunk_index = 0
         self._active_prompt = None
@@ -449,7 +487,7 @@ class HYWorld15(ReactorPipeline):
 
     def _next_control_chunk(self) -> int:
         """Return the next one-based boundary that can sample a command."""
-        if self.state._restart_requested:
+        if self.state._world_id != self.state._applied_world_id:
             return 1
         return self._chunk_index + 1 + int(self._generating)
 
@@ -467,18 +505,26 @@ class HYWorld15(ReactorPipeline):
         """Build one complete client-facing shared world snapshot."""
         config = self._config
         max_chunks = config.max_chunks if config is not None else 0
+        if self._camera_path is not None:
+            max_chunks = len(self._camera_path)
         next_chunk: int | None
         if self._selected_input is None or self.state._limit_reached:
             next_chunk = None
         else:
             next_chunk = self._next_control_chunk()
         return StateUpdate(
+            camera_path_chunks=None
+            if self._camera_path is None
+            else len(self._camera_path),
             image_source=self._image_source,
             image_name=self._image_name,
             prompt=self.state.prompt.strip() or None,
             active_prompt=self._active_prompt,
             seed=self._seed,
-            reset_queued=self.state._restart_requested,
+            reset_queued=(
+                self._selected_input is not None
+                and self.state._world_id != self.state._applied_world_id
+            ),
             generating=self._generating,
             completed_chunks=self._chunk_index,
             next_chunk=next_chunk,
@@ -502,6 +548,12 @@ class HYWorld15(ReactorPipeline):
         if self._selected_input is None:
             raise CommandError("image_required", "Select an image before this command.")
 
+    def _require_live_camera(self) -> None:
+        if self._camera_path is not None:
+            raise CommandError(
+                "camera_path_active", "Select an image to restore live camera controls."
+            )
+
     def _require_available_rollout(self) -> None:
         """Reject generation controls after the configured world limit."""
         if self.state._limit_reached:
@@ -515,12 +567,6 @@ class HYWorld15(ReactorPipeline):
         if self._config is None:
             raise RuntimeError("HY-World 1.5 was not loaded")
         return self._config
-
-    def _require_backend(self) -> HYWorld15Backend:
-        """Return the loaded inference backend."""
-        if self._backend is None:
-            raise RuntimeError("HY-World 1.5 backend was not loaded")
-        return self._backend
 
     def _require_planner(self) -> NativeCameraPlanner:
         """Return the initialized native camera planner."""

@@ -1,0 +1,117 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
+# JoyAI-Video-Edit configuration.  The two camera_* keys are the application's
+# (joy_video_edit.py); every other key is the model half's (joy_video_edit_model.py).
+
+# ── Checkpoints ─────────────────────────────────────────────────────────────
+#
+# First load downloads these pinned Hugging Face revisions into the weights root
+# (reactor.yaml's runtime.weights_path) and later loads reuse them:
+#   <root>/dit/joyai_video_edit_dit_0811.pth   16B MMDiT, ~31 GB
+#   <root>/vae/                                causal video VAE, ~1.5 GB
+#   <root>/MiMo-VL-7B-RL-2508/                 multimodal text encoder, ~16 GB
+checkpoints:
+  joyai:
+    repo_id: jdopensource/JoyAI-Video-Edit
+    revision: 39491dda89fd2b535777fd8644a6631ea89b857c
+    dit: dit/joyai_video_edit_dit_0811.pth
+    vae: vae
+  text_encoder:
+    repo_id: XiaomiMiMo/MiMo-VL-7B-RL-2508
+    revision: 4bfb270765825d2fa059011deb4c96fdd579be6f
+    path: MiMo-VL-7B-RL-2508
+
+# An absolute directory that already holds the layout above.  When set, it is
+# used as the root and nothing is downloaded.
+checkpoint_dir: null
+
+# ── Devices ─────────────────────────────────────────────────────────────────
+#
+# CUDA device index for the DiT and the text encoder.
+device_id: 0
+
+# The VAE stages (encode, decode, pseudo-encode) run on the DiT device when
+# unset (null).  Set "cuda:N" to move a stage to another GPU; an index at or
+# beyond the visible GPU count falls back to the DiT device with a warning.
+# Every stage gets its own VAE object; on a shared device they share weights.
+vae_encode_device: null
+vae_decode_device: null
+vae_pseudo_device: null
+
+# ── Output resolution ───────────────────────────────────────────────────────
+
+# Editing resolution: upstream's B200 recipe.  Both sides must be multiples of
+# 24 (VAE stem stride x 8); the model refuses anything else.
+height: 720
+width: 1248
+
+# Warm-up resolution (the editing resolution by default).
+warmup_height: 720
+warmup_width: 1248
+
+# ── torch.compile ───────────────────────────────────────────────────────────
+#
+# Compile the 40 MMDoubleStreamBlock modules of the DiT.  Off, as upstream
+# serves it: the compiled blocks are not bit-identical to eager, and compiling
+# costs startup time on every cold cache.
+torch_compile_dit: false
+
+# ── FP8 quantisation ────────────────────────────────────────────────────────
+#
+# Both need joyomni_ops built with its FP8 GEMM (the Dockerfile refuses an image
+# without it).
+# fp8_img: quantise the DiT image-stream linear layers (MLP and QKV projections).
+#          Attention stays bf16 (cuDNN SDPA).
+# fp8_txt: quantise the DiT text-stream GEMMs.  The text encoder stays bf16.
+fp8_img: true
+fp8_txt: true
+
+# ── Generation ──────────────────────────────────────────────────────────────
+
+# Replace the run's streaming session with a fresh one (new KV cache, prompt
+# re-encoded from the next frame) after this many camera frames, which bounds
+# drift.  0 = never.  Upstream default: 600.
+kv_reset_frames: 600
+
+# How each chunk reads the camera track.  latest: the newest 8 frames, and any
+# older frames still queued are dropped, so a chunk always starts from the most
+# recent input; when the model keeps up with the camera nothing is dropped.
+# fifo: frames in arrival order, so none is lost while a chunk computes; a
+# backlog of more than camera_backlog_chunks chunks (8 frames each) beyond the
+# frames being read is dropped, oldest first, bounding the added latency.
+camera_read: latest
+camera_backlog_chunks: 3
+
+# Denoising steps per chunk: 2, the DiT's distilled schedule.  The load-time
+# warm-up and its CUDA graphs are captured for this count.
+num_inference_steps: 2
+
+# One set of shapes for every session, so the load-time warm-up covers every
+# chunk of every session (chunk windows, reference or not, freeze-on-static,
+# session restart):
+#   text_tokens: the DiT text is padded to this many tokens and the padding is
+#     masked in attention; a prompt over it runs unpadded and unwarmed.
+#     null = each prompt at its own length.
+#   ref_image_aspects: every reference image is fitted, aspect kept, into the
+#     nearest of these width:height aspects and letterboxed (mid-grey); each is
+#     sized as upstream's 768 reference bucketing sizes an image of that aspect.
+#     null = each reference at its own aspect bucket.
+text_tokens: 640
+ref_image_aspects: ["1:1", "4:3", "3:4"]
+
+# ── KV-cache temporal positions ─────────────────────────────────────────────
+#
+# The attention window is fixed by the DiT config (sink chunk + recent chunks);
+# max_temporal_ids bounds the temporal RoPE positions of that window, shifting
+# them down once a session is longer.  null = unshifted positions, which grow
+# with session length.  Upstream default: 8.
+max_temporal_ids: 8
+
+# Freeze the KV cache when the input is static: once the last frame of a chunk
+# differs from the previous chunk's by less than static_diff_thresh (mean
+# absolute difference of 64x36 grey thumbnails, 0-255 scale), the previous
+# chunk's KV is reused as the tail of the window.  Upstream default: on, 0.5.
+freeze_kv_on_static: true
+static_diff_thresh: 0.5
+
+# Log per-stage timings of every chunk.  Adds a small CPU cost.
+profile_timings: false

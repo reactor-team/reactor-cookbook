@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 
 from reactor_runtime import (
@@ -14,55 +12,6 @@ from reactor_runtime import (
     Output,
     Video,
 )
-
-
-@dataclass(frozen=True)
-class Asset:
-    """Describe one model asset pinned to a public repository revision."""
-
-    path: Path
-    repo_id: str
-    revision: str
-
-
-@dataclass(frozen=True)
-class AlayaWorldConfig:
-    """Hold validated source, asset, inference, and interaction settings."""
-
-    source_path: Path
-    source_url: str
-    source_revision: str
-    upstream_config: Path
-    upload_template: Path
-    random_inputs: tuple[Path, ...]
-    model: Asset
-    gemma: Asset
-    da3_source_path: Path
-    da3_source_url: str
-    da3_source_revision: str
-    da3_model: Asset
-    da3_cache: Path
-    seed: int
-    compile_mode: str
-    warmup_chunks: int
-    attention_backend: str
-    flex_attention: bool
-    ttc: bool
-    bank_taehv: bool
-    taehv_path: Path | None
-    taehv_source_path: Path | None
-    taehv_source_url: str | None
-    taehv_source_revision: str | None
-    decode_overlap_latents: int
-    max_spatial_frames: int
-    recent_spatial_frames: int
-    max_chunks_per_rollout: int
-    strafe_units_per_second: float
-    vertical_units_per_second: float
-    forward_units_per_second: float
-    pitch_degrees_per_second: float
-    yaw_degrees_per_second: float
-    roll_degrees_per_second: float
 
 
 class AlayaWorldOutput(Output):
@@ -113,7 +62,11 @@ class StateUpdate(ModelMessage):
         )
     )
     max_chunks: int = MessageField(
-        description="Chunk count that triggers an automatic fresh rollout from the same image."
+        description="Maximum chunks in a rollout; reset explicitly after this limit."
+    )
+    camera_path_chunks: int | None = MessageField(
+        default=None,
+        description="Finite uploaded path length, or null for held camera controls.",
     )
     strafe: float = MessageField(
         description="Left (-1) to right (1) velocity queued for `next_chunk`; zero is neutral."
@@ -152,6 +105,7 @@ class StateUpdate(ModelMessage):
         completed_chunks: int,
         next_chunk: int | None,
         max_chunks: int,
+        camera_path_chunks: int | None = None,
     ) -> StateUpdate:
         """Build a client snapshot from public state and rollout position."""
         return cls(
@@ -160,11 +114,13 @@ class StateUpdate(ModelMessage):
             prompt=state.prompt.strip() or None,
             active_prompt=active_prompt,
             seed=seed,
-            reset_queued=state._reset_requested,
+            reset_queued=image_source is not None
+            and state._world_id != state._applied_world_id,
             generating=generating,
             completed_chunks=completed_chunks,
             next_chunk=next_chunk,
             max_chunks=max_chunks,
+            camera_path_chunks=camera_path_chunks,
             strafe=state.strafe,
             vertical=state.vertical,
             forward=state.forward,
@@ -172,6 +128,15 @@ class StateUpdate(ModelMessage):
             yaw=state.yaw,
             roll=state.roll,
         )
+
+
+class CameraPathSelected(ModelMessage):
+    """Emitted when a finite camera path queues a fresh world."""
+
+    chunks: int = MessageField(description="Number of 32-frame chunks in the path.")
+    frames: int = MessageField(
+        description="Total generated frames, excluding the input image."
+    )
 
 
 class ImageSelected(ModelMessage):
@@ -240,13 +205,10 @@ class CameraMotionChanged(ModelMessage):
 
 
 class RolloutResetQueued(ModelMessage):
-    """Emitted when a manual or automatic reset queues a fresh rollout."""
+    """Emitted when an explicit reset queues a fresh rollout."""
 
-    trigger: Literal["manual", "automatic_chunk_limit"] = MessageField(
-        description=(
-            'Reset source: "manual" for `reset` or "automatic_chunk_limit" after '
-            "`max_chunks` completes."
-        )
+    trigger: Literal["manual"] = MessageField(
+        description='Reset source: "manual" for the explicit `reset` command.'
     )
     seed: int = MessageField(
         description="Random seed that will initialize the queued fresh rollout."
@@ -325,4 +287,5 @@ class AlayaWorldState(InputState):
             "and held until changed; zero is neutral."
         ),
     )
-    _reset_requested: bool = False
+    _world_id: int = 0
+    _applied_world_id: int | None = None

@@ -1,0 +1,7 @@
+-r requirements.txt
+reactor-runtime==3.10.0
+reactor-sdk==1.10.0
+av==19.0.1
+httpx==0.28.1
+pytest==9.1.1
+pytest-asyncio==1.4.0

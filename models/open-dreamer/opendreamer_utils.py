@@ -5,26 +5,68 @@ from __future__ import annotations
 import importlib
 import io
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import yaml
-from opendreamer_types import (
-    DEMO_CHOICES,
-    DemoConfig,
-    OpenDreamerConfig,
-    RolloutConditioning,
-)
-from reactor_runtime.log import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
+
+DEMO_CHOICES = ["demo_1", "demo_2", "demo_3"]
+
+
+@dataclass(frozen=True)
+class DemoConfig:
+    """Describe a dataset window available as a starting scene."""
+
+    name: str
+    video: Path
+    actions: Path
+    start_frame: int
+
+
+@dataclass(frozen=True)
+class OpenDreamerConfig:
+    """Hold validated model, checkpoint, and conditioning settings."""
+
+    source_revision: str
+    checkpoint_repo_id: str
+    checkpoint_revision: str
+    platform: str
+    seed: int
+    num_steps: int
+    tau_ctx_target: float
+    conditioning_frames: int
+    demos: tuple[DemoConfig, ...]
+    warmup_steps: int
+    memory_fraction: float
+
+
+@dataclass(frozen=True)
+class RolloutConditioning:
+    """Pair consecutive Minecraft frames with their aligned player actions."""
+
+    frames: np.ndarray
+    actions: ConditioningActions | None
+
+
+@dataclass(frozen=True)
+class ConditioningActions:
+    """Keep conditioning actions on the CPU at the application boundary."""
+
+    binary: np.ndarray | None
+    categorical: np.ndarray | None
+    continuous: np.ndarray | None
+
 
 _UPSTREAM_ENV = "OPENDREAMER_PATH"
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
@@ -191,9 +233,7 @@ def ensure_demo_assets(upstream_root: Path, demos: tuple[DemoConfig, ...]) -> No
     default_paths = set(assets.demo_paths(output_dir))
     if not missing.issubset(default_paths):
         return
-    logger.info(
-        "downloading missing OpenDreamer demo assets", directory=str(output_dir)
-    )
+    logger.info("downloading missing OpenDreamer demo assets: %s", output_dir)
     assets.ensure_demo_assets(output_dir)
 
 
@@ -292,7 +332,18 @@ def read_conditioning_sequence(
         required_frames=required_frames,
         dependencies=dependencies,
     )
-    return RolloutConditioning(frames=frames, actions=actions)
+    return RolloutConditioning(
+        frames=frames,
+        actions=ConditioningActions(
+            binary=None if actions.binary is None else np.asarray(actions.binary),
+            categorical=None
+            if actions.categorical is None
+            else np.asarray(actions.categorical),
+            continuous=None
+            if actions.continuous is None
+            else np.asarray(actions.continuous),
+        ),
+    )
 
 
 def decode_conditioning_image(

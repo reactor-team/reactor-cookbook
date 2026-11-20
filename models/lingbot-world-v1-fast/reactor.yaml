@@ -1,8 +1,8 @@
-$schema: reactor/v1
+$schema: reactor/v2
 
 model:
   name: lingbot-world-v1-fast-camera
-  version: v0.1.0
+  version: v0.2.1
   description: |
     Explore LingBot-World v1 Fast from an image, prompt, and six-axis camera motion.
   resources:
@@ -31,12 +31,12 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.2.5"
+  runtime_version: "3.10.0"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"
-  # First load clones the pinned public source and compiles FlashAttention 2
-  # in the persistent weights cache.
+  run:
+    - pip install --no-cache-dir --no-build-isolation flash-attn==2.8.3
   system_packages:
     - build-essential
     - git
@@ -44,3 +44,4 @@ build:
     - libglib2.0-0
   runtime_env:
     TOKENIZERS_PARALLELISM: "false"
+    PYTORCH_ALLOC_CONF: "expandable_segments:True"

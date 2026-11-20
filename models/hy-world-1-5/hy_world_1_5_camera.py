@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 
@@ -39,6 +40,67 @@ class CameraChunk:
     viewmats: np.ndarray
     intrinsics: np.ndarray
     actions: np.ndarray
+
+
+def load_camera_path(data: bytes, max_chunks: int) -> tuple[CameraChunk, ...]:
+    """Validate finite native latent conditioning without resampling its timeline."""
+    if len(data) > 4 * 1024 * 1024:
+        raise ValueError("Camera path must be at most 4 MiB")
+    payload = json.loads(data)
+    if not isinstance(payload, dict) or set(payload) != {
+        "viewmats",
+        "intrinsics",
+        "actions",
+    }:
+        raise ValueError("Expected viewmats, intrinsics and actions")
+    # Keep the uploaded float64 values: upstream selects geometric memory from
+    # float64 view matrices, and narrowing them here can change that choice.
+    views = np.asarray(payload["viewmats"], dtype=np.float64)
+    intrinsics = np.asarray(payload["intrinsics"], dtype=np.float64)
+    actions = np.asarray(payload["actions"])
+    count = len(views)
+    if count < 4 or count % 4 or count > max_chunks * 4:
+        raise ValueError(
+            "Path requires complete four-latent chunks within the rollout limit"
+        )
+    if (
+        views.shape != (count, 4, 4)
+        or intrinsics.shape != (count, 3, 3)
+        or actions.shape != (count,)
+    ):
+        raise ValueError("Expected viewmats (N,4,4), intrinsics (N,3,3), actions (N,)")
+    if not all(np.isfinite(array).all() for array in (views, intrinsics, actions)):
+        raise ValueError("Camera conditions must be finite")
+    if not np.allclose(views[:, 3], [0, 0, 0, 1], atol=1e-5):
+        raise ValueError("View matrices must be homogeneous")
+    rotations = views[:, :3, :3]
+    # Native third-person look-at matrices use a reflected camera basis.
+    # Keep its handedness; changing it would change the model conditioning.
+    determinants = np.linalg.det(rotations)
+    if (
+        not np.allclose(rotations @ rotations.transpose(0, 2, 1), np.eye(3), atol=1e-4)
+        or not np.allclose(abs(determinants), 1, atol=1e-4)
+        or not np.allclose(determinants, determinants[0], atol=1e-4)
+    ):
+        raise ValueError(
+            "View matrices require an orthonormal basis with consistent handedness"
+        )
+    if (intrinsics[:, (0, 1), (0, 1)] <= 0).any() or not np.allclose(
+        intrinsics[:, 2], [0, 0, 1]
+    ):
+        raise ValueError(
+            "Intrinsics require positive focal lengths and homogeneous row"
+        )
+    if actions.dtype.kind not in "iu" or (actions < 0).any() or (actions > 80).any():
+        raise ValueError("Actions must be integer native labels in [0,80]")
+    return tuple(
+        CameraChunk(
+            views[i : i + 4].copy(),
+            intrinsics[i : i + 4].copy(),
+            actions[i : i + 4].astype(np.int64),
+        )
+        for i in range(0, count, 4)
+    )
 
 
 class NativeCameraPlanner:

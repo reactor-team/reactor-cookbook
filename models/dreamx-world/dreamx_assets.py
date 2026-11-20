@@ -14,10 +14,9 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
+from dreamx_world_model import DreamXConfig, RepositoryAsset
 from reactor_runtime import get_weights_path
 from reactor_runtime.log import get_logger
-
-from dreamx_types import DreamXConfig, RepositoryAsset
 
 logger = get_logger(__name__)
 

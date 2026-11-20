@@ -4,6 +4,12 @@ Drives a real [LIBERO](https://libero-project.github.io/) (robosuite/MuJoCo)
 environment closed-loop, lock-step with a Reactor-served `lingbot-va` over
 the [reactor-sdk](https://pypi.org/project/reactor-sdk/) transport.
 
+## Python SDK
+
+This example uses the Python SDK version recorded in its lockfile. It publishes camera frames through native
+SDK tracks; the SDK owns transport keepalive. On Linux, the glibc wheel requires
+glibc 2.34 or newer. The simulator has its own hardware and dependency requirements.
+
 ## Layout
 
 ```
@@ -26,7 +32,7 @@ interpreter itself rather than assuming one is already on PATH:
 
 ```
 cd libero
-uv sync --python 3.10
+uv sync --frozen --python 3.10
 ```
 
 LIBERO isn't on PyPI, so clone and install it from source:

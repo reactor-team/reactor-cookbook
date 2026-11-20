@@ -8,6 +8,10 @@ mouse actions, stream generated video, and record the session.
 The adapter uses a pinned DIAMOND source snapshot and calls its public CSGO
 inference components directly.
 
+`diamond.py` handles controls and video output. `diamond_model.py` owns the
+native world and reports each completed step through a typed result. Scene
+selection travels with a world ID and is acknowledged after its initial frame.
+
 ## Prerequisites
 
 - The [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation) and a
@@ -32,9 +36,13 @@ mounted weights cache; later containers reuse those files.
 ## Run
 
 This directory is a `reactor` workspace: `reactor.yaml` names the model and
-controls its Reactor Runtime 3.2.5 image, while `requirements.txt` lists
+controls its Reactor Runtime 3.5.0 image, while `requirements.txt` lists
 DIAMOND's serving dependencies. The host needs the CLI and Docker from the
 prerequisites above.
+
+The `ReactorApp` step loop snapshots keyboard and mouse controls, runs one
+upstream world step, and publishes one video frame. Spawn selection and
+controller changes take effect at step boundaries.
 
 ```sh
 cd models/diamond-csgo-world-model

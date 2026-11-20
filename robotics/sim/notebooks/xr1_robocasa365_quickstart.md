@@ -49,7 +49,7 @@ shared, order-sensitive connection lifecycle: register handlers, await
 [shared lifecycle notes](./README.md#session-lifecycle) for the failure modes.
 
 ```python
-client = Xr1Robocasa365Client()   # model="xr1-robocasa365", 15 fps, 256x256
+client = Xr1Robocasa365Client()   # model="reactor/xr1-robocasa365", 15 fps, 256x256
 await client.connect()
 ```
 

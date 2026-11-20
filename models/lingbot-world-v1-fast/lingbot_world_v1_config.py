@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
@@ -21,18 +21,9 @@ from reactor_runtime.log import get_logger
 logger = get_logger(__name__)
 
 SOURCE_ENV = "LINGBOT_WORLD_V1_PATH"
-WORKER_PYTHON = Path(".venv/bin/python")
 CHECKPOINT_PATH = Path("checkpoints/lingbot-world-base-cam")
 FAST_SUBDIR = Path("lingbot_world_fast")
 SNAPSHOT_MARKER = ".reactor-snapshot.json"
-WORKER_ENV_MARKER = ".reactor-worker-environment.json"
-WORKER_ENV_VERSION = 1
-WORKER_PYTHON_VERSION = "3.12"
-WORKER_TORCH = "torch==2.8.0"
-WORKER_TORCHVISION = "torchvision==0.23.0"
-WORKER_TORCHAUDIO = "torchaudio==2.8.0"
-WORKER_INDEX_URL = "https://download.pytorch.org/whl/cu128"
-WORKER_FLASH_ATTN = "flash-attn==2.8.3"
 
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 _BASE_PATTERNS = (
@@ -71,8 +62,8 @@ class Sample:
 class LingBotConfig:
     """Hold validated LingBot adapter settings."""
 
-    worker_python: Path
     source_path: Path
+    world_size: int
     source_url: str
     source_revision: str
     checkpoint: ModelAsset
@@ -98,6 +89,9 @@ def read_config(config_path: Path | None) -> LingBotConfig:
     source = _mapping(document.get("source"), "source")
     assets = _mapping(document.get("assets"), "assets")
     inference = _mapping(document.get("inference"), "inference")
+    world_size = inference.get("world_size", 1)
+    if type(world_size) is not int or world_size not in (1, 2, 4):
+        raise ValueError("inference.world_size must be 1, 2, or 4")
     stream = _mapping(document.get("stream"), "stream")
     motion = _mapping(document.get("motion"), "motion")
     source_path = _source_path(source.get("path"))
@@ -129,7 +123,7 @@ def read_config(config_path: Path | None) -> LingBotConfig:
         raise ValueError("motion rates must be positive")
     runtime_root = source_path.parent / ".reactor-lingbot-world-v1"
     return LingBotConfig(
-        worker_python=source_path / WORKER_PYTHON,
+        world_size=world_size,
         source_path=source_path,
         source_url=_repository_url(source.get("url"), "source.url"),
         source_revision=_revision(source.get("revision"), "source.revision"),
@@ -148,9 +142,9 @@ def read_config(config_path: Path | None) -> LingBotConfig:
 
 
 def prepare_runtime(config: LingBotConfig) -> None:
-    """Prepare the pinned source, isolated environment, and Fast checkpoints."""
+    """Prepare the pinned source, Fast checkpoints, and worker cache paths."""
     ensure_source_checkout(config)
-    ensure_worker_environment(config)
+    os.environ.update(_download_environment(config.source_path.parent / ".cache"))
     ensure_model_assets(config)
     _validate_runtime_paths(config)
 
@@ -193,88 +187,6 @@ def ensure_source_checkout(config: LingBotConfig) -> None:
             f"LingBot source revision is {actual}; expected {config.source_revision}"
         )
     _ensure_stateful_patch(source_path)
-
-
-def ensure_worker_environment(config: LingBotConfig) -> None:
-    """Create the isolated NumPy-1 model environment when missing or stale."""
-    marker = config.worker_python.parents[1] / WORKER_ENV_MARKER
-    expected = {
-        "version": WORKER_ENV_VERSION,
-        "source_revision": config.source_revision,
-        "python": WORKER_PYTHON_VERSION,
-        "torch": WORKER_TORCH,
-        "torchvision": WORKER_TORCHVISION,
-        "torchaudio": WORKER_TORCHAUDIO,
-        "flash_attn": WORKER_FLASH_ATTN,
-        "index_url": WORKER_INDEX_URL,
-    }
-    if config.worker_python.is_file() and _json_matches(marker, expected):
-        return
-    uv = shutil.which("uv")
-    if uv is None:
-        raise RuntimeError("uv is required to prepare the LingBot worker environment")
-    environment_dir = config.worker_python.parents[1]
-    cache_root = config.source_path.parent / ".cache"
-    uv_environment = _download_environment(cache_root)
-    logger.info(
-        "preparing LingBot model environment",
-        python=WORKER_PYTHON_VERSION,
-        destination=str(environment_dir),
-    )
-    _run_uv(
-        [
-            uv,
-            "venv",
-            "--python",
-            WORKER_PYTHON_VERSION,
-            "--clear",
-            str(environment_dir),
-        ],
-        uv_environment,
-    )
-    _run_uv(
-        [
-            uv,
-            "pip",
-            "install",
-            "--python",
-            str(config.worker_python),
-            WORKER_TORCH,
-            WORKER_TORCHVISION,
-            WORKER_TORCHAUDIO,
-            "--index-url",
-            WORKER_INDEX_URL,
-        ],
-        uv_environment,
-    )
-    requirements = Path(__file__).with_name("worker-requirements.txt")
-    _run_uv(
-        [
-            uv,
-            "pip",
-            "install",
-            "--python",
-            str(config.worker_python),
-            "--requirement",
-            str(requirements),
-        ],
-        uv_environment,
-    )
-    _run_uv(
-        [
-            uv,
-            "pip",
-            "install",
-            "--python",
-            str(config.worker_python),
-            "--no-build-isolation",
-            WORKER_FLASH_ATTN,
-        ],
-        uv_environment,
-    )
-    pending = marker.with_suffix(".tmp")
-    pending.write_text(json.dumps(expected, sort_keys=True), encoding="utf-8")
-    os.replace(pending, marker)
 
 
 def ensure_model_assets(config: LingBotConfig) -> None:
@@ -320,7 +232,7 @@ def _ensure_snapshot(
         destination=str(asset.path),
     )
     command = [
-        str(config.worker_python),
+        sys.executable,
         str(Path(__file__).with_name("download_snapshot.py")),
         "--repo-id",
         asset.repo_id,
@@ -371,7 +283,6 @@ def _ensure_stateful_patch(source_path: Path) -> None:
 def _validate_runtime_paths(config: LingBotConfig) -> None:
     """Fail startup with precise paths when source or assets are incomplete."""
     required = [
-        config.worker_python,
         config.source_path / "wan" / "interactive_fast.py",
         config.checkpoint.path / "Wan2.1_VAE.pth",
         config.fast_checkpoint.path / "config.json",
@@ -479,11 +390,6 @@ def _download_environment(cache_root: Path) -> dict[str, str]:
     )
     Path(environment["TMPDIR"]).mkdir(parents=True, exist_ok=True)
     return environment
-
-
-def _run_uv(command: list[str], environment: Mapping[str, str]) -> None:
-    """Run uv while preserving full subprocess failures."""
-    subprocess.run(command, check=True, env=dict(environment))
 
 
 def _run_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:

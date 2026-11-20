@@ -24,12 +24,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from typing import TYPE_CHECKING
 
 from reactor_sdk import Reactor, ReactorStatus
 
 from .contract import TASK_MAX_LEN, VIEWS
-from .loop import RolloutState
 from .tracks import CameraTrack
+
+if TYPE_CHECKING:
+    from .loop import RolloutState
 
 log = logging.getLogger("libero.bridge")
 
@@ -62,8 +65,8 @@ class Bridge:
         if len(task) > TASK_MAX_LEN:
             log.warning("task truncated to the model's %d-char limit", TASK_MAX_LEN)
         self._echo_delay = echo_delay
-        self._last_task: str | None = None
         self._pump_task: asyncio.Task | None = None
+        self._tracks: list[CameraTrack] = []
         self._kicked = False
         self.reactor = Reactor(model_name=model_name, api_key=api_key, api_url=api_url)
         self._register()
@@ -72,15 +75,11 @@ class Bridge:
     def _register(self) -> None:
         reactor = self.reactor
 
-        @reactor.on_status(ReactorStatus.READY)
-        async def _ready(_status):
-            await self._on_ready()
-
+        # Correlated replies also arrive here; do not ingest send_command
+        # return values a second time.
         @reactor.on_message
         def _message(message):
-            if _msg_field(message, "type") == "action_prediction":
-                data = _msg_field(message, "data") or {}
-                self._rollout.submit_chunk(data)
+            self._handle_message(message)
 
         @reactor.on_error
         def _error(err):
@@ -99,32 +98,32 @@ class Bridge:
         # VIEWS order is the contract (see contract.py), so publish in it.
         for name in VIEWS:
             track = CameraTrack(name, self._rollout.frame_reader(name))
-            await self.reactor.publish_track(name, track)
+            self._tracks.append(track)
+            await track.start(self.reactor)
             log.info("published track %s", name)
-        await self._push_task(self._task)
+        await self._begin_episode()
         self._start_pump()
 
-    async def _reattach(self) -> None:
-        """Re-attach the engine so it starts an episode from the current task.
+    def _handle_message(self, message) -> None:
+        if _msg_field(message, "type") == "action_prediction":
+            self._rollout.submit_chunk(_msg_field(message, "data") or {})
 
-        The prompt is embedded at ATTACH time only (every subsequent tick
-        conditions on it without re-encoding), and the session attaches the
-        moment it connects, necessarily before our set_task_description
-        lands. Without this re-attach, every tick after that first empty
-        attach fails server-side and the client just sees silence.
-
-        This is also what starts each later episode: attach is where the
-        policy clears its KV cache, so the reset that re-encodes the prompt
-        is the same reset that stops the new episode from being predicted
-        off the old one's history.
-
-        The payload must be empty. The model ignores a reset carrying any
-        unknown field, silently and as a no-op: ``reset {"sampling_seed":
-        0}`` left ``step`` climbing and the episode anchored to the old KV
-        cache (verified against the live deployment, 2026-08-11).
-        """
-        await self.reactor.send_command("reset", {})
-        log.info("re-attached engine with task set")
+    async def _begin_episode(self) -> None:
+        # Reset can consume the previous episode's executed-action echo.
+        # Clear it first, then reset, then set the task for the new episode.
+        # Any seed prediction emitted during these awaits is kept by the
+        # message handler; clearing state afterwards would lose that seed.
+        self._kicked = True
+        try:
+            await self._send_echo("")
+            await self.reactor.send_command("reset", {})
+            await self.reactor.send_command(
+                "set_task_description", {"task_description": self._task}
+            )
+        except BaseException:
+            self._kicked = False
+            raise
+        log.info("started episode with task: %r", self._task)
 
     # ── echo pump: one send per completed chunk ──────────────────────────────
     def _start_pump(self) -> None:
@@ -141,19 +140,9 @@ class Bridge:
             while True:
                 try:
                     if self.reactor.get_status() == ReactorStatus.READY:
-                        # Start each episode, including the first: re-attach
-                        # so the policy drops the previous episode's KV cache
-                        # and re-encodes the prompt, then send an empty echo
-                        # (which the model reads as "nothing executed yet")
-                        # to draw the first chunk. Once per episode; a
-                        # repeat mid-episode would look like a restart.
                         if self._rollout.is_episode_start():
                             if not self._kicked:
-                                # Latched only once both sends land, so a
-                                # failed kick is retried on the next poll.
-                                await self._reattach()
-                                await self._send_echo("")
-                                self._kicked = True
+                                await self._begin_episode()
                         else:
                             self._kicked = False  # armed for the next reset
                         echo = self._rollout.take_pending_echo()
@@ -170,19 +159,9 @@ class Bridge:
             pass
 
     async def _send_echo(self, echo: str) -> None:
-        try:
-            await self.reactor.send_command(
-                "set_executed_action_json", {"executed_action_json": echo}
-            )
-        except Exception as exc:  # transient; keep pumping
-            log.warning("set_executed_action_json failed: %s", exc)
-
-    async def _push_task(self, task: str) -> None:
-        if task == self._last_task:
-            return
-        self._last_task = task
-        await self.reactor.send_command("set_task_description", {"task_description": task})
-        log.info("task: %r", task)
+        await self.reactor.send_command(
+            "set_executed_action_json", {"executed_action_json": echo}
+        )
 
     # ── public API ──────────────────────────────────────────────────────────
     @property
@@ -190,12 +169,9 @@ class Bridge:
         return self.reactor.get_status() == ReactorStatus.READY
 
     async def set_task(self, task: str) -> None:
-        # Re-attach after the change: a new task is only honoured at attach
-        # (see _reattach), so setting it alone would leave the old prompt in
-        # place.
-        if task[:TASK_MAX_LEN] != self._last_task:
-            await self._push_task(task[:TASK_MAX_LEN])
-            await self._reattach()
+        if task[:TASK_MAX_LEN] != self._task:
+            self._task = task[:TASK_MAX_LEN]
+            self._rollout.request_reset()
 
     async def reset(self) -> None:
         # Only asks the sim to reset. The pump sees the episode-start edge
@@ -203,21 +179,36 @@ class Bridge:
         self._rollout.request_reset()
 
     async def __aenter__(self) -> "Bridge":
-        await self.reactor.connect()
+        try:
+            # Native connect resolves at READY. Starting here also propagates
+            # publish/setup failures to the caller instead of a callback task.
+            await self.reactor.connect()
+            await self._on_ready()
+        except BaseException:
+            await self.__aexit__()
+            raise
         return self
 
     async def __aexit__(self, *exc) -> None:
         self._stop_pump()
+        if self._pump_task is not None:
+            await asyncio.gather(self._pump_task, return_exceptions=True)
+            self._pump_task = None
+        for track in self._tracks:
+            await track.close()
+        self._tracks.clear()
         try:
-            await self.reactor.disconnect(recoverable=False)
+            await self.reactor.disconnect()
         except Exception:
-            pass
+            log.warning("disconnect failed during cleanup", exc_info=True)
+        finally:
+            self.reactor.close()
 
 
 class BridgeThread(threading.Thread):
     """Runs the Bridge on its own event loop in its own thread.
 
-    The main thread belongs to MuJoCo (loop.SimDriver), so asyncio and aiortc
+    The main thread belongs to MuJoCo (loop.SimDriver), so asyncio and the SDK
     live here instead. Nothing crosses the boundary except RolloutState,
     which is lock-guarded, so no other synchronisation is needed.
     """
@@ -227,6 +218,7 @@ class BridgeThread(threading.Thread):
         self._kwargs = bridge_kwargs
         self._loop: asyncio.AbstractEventLoop | None = None
         self._closing = asyncio.Event()
+        self._serve_task: asyncio.Task | None = None
         self.bridge: Bridge | None = None
         self.ready = threading.Event()  # connected, or gave up trying
         self.failed: BaseException | None = None
@@ -240,7 +232,8 @@ class BridgeThread(threading.Thread):
         self._loop = loop
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(self._serve())
+            self._serve_task = loop.create_task(self._serve())
+            loop.run_until_complete(self._serve_task)
         finally:
             loop.close()
 
@@ -250,6 +243,8 @@ class BridgeThread(threading.Thread):
                 self.bridge = bridge
                 self.ready.set()
                 await self._closing.wait()
+        except asyncio.CancelledError:
+            pass  # stop() during startup still runs Bridge cleanup
         except BaseException as exc:  # noqa: BLE001 (reported to the main thread)
             self.failed = exc
             log.error("bridge failed: %s", exc)
@@ -258,4 +253,8 @@ class BridgeThread(threading.Thread):
 
     def stop(self) -> None:
         if self._loop is not None and not self._loop.is_closed():
-            self._loop.call_soon_threadsafe(self._closing.set)
+            def _stop() -> None:
+                self._closing.set()
+                if self.bridge is None and self._serve_task is not None:
+                    self._serve_task.cancel()
+            self._loop.call_soon_threadsafe(_stop)

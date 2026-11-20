@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from reactor_runtime import (
     InputField,
@@ -21,27 +20,6 @@ DELTA_X_MIN = -1000.0
 DELTA_X_MAX = 1000.0
 DELTA_Y_MIN = -200.0
 DELTA_Y_MAX = 200.0
-
-
-@dataclass(frozen=True)
-class AdapterConfig:
-    """Hold the adapter settings read from ``diamond.yaml``."""
-
-    repo_id: str
-    revision: str
-    device: str
-    profile: str
-    seed: int
-
-
-@dataclass(frozen=True)
-class PreparedScene:
-    """Hold one device-ready initial condition for the next reset."""
-
-    obs: Any
-    obs_full_res: Any
-    act: Any
-    next_act: Any | None
 
 
 class DiamondOutput(Output):

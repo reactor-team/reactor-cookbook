@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,9 +11,8 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
-from reactor_runtime.log import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 LATENTS_PER_CHUNK = 3
 LATENT_HEIGHT = 44
@@ -154,10 +154,11 @@ class MatrixGame2Backend:
             ]
         )
         logger.info(
-            "Matrix-Game-2.0 upstream backend ready",
-            checkpoint=str(checkpoint),
-            local_attention_frames=int(pipeline.local_attn_size),
-            latent_frames_per_chunk=LATENTS_PER_CHUNK,
+            "Matrix-Game-2.0 upstream backend ready: checkpoint=%s, "
+            "local_attention_frames=%s, latent_frames_per_chunk=%s",
+            checkpoint,
+            int(pipeline.local_attn_size),
+            LATENTS_PER_CHUNK,
         )
 
     @property

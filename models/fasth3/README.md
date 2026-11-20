@@ -11,6 +11,11 @@ Manual prompts and Bilibili viewer requests steer upcoming clips, while
 GPT-5.4 Mini extends the latest seven scenes whenever the primary queue needs
 more material.
 
+The adapter uses Reactor Runtime 3.5's `ReactorApp` custom `run()` interface.
+It preserves the single-clip lookahead, synchronized audio/video, and responsive
+channel controls. Generated clips are independently conditioned by text;
+this recipe does not expose a persistent, camera-controlled world state.
+
 The complete application lives in this directory:
 
 - `fasth3.py` adapts FastVideo generation to a shared Reactor session.
@@ -269,6 +274,11 @@ Key messages include `prompt_accepted`, `live_prompt_received`,
 `live_prompt_queued`, `auto_prompt_queued`, `clip_started`, `clip_complete`,
 and `state_update`. The generated schema at `/schema` is the source of truth for
 all fields and command responses.
+
+A refused command raises a `CommandError` with a stable code, such as
+`no_prompt`, `already_streaming`, `not_streaming`, or `prompt_too_long`. The
+runtime answers only the client that sent the command, on that command's own
+call. Each command's description names its codes.
 
 ## Project layout
 

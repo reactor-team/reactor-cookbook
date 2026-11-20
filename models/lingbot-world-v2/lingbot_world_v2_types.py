@@ -18,8 +18,25 @@ class LingBotWorldV2Output(Output):
     main_video: Video
 
 
+class CameraPathSelected(ModelMessage):
+    """Confirm a finite uploaded camera path for a fresh rollout."""
+
+    chunks: int = MessageField(
+        description="Number of complete chunks in the selected path."
+    )
+    frames: int = MessageField(description="Total RGB frames to emit before stopping.")
+    source_frames: int = MessageField(
+        description="Number of uploaded camera poses before native resampling."
+    )
+
+
 class StateUpdate(ModelMessage):
     """Emitted after connection, state mutation, reset, or chunk completion."""
+
+    camera_path_chunks: int = MessageField(
+        default=0,
+        description="Selected finite camera path length in chunks; zero means held-axis control.",
+    )
 
     prompt: str | None = MessageField(
         description=(
@@ -229,4 +246,5 @@ class LingBotWorldV2State(InputState):
     _pitch: float = 0.0
     _yaw: float = 0.0
     _roll: float = 0.0
-    _reset_requested: bool = False
+    _world_id: int = 0
+    _applied_world_id: int | None = None

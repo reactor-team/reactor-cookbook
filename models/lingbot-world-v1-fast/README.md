@@ -1,5 +1,18 @@
 # Play LingBot-World v1 Fast through Reactor Runtime
 
+### Finite camera trajectories
+
+After selecting an image, upload a JSON file containing OpenCV camera-to-world
+`poses` shaped `[frames, 4, 4]` and `intrinsics` `[fx, fy, cx, cy]`, then send
+`set_camera_path(trajectory=uploaded_file)`. The accepted reply gives the exact
+chunk and video-frame counts. Generation stops at the end of the path;
+`reset` replays it, and selecting another image restores interactive axes.
+Camera axes are unavailable while a path is selected.
+
+This interface retains the model's continuous streaming history. Benchmarks
+that restart image-conditioned generation between turns must explicitly select
+the previous output image and a new path for each turn.
+
 Run the public [LingBot-World](https://github.com/robbyant/lingbot-world)
 camera model as an interactive Reactor backend. A client can start from a
 built-in scene or uploaded image, change the prompt, apply six-axis camera
@@ -17,13 +30,13 @@ chunk boundary.
   unsupported. The recipe requests one B200; a tested 13-chunk rollout used
   about 48 GB of VRAM, so a GPU with at least 64 GB is recommended.
 - About 90 GB on persistent storage for the Fast checkpoint, VAE, UMT5 assets,
-  source checkout, and worker environment, plus space for the model image and
+  source checkout, plus space for the model image and
   build cache.
 
 ## Run
 
 This directory is a `reactor` workspace. `reactor.yaml` names the model,
-controls its Reactor Runtime 3.2.5, CUDA 12.8.1, Python 3.12, system packages,
+controls its Reactor Runtime 3.10.0, CUDA 12.8.1, Python 3.12, system packages,
 and Python dependencies. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
@@ -43,9 +56,9 @@ container. `reactor run` reuses the image from `reactor build` and builds it
 automatically when the local tag is missing. Rebuild after changing adapter
 code, dependencies, or the manifest.
 
-First startup clones the pinned public source, prepares an isolated upstream
-environment, builds FlashAttention 2, and downloads the selected model assets.
-Later starts reuse all of them from the CLI-mounted weights cache. Public
+The serving image installs the model dependencies and FlashAttention 2.
+First startup clones the pinned public source and downloads the selected model
+assets. Later starts reuse them from the CLI-mounted weights cache. Public
 downloads require no token, but a Hugging Face token can be forwarded without
 putting its value on the command line when needed:
 
@@ -104,6 +117,47 @@ are documented in [`example_images`](example_images).
 
 ## Runtime boundary
 
+The model is written as two halves that meet on two dataclasses.
+
+`lingbot_world_v1.py` is the **application half**, the `ReactorApp` the
+runtime drives one step at a time. It owns everything a client can see:
+the state and the commands, the messages, and the three step hooks.
+`process_input()` refuses a step until an anchor image is selected and
+while the rollout limit holds; otherwise it turns the held camera axes into
+relative camera poses and builds a `LingbotV1Input`. `generate()` is one
+line that forwards that input to the model half. `process_output()` maps
+the `LingbotV1Result` onto `main_video`, sends `rollout_limit_reached` and
+`state_update`, and reports the chunk time the runtime measured. Commands
+run between steps, so a step always reads one consistent state.
+
+`lingbot_world_v1_model.py` is the **model half**. It imports nothing from
+the runtime and knows nothing about clients. `LingbotV1Model` has three
+methods: `load()` loads the weights once inside a Runner-owned worker;
+`generate()` takes one `LingbotV1Input` and returns one `LingbotV1Result`;
+`reset()` forgets the current world and releases its caches. The application
+wraps this class in `DistributedRunner`; `inference.world_size` in
+`lingbot_world_v1.yaml` selects 1 (default), 2, or 4 GPU workers.
+The model calls `lingbot_world_v1_backend.py` directly, and CPU frame arrays
+cross back through shared memory. The Runner owns startup, timeouts, and
+process cleanup; `reset()` releases the world while retaining loaded weights.
+
+For multi-GPU inference, set `inference.world_size` to 2 or 4, expose that many
+GPUs to the container, and match `model.resources.gpu.count` in `reactor.yaml` for
+deployment. Rebuild after changing the configuration. Each worker loads a full
+copy of the weights on its assigned GPU. The upstream sequence-parallel path
+partitions video tokens and attention cache heads across workers, exchanging
+attention data through collectives. All workers participate in each chunk;
+the Runner returns rank 0's result to the application. The four denoising
+timesteps and temporal KV window stay unchanged.
+
+A fresh world is asked for with an id, not a flag. `set_image`,
+`random_image`, and `reset` bump the world id the application holds; the next
+`process_input()` sees the model has not reported that id yet and carries the
+anchor image on the input; the result echoes the id, and from then on the
+input carries no image. The model half starts a new world when it receives an
+id it has not applied, and raises `NoAnchor` if that input carries no image.
+Playback follows the measured generation time of each step.
+
 LingBot-World Fast is an autoregressive video model. The included
 `InteractiveFastRollout` runs its native three-latent, four-timestep boundary as
 a resumable session: model weights load once, and self-KV, absolute RoPE
@@ -142,9 +196,9 @@ load downloads the base VAE, UMT5 encoder and tokenizer, and Fast model shards.
 Downloads resume after interruption, and marker files record the immutable
 revisions.
 
-Reactor Runtime and LingBot-World require different NumPy major versions. A
-persistent Python 3.12 worker provides dependency isolation while remaining the
-only model process and loading one copy of the weights. The source extension
+Runtime and the model use one Python 3.12 dependency environment with NumPy 2.
+Each persistent Runner worker owns one copy of the model weights. The source
+extension
 delegates each chunk to the upstream scheduler, four denoising timesteps,
 self-KV eviction, camera Plücker embedding, and VAE decoder.
 

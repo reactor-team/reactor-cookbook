@@ -1,0 +1,17 @@
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
+# Application media handling and pinned upstream inference dependencies.
+accelerate==1.13.0
+av>=18.0.0
+diffusers==0.35.0
+huggingface-hub<1.0
+numpy==2.2.6
+pillow==11.3.0
+PyYAML==6.0.3
+safetensors==0.4.5
+sentencepiece==0.2.1
+torch==2.9.1
+transformers==4.56.0
+# Build tools used by Flash Attention in build.run.
+ninja
+packaging>=24.2

@@ -23,6 +23,11 @@ class HYWorld15Output(Output):
 class StateUpdate(ModelMessage):
     """Emitted after connection, state mutation, rollout reset, or chunk completion."""
 
+    camera_path_chunks: int | None = MessageField(
+        default=None,
+        description="Finite camera path length in chunks, or null for live controls.",
+    )
+
     image_source: Literal["uploaded", "built_in"] | None = MessageField(
         description=(
             'Source of the active anchor image: "uploaded", "built_in", or null before '
@@ -115,6 +120,13 @@ class ImageSelected(ModelMessage):
     )
 
 
+class CameraPathSelected(ModelMessage):
+    """Emitted when a native camera path queues a fresh world."""
+
+    chunks: int = MessageField(description="Complete chunks in the selected path.")
+    frames: int = MessageField(description="Expected total generated RGB frames.")
+
+
 class PromptQueued(ModelMessage):
     """Emitted when a prompt is queued for a forthcoming chunk."""
 
@@ -205,5 +217,6 @@ class HYWorld15State(InputState):
     _strafe: float = 0.0
     _pitch: float = 0.0
     _yaw: float = 0.0
-    _restart_requested: bool = False
+    _world_id: int = 0
+    _applied_world_id: int | None = None
     _limit_reached: bool = False

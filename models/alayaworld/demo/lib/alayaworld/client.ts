@@ -24,7 +24,7 @@ export const AlayaWorldTracks = [
 export type AlayaWorldRecvTrackName =
   "main_video";
 
-/** Set the scene prompt for the next 32-frame chunk without resetting the world. Requires a selected image. Emits `prompt_queued` and broadcasts `state_update` on success, or `command_error` when the prompt is empty or no image is selected. */
+/** Set the scene prompt for the next 32-frame chunk without resetting the world. Requires a selected image. Emits `prompt_queued` and broadcasts `state_update`. Fails with `prompt_required` when the prompt is empty, or `image_required` when no image is selected. */
 export interface AlayaWorldSetPromptParams {
   /**
    * Non-empty scene prompt, trimmed and sampled when the next 32-frame chunk starts. Requires an image selected by `set_image` or `random_image`.
@@ -35,7 +35,7 @@ export interface AlayaWorldSetPromptParams {
   prompt?: string;
 }
 
-/** Set backward or forward camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected. */
+/** Set backward or forward camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected. */
 export interface AlayaWorldSetForwardParams {
   /**
    * Backward (-1) to forward (1) velocity sampled when the next chunk starts and held until changed; zero is neutral.
@@ -47,7 +47,7 @@ export interface AlayaWorldSetForwardParams {
   forward?: number;
 }
 
-/** Set left or right camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected. */
+/** Set left or right camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected. */
 export interface AlayaWorldSetStrafeParams {
   /**
    * Left (-1) to right (1) velocity sampled when the next chunk starts and held until changed; zero is neutral.
@@ -59,7 +59,7 @@ export interface AlayaWorldSetStrafeParams {
   strafe?: number;
 }
 
-/** Set down or up camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected. */
+/** Set down or up camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected. */
 export interface AlayaWorldSetVerticalParams {
   /**
    * Down (-1) to up (1) velocity sampled when the next chunk starts and held until changed; zero is neutral.
@@ -71,7 +71,7 @@ export interface AlayaWorldSetVerticalParams {
   vertical?: number;
 }
 
-/** Set down or up camera pitch velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected. */
+/** Set down or up camera pitch velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected. */
 export interface AlayaWorldSetPitchParams {
   /**
    * Look down (-1) to up (1) velocity sampled when the next chunk starts and held until changed; zero is neutral.
@@ -83,7 +83,7 @@ export interface AlayaWorldSetPitchParams {
   pitch?: number;
 }
 
-/** Set left or right camera yaw velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected. */
+/** Set left or right camera yaw velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected. */
 export interface AlayaWorldSetYawParams {
   /**
    * Turn left (-1) to right (1) velocity sampled when the next chunk starts and held until changed; zero is neutral.
@@ -95,7 +95,7 @@ export interface AlayaWorldSetYawParams {
   yaw?: number;
 }
 
-/** Set counterclockwise or clockwise camera roll velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected. */
+/** Set counterclockwise or clockwise camera roll velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected. */
 export interface AlayaWorldSetRollParams {
   /**
    * Counterclockwise (-1) to clockwise (1) velocity sampled when the next chunk starts and held until changed; zero is neutral.
@@ -107,7 +107,7 @@ export interface AlayaWorldSetRollParams {
   roll?: number;
 }
 
-/** Queue a fresh rollout from the selected image, current prompt, and neutral camera motion. Requires a selected image. Emits `rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` when no image is selected. */
+/** Queue a fresh rollout from the selected image, current prompt, and neutral camera motion. Requires a selected image. Emits `rollout_reset_queued` and broadcasts `state_update`. Fails with `image_required` when no image is selected. */
 export interface AlayaWorldResetParams {
   /**
    * Random seed for the fresh rollout. Use -1 to retain the active seed; a non-negative value replaces it when the reset begins.
@@ -119,7 +119,7 @@ export interface AlayaWorldResetParams {
   seed?: number;
 }
 
-/** Select an uploaded image, queue a fresh rollout, and resume continuous generation. Can replace the image at any time. Emits `image_selected` and broadcasts `state_update` on success, or `command_error` when the upload is missing, too large, mislabeled, or undecodable. */
+/** Select an uploaded image, queue a fresh rollout, and resume continuous generation. Can replace the image at any time. Emits `image_selected` and broadcasts `state_update`. Fails with `invalid_image` when the upload is empty or undecodable, `image_too_large` when it is over the size or pixel limit, or `unsupported_media` when it is not, or does not contain, a supported image type. */
 export interface AlayaWorldSetImageParams {
   /** Reference to a file uploaded via the Reactor upload protocol. */
 
@@ -322,8 +322,8 @@ export class AlayaWorldModel extends Reactor {
   }
 
   /**
-   * Set the scene prompt for the next 32-frame chunk without resetting the world. Requires a selected image. Emits `prompt_queued` and broadcasts `state_update` on success, or `command_error` when the prompt is empty or no image is selected.
-   * @param params - Set the scene prompt for the next 32-frame chunk without resetting the world. Requires a selected image. Emits `prompt_queued` and broadcasts `state_update` on success, or `command_error` when the prompt is empty or no image is selected.
+   * Set the scene prompt for the next 32-frame chunk without resetting the world. Requires a selected image. Emits `prompt_queued` and broadcasts `state_update`. Fails with `prompt_required` when the prompt is empty, or `image_required` when no image is selected.
+   * @param params - Set the scene prompt for the next 32-frame chunk without resetting the world. Requires a selected image. Emits `prompt_queued` and broadcasts `state_update`. Fails with `prompt_required` when the prompt is empty, or `image_required` when no image is selected.
    * @returns The correlated {@link AlayaWorldPromptQueuedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -333,8 +333,8 @@ export class AlayaWorldModel extends Reactor {
   }
 
   /**
-   * Set backward or forward camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected.
-   * @param params - Set backward or forward camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected.
+   * Set backward or forward camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
+   * @param params - Set backward or forward camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
    * @returns The correlated {@link AlayaWorldCameraMotionChangedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -344,8 +344,8 @@ export class AlayaWorldModel extends Reactor {
   }
 
   /**
-   * Set left or right camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected.
-   * @param params - Set left or right camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected.
+   * Set left or right camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
+   * @param params - Set left or right camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
    * @returns The correlated {@link AlayaWorldCameraMotionChangedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -355,8 +355,8 @@ export class AlayaWorldModel extends Reactor {
   }
 
   /**
-   * Set down or up camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected.
-   * @param params - Set down or up camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected.
+   * Set down or up camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
+   * @param params - Set down or up camera velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
    * @returns The correlated {@link AlayaWorldCameraMotionChangedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -366,8 +366,8 @@ export class AlayaWorldModel extends Reactor {
   }
 
   /**
-   * Set down or up camera pitch velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected.
-   * @param params - Set down or up camera pitch velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected.
+   * Set down or up camera pitch velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
+   * @param params - Set down or up camera pitch velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
    * @returns The correlated {@link AlayaWorldCameraMotionChangedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -377,8 +377,8 @@ export class AlayaWorldModel extends Reactor {
   }
 
   /**
-   * Set left or right camera yaw velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected.
-   * @param params - Set left or right camera yaw velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected.
+   * Set left or right camera yaw velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
+   * @param params - Set left or right camera yaw velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
    * @returns The correlated {@link AlayaWorldCameraMotionChangedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -388,8 +388,8 @@ export class AlayaWorldModel extends Reactor {
   }
 
   /**
-   * Set counterclockwise or clockwise camera roll velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected.
-   * @param params - Set counterclockwise or clockwise camera roll velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update` on success, or `command_error` when no image is selected.
+   * Set counterclockwise or clockwise camera roll velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
+   * @param params - Set counterclockwise or clockwise camera roll velocity for forthcoming chunks. Requires a selected image. Emits `camera_motion_changed` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
    * @returns The correlated {@link AlayaWorldCameraMotionChangedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -399,8 +399,8 @@ export class AlayaWorldModel extends Reactor {
   }
 
   /**
-   * Queue a fresh rollout from the selected image, current prompt, and neutral camera motion. Requires a selected image. Emits `rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` when no image is selected.
-   * @param params - Queue a fresh rollout from the selected image, current prompt, and neutral camera motion. Requires a selected image. Emits `rollout_reset_queued` and broadcasts `state_update` on success, or `command_error` when no image is selected.
+   * Queue a fresh rollout from the selected image, current prompt, and neutral camera motion. Requires a selected image. Emits `rollout_reset_queued` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
+   * @param params - Queue a fresh rollout from the selected image, current prompt, and neutral camera motion. Requires a selected image. Emits `rollout_reset_queued` and broadcasts `state_update`. Fails with `image_required` when no image is selected.
    * @returns The correlated {@link AlayaWorldRolloutResetQueuedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -410,8 +410,8 @@ export class AlayaWorldModel extends Reactor {
   }
 
   /**
-   * Select an uploaded image, queue a fresh rollout, and resume continuous generation. Can replace the image at any time. Emits `image_selected` and broadcasts `state_update` on success, or `command_error` when the upload is missing, too large, mislabeled, or undecodable.
-   * @param params - Select an uploaded image, queue a fresh rollout, and resume continuous generation. Can replace the image at any time. Emits `image_selected` and broadcasts `state_update` on success, or `command_error` when the upload is missing, too large, mislabeled, or undecodable.
+   * Select an uploaded image, queue a fresh rollout, and resume continuous generation. Can replace the image at any time. Emits `image_selected` and broadcasts `state_update`. Fails with `invalid_image` when the upload is empty or undecodable, `image_too_large` when it is over the size or pixel limit, or `unsupported_media` when it is not, or does not contain, a supported image type.
+   * @param params - Select an uploaded image, queue a fresh rollout, and resume continuous generation. Can replace the image at any time. Emits `image_selected` and broadcasts `state_update`. Fails with `invalid_image` when the upload is empty or undecodable, `image_too_large` when it is over the size or pixel limit, or `unsupported_media` when it is not, or does not contain, a supported image type.
    * @returns The correlated {@link AlayaWorldImageSelectedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 
@@ -421,7 +421,7 @@ export class AlayaWorldModel extends Reactor {
   }
 
   /**
-   * Select a built-in image and its matching prompt, queue a fresh rollout, and resume continuous generation. Valid when built-in examples are configured. Emits `image_selected` and broadcasts `state_update` on success, or `command_error` when no usable image or prompt is available.
+   * Select a built-in image and its matching prompt, queue a fresh rollout, and resume continuous generation. Valid when built-in examples are configured. Emits `image_selected` and broadcasts `state_update`. Fails with `image_unavailable` when no built-in image is configured, or `prompt_unavailable` when the image has no prompt.
    * @returns The correlated {@link AlayaWorldImageSelectedMessage} reply, or `undefined` when the send fails (the SDK never rejects — see `getLastError()`).
    */
 

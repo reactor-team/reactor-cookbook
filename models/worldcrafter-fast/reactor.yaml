@@ -1,0 +1,62 @@
+$schema: reactor/v2
+model:
+  name: worldcrafter-fast
+  version: v0.2.0
+  description: Explore an image with camera-controlled video and persistent scene memory.
+  resources:
+    gpu:
+      type: NVIDIA_H200
+      count: 8
+    cpu:
+      request: "16"
+      limit: "64"
+    memory:
+      request: 128Gi
+      limit: 512Gi
+runtime:
+  import: worldcrafter:WorldCrafter
+  weights_path: hf://TencentARC/WorldCrafter-Fast@51320c3eb58a6313ccd6021a1da6d723d53e1a58
+  config: worldcrafter.yaml
+  recording:
+    enabled: true
+    chunk_seconds: 4
+    clip_max_seconds: 300
+    video_track: main_video
+    video:
+      codec: h264
+      preset: veryfast
+      crf: 23
+build:
+  runtime_version: "3.10.0"
+  python_requirements: requirements.txt
+  python_indexes:
+    - https://pypi.org/simple
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  run:
+    - pip install --no-cache-dir uv==0.11.19
+    # Reactor's run steps precede COPY; mount the preparation scripts read-only.
+    - --mount=type=bind,source=.,target=/build WORLDCRAFTER_ROOT=/opt/worldcrafter UV_CACHE_DIR=/tmp/worldcrafter-uv UV_PYTHON_INSTALL_DIR=/opt/worldcrafter/python bash /build/prepare.sh && rm -rf /tmp/worldcrafter-uv
+    # GeoCalib loads its checkpoint through torch.hub; staging it under
+    # TORCH_HOME keeps calibration from downloading it at run time.
+    - mkdir -p /opt/worldcrafter/torch/hub/geocalib && curl -fsSL -o /opt/worldcrafter/torch/hub/geocalib/pinhole.tar https://github.com/cvg/GeoCalib/releases/download/v1.0/geocalib-pinhole.tar && echo "86d6aeacd8bbd974c59ce39f61854e00d36911c732ad89be471476fd708722ac  /opt/worldcrafter/torch/hub/geocalib/pinhole.tar" | sha256sum -c -
+  system_packages:
+    - git
+    - curl
+    - ca-certificates
+    - libgl1
+    - libglib2.0-0
+  runtime_env:
+    OMP_NUM_THREADS: "8"
+    TORCHINDUCTOR_COMPILE_THREADS: "2"
+    TOKENIZERS_PARALLELISM: "false"
+    WORLDCRAFTER_ROOT: /opt/worldcrafter
+    WORLDCRAFTER_SCRATCH: /local-ssd/wc-reactor
+    UV_CACHE_DIR: /local-ssd/cache/uv
+    UV_PYTHON_INSTALL_DIR: /local-ssd/python
+    HF_HOME: /local-ssd/cache/huggingface
+    TORCH_HOME: /opt/worldcrafter/torch
+    XDG_CACHE_HOME: /local-ssd/cache
+    TORCHINDUCTOR_CACHE_DIR: /local-ssd/cache/inductor
+    TRITON_CACHE_DIR: /local-ssd/cache/triton
+    PYTHONPYCACHEPREFIX: /local-ssd/cache/pycache

@@ -1,0 +1,46 @@
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
+#
+# Pins follow upstream cosmos-framework's lock at the commit pinned in
+# cosmos3_policy_droid.yaml: the cu128 dependency group for the CUDA stack and
+# the resolved versions of every package the policy serving path imports
+# directly (measured from a live sys.modules capture). The CUDA
+# builds are named explicitly so the resolver picks them by version, not by
+# index order.
+torch==2.10.0+cu128
+torchvision==0.25.0+cu128
+flash-attn-3-nv==1.0.3+cu128.torch210
+flash-attn==2.7.4.post1+cu128.torch210
+natten==0.21.6.dev6+cu128.torch210
+numpy>=2.0,<2.3
+transformers==4.57.6
+diffusers==0.39.0
+huggingface_hub==0.36.2
+safetensors==0.8.0
+pydantic==2.12.5
+omegaconf==2.3.0
+hydra-core==1.3.2
+einops==0.8.2
+# Upstream's lock takes megatron-core from git, not PyPI; same revision here.
+megatron-core @ git+https://github.com/NVIDIA/Megatron-LM.git@de56227b26ba56de885897361272513697de7dc6
+qwen-vl-utils==0.0.14
+tyro==1.0.8
+loguru==0.7.3
+attrs==25.4.0
+cattrs==26.1.0
+boto3==1.40.61
+fvcore==0.1.5.post20221221
+imageio==2.37.2
+PyYAML==6.0.3
+regex==2026.2.28
+scipy==1.17.1
+termcolor==3.3.0
+trimesh==4.11.2
+webdataset==1.0.2
+nvidia-ml-py==13.590.48
+pillow
+requests
+tqdm
+filelock
+packaging
+typing_extensions

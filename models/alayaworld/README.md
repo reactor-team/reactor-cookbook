@@ -24,9 +24,15 @@ starts generation.
 
 ## Run with the Reactor CLI
 
+The adapter uses Reactor Runtime 3.10's native step loop. The application resolves
+uploads and plans camera poses; `alayaworld_model.py` owns the native engine and
+rollout cache. A new world first initializes its cache and reports its exact
+camera origin. Subsequent steps generate one native chunk and publish its media
+and state. Runtime measures each generation step for playout pacing.
+
 This directory is a `reactor` workspace. The manifest names the model and its
 B200 resource, and its `build` block defines the complete Python 3.12 and CUDA
-12.8 image with Reactor Runtime 3.2.5. `requirements.txt` contains the model
+12.8 image with Reactor Runtime 3.10.0. `requirements.txt` contains the model
 dependencies. The host needs the
 [`reactor` CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
 the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. See Reactor's
@@ -104,18 +110,12 @@ directory to the model as `REACTOR_WEIGHTS_PATH`. The checked-in default keeps
 AlayaWorld under `~/.cache/reactor_registry/alayaworld`, outside the image and
 the Git checkout, so container rebuilds retain every large download.
 
-On first load the adapter clones the pinned AlayaWorld, Depth-Anything-3, and
-TAEHV revisions, downloads the merged checkpoint and Gemma text encoder, and
+On first load the adapter clones the pinned AlayaWorld and Depth-Anything-3
+revisions, downloads the merged checkpoint and Gemma text encoder, and
 populates the pinned DA3 cache. Interrupted Hugging Face downloads resume on
 the next start. Later runs verify and reuse the completed resources. The
 playground cases used by `random_image` arrive in the AlayaWorld checkout; no
 separate sample dataset is required.
-
-The TAEHV checkout supplies the tiny decoder that `inference.bank_taehv` uses for
-spatial-memory pixels. Its `taeltx2_3_wide` weights are the larger LTX-2.3
-variant published on a dedicated upstream branch. `assets.taehv_source` pins
-that branch revision. Setting `bank_taehv: false` skips the decoder; dropping
-`assets.taehv_source` also skips the download.
 
 `source.path` in `alayaworld.yaml` is relative to the mounted weights root.
 Every other relative model, configuration, and playground path is then resolved
@@ -134,6 +134,14 @@ AlayaWorld and its weights use the LTX-2 Community License for academic and
 non-commercial use. Gemma and Depth-Anything-3 retain their own terms.
 
 ## Controls
+
+`set_camera_path(trajectory)` accepts a JSON upload after image selection.
+Its `poses` array contains `[32 * chunks + 8, 4, 4]` camera-to-world matrices
+at 24 FPS: the first pose anchors the image, the next poses describe the generated
+frames, and seven final poses provide look-ahead. The reply reports the chunk
+and output frame counts. Each chunk emits 32 new frames; generation stops at
+the path end. `reset` replays the path. Selecting another image restores
+held camera controls. Uploads are limited to 8 MiB.
 
 - `set_image` accepts uploaded JPEG, PNG, WebP, or BMP bytes plus an optional
   prompt, then resets from that image.
@@ -183,9 +191,12 @@ images ready for manual upload. These convenience copies are independent of
 checkout prepared at startup.
 
 Uploads are limited to 25 MiB and 100 million decoded pixels. EXIF orientation
-is applied before the image is resized and center-cropped to 960x544. The
-configured `inputs.upload_template` supplies camera calibration and a trajectory
-horizon; its pixels are not used. Uploaded bytes remain session-scoped and are
+is applied, then the image is resized and center-cropped to 960x544 by
+AlayaWorld's own case-image fit, so an upload matches the same image passed to
+the official `inference.run`. The configured `inputs.upload_template` supplies
+camera calibration, the history camera prefix and a trajectory horizon; its
+pixels are not used. The spatial memory is built when the first chunk's camera
+poses arrive, so its depth is aligned to the requested path. Uploaded bytes remain session-scoped and are
 released when the session ends.
 
 `inputs.random_images` in `alayaworld.yaml` lists the known image triplets used
@@ -194,40 +205,22 @@ cases shipped with the pinned AlayaWorld source.
 
 ## Long-running sessions
 
-`stream.max_chunks_per_rollout` defaults to 512. After chunk 512, the adapter
-broadcasts `RolloutResetQueued`, releases camera motion, and rebuilds the
-autoregressive state from the selected image, active prompt, and seed without
-reloading model weights. Chunk numbering then starts again at 1. This bounds the
-dense camera trajectory while allowing the Reactor session to continue.
+Generation stops after 512 chunks and preserves the final world state. Use
+`reset` or select another image to start a fresh rollout without reloading weights.
 
-`inference.attention_backend` chooses which attention implementation serves the
-model. `flash_attention_4` is the default and needs a Hopper or Blackwell GPU;
-`pytorch` serves anything older, and `upstream` leaves AlayaWorld's own selection
-alone. The adapter binds the callable on the loaded attention modules. Masked
-blocks use the PyTorch implementation that builds the banded sliding-window
-mask.
+The recipe uses PyTorch attention and the full VAE for both display frames
+and spatial-memory pixels. It does not install FlashAttention 4 or download
+a tiny spatial-memory decoder.
 
-`inference.bank_taehv` decodes spatial-memory pixels — the depth and warp
-sources the model builds its memory from — with a tiny decoder. Display frames
-continue through the full VAE. The memory decode is lossy. The checkpoint comes
-from the pinned `assets.taehv_source` checkout; its filename selects the
-decoder architecture, so renaming it silently changes the model.
+The default `torch.compile` mode and FlexAttention match the original recipe.
+Load-time warmup is disabled, so the first generation can include compilation
+latency. Chunk sizes, autoregressive history and spatial-memory limits are
+unchanged.
 
-The adapter uses the default `torch.compile` mode and Inductor-compiled kernels,
-which support Runtime's off-loop chunk generation.
-
-During load, the adapter generates `inference.warmup_chunks` throwaway turns
-from a built-in scene to compile those kernels and the attention backend. Health
-stays unavailable until warmup finishes. Set the value to `0` to compile on
-first use; the caches live in the container, so a restart compiles again.
-
-Autoregressive history remains a 16-latent sliding window. The adapter keeps
-only the latest generated latent outside that window and bounds the spatial
-bank at 320 frames: 160 dense recent frames plus 160 keyframes sampled across
-the older trajectory. This keeps GPU memory and retrieval work bounded while
-preserving sparse long-range viewpoints within the active rollout. Very old
-revisits therefore have less spatial detail than recent ones, and the automatic
-rollout reset deliberately trades unbounded history for predictable resources.
+Autoregressive history remains a 16-latent sliding window. The native spatial
+bank retains all accumulated frames for retrieval until an explicit reset.
+Memory use grows with the rollout length. Already streamed output latents are
+released independently of the spatial bank and autoregressive history.
 
 ## Streaming decode
 

@@ -16,6 +16,17 @@ _MIME_FORMATS = {
     "image/png": "PNG",
     "image/webp": "WEBP",
 }
+_MIME_SUFFIXES = {
+    "image/bmp": ".bmp",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+
+
+def upload_suffix(upload: UploadedFile) -> str:
+    """Return the file suffix an accepted upload's bytes decode as."""
+    return _MIME_SUFFIXES.get(upload.mime_type.lower(), ".image")
 
 
 def validate_uploaded_image(upload: UploadedFile) -> None:

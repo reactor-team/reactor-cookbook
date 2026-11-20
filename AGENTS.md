@@ -18,12 +18,90 @@ works.
 - Keep each example self-contained; a change to one model must not reach
   into another model's folder.
 
+## Two authoring shapes under `models/`
+
+The runtime's current authoring surface is a `ReactorApp` written as two
+halves: an application half the runtime drives one step at a time
+(`process_input()`, `generate()`, `process_output()`) and a model half that
+owns the weights and imports nothing from the runtime, meeting on a step input
+and a step result. GUIDELINES.md states the rules; the reference for them is
+the runtime's
+[Application and Model](https://docs.reactor.inc/deploy/development/reactor-app/application-and-model)
+page, its
+[`application-model-isolation`](https://github.com/reactor-team/reactor-runtime/blob/main/skills/application-model-isolation/SKILL.md)
+skill, and its
+[`examples/waypoint`](https://github.com/reactor-team/reactor-runtime/tree/main/examples/waypoint).
+In this repo, `models/lingbot-world-v1-fast/` is the model written that way:
+`lingbot_world_v1.py` is the application half, `lingbot_world_v1_model.py`
+the model half, and its `tests/` drive both without a GPU.
+
+Most other folders are still the previous shape, a `ReactorPipeline` whose
+`inference()` generator mixes the client checks, the model call, and the
+messages in one loop. They run unchanged on the current runtime and are moved
+one at a time. Three rules follow, for an agent editing or reviewing here:
+
+- **New model code is a `ReactorApp` in two halves.** Do not write a new
+  `inference()` loop, and do not copy one from a neighbouring folder.
+- **A routine change to a previous-shape model is not a port.** A version
+  bump, a dependency roll, a prompt or description change: make it on the
+  shape the folder has. A change to how the folder's loop decides a step,
+  what the model receives, or what a step emits is the moment to port it,
+  as its own PR.
+- **A port is a split, not a translation, and it moves no client surface.**
+  The runtime's
+  [`porting-to-reactor-app`](https://github.com/reactor-team/reactor-runtime/blob/main/skills/porting-to-reactor-app/SKILL.md)
+  skill is the method; this repo carries no copy of it. Render
+  `python -m reactor_runtime.schema` before and after and diff: commands,
+  messages, tracks, and descriptions must be byte-identical. Review a port
+  against the split: nothing from `reactor_runtime` in the model half; the
+  application reads the model only through the result; `ApplicationError`
+  only in `process_input()`, the model's own exceptions out of `generate()`;
+  every message an explicit `await self.send()` in `process_output()`;
+  `reset()` without arguments; the step time read from `outcome.elapsed`,
+  not measured again.
+
+## Every `reactor.yaml` is on the latest spec format
+
+Readers copy a manifest from here as their starting point, so every model
+manifest declares the current `reactor` CLI spec format, `$schema: reactor/v2`.
+An older header (`$schema: reactor/v1`, the `apiVersion`/`kind` header, or no
+header at all) still loads, but the CLI prints a deprecation warning, and a
+later CLI will refuse it. When the CLI moves to a newer format, all models here
+move with it in one change.
+
+- `recording:` nests under `runtime:`. A top-level `recording:` block is the
+  legacy placement, and under `reactor/v2` the CLI rejects it.
+- A deployment plan nests `instances:` under `deployment:`.
+- `reactor validate` in the model folder prints `✓ reactor.yaml` with no
+  warning. Review asks for the switch on any PR that adds or edits a
+  manifest on an older format.
+
 ## Layout
 
 - `models/` — deployable models; each folder is a `reactor` CLI workspace
   governed by GUIDELINES.md.
 - `examples/` — complete applications built on hosted Reactor models.
 - `robotics/` — Python SDK integrations that drive already-served models.
+
+## Clients name the model as `owner/name`
+
+Every client in this repository names its model as `owner/name`: the owning
+account's slug, then the model's name. This applies to apps in `examples/`,
+demos and clients under `models/`, and the `robotics/` integrations. It covers
+every place the name appears: the SDK constructor or provider, a token's
+`models.match` list, a default, a placeholder, and a README command.
+
+- A model Reactor serves is `reactor/<name>`, for example `reactor/xwam`.
+- A model the reader deploys is under the reader's account. Read the name from
+  the environment, and show `your-org/<name>` as the placeholder. A hosted
+  client that gets a name without an owner stops with a message that asks for
+  `owner/name`. It does not fall back to the bare name.
+- A client that only connects to a local runtime (`local=True`, or `local` on
+  the provider) can use any name. Use `owner/name` there too if the same code
+  can also connect to the Reactor API.
+
+The Reactor API refuses a name without the owner, such as `xwam`, when a
+session starts or a token is minted.
 
 ## `examples/`
 
@@ -50,8 +128,23 @@ copies verbatim:
   awaited call and raises that connection's `message` event — so an acceptance
   listener does fire, but for any call of that command and never on a second
   client in the session. Read answers off the await; keep subscriptions for what
-  the model broadcasts. Which commands answer, and where a refusal surfaces, is
-  per-model — each skill carries its own table.
+  the model broadcasts. Which commands answer is per-model — each skill carries
+  its own table.
+- **A refusal belongs on the awaited call too.** A model refuses a command by
+  raising `CommandError(code, message)` (see
+  [GUIDELINES.md](./GUIDELINES.md#refusing-a-command)), and the runtime answers
+  only the caller, on that call. In JavaScript, `sendCommand()` and every typed
+  wrapper never reject: a refused call resolves `undefined` and the SDK emits a
+  `ReactorError` on the `error` event with `operation: "sendCommand"`, the
+  model's code in `code`, and a message of the form
+  `command 'enqueue' failed (queue_full): <reason>`. For a command that
+  declares a reply, `undefined` means refused; for one that does not, only the
+  `error` event tells. In Python, `send_command()` raises a `ReactorError` with
+  the same `code` and `operation == "send_command"`. Do not wait for a
+  `command_error` message. In React, the store copies every `error` event into
+  `lastError` and never clears it, so never render an error with
+  `operation === "sendCommand"` as a connection or session failure. The retired
+  JavaScript SDK 2.x is the only client that does not receive the failure.
 
 Verify a change the way a reader would:
 
@@ -72,3 +165,48 @@ PYTHONPATH=. python -m pytest tests/ -q
 
 Schema output is the client contract: diff it before and after a change and
 confirm only the intended surface moved.
+
+## Robotics client documentation
+
+Public robotics docs consume `robotics/sim/notebooks/reactor_robotics` and the
+`cosmos-droid` and `dreamzero` simulator packages. The launch-facing READMEs
+cover Cosmos Nano, DreamZero, and FLUX Action on DROID, and Praxis-1 on DROID
+and YAM, under policy inference.
+Preserve Cosmos3 Nano Sim Bimanual and Transfer under a separate action-conditioned
+simulation section, including their examples and all targets linked by the docs.
+Keep other policy examples available in source without recommending them as
+launched policies.
+The robotics environments use the current tested Python SDK with lockfiles.
+Upgrade their manifests and lockfiles together; run `.github/workflows/robotics.yml`.
+`robotics/sim/robocasa365` uses native SDK tracks in local mode; its historical
+rollout scores do not validate the migrated transport.
+The official docs follow main, and `reactor_robotics/README.md` owns helper docs. Preserve the notebook helper's
+shared camera capture timestamps when updating transport code; a timestamp
+on a frame does not guarantee model-level observation synchronization.
+`ReactorSession.send` returns the correlated SDK envelope or None; `next_message`
+returns its data payload. Queue callback delivery once to avoid duplicate actions.
+Run the notebook tests, gateway unit/transport tests, and `check_wiring.py` for
+changed adapters. Full simulator rollouts are separate validation.
+The public documentation's first-action examples use synthetic inputs and must
+not acquire a dependency on recorded robot captures or private repositories.
+
+`robotics/praxis-1/` is the reference client for Praxis-1 DROID and YAM
+(`reactor/praxis-1-droid`, `reactor/praxis-1-yam`). Its streamed client
+(`PraxisClient`) stamps every camera frame and the matching state row with one
+`reactor_sdk.time_micros()` reading per tick (`capture_time_us` and `time_us`).
+Keep that rule when editing it: the model pairs frames with state rows by those
+stamps. The model keeps 50 frames per camera, so the streamed client stops
+streaming after `MAX_WAIT_FRAMES` (17) ticks of a wait for a chunk; more would
+push the frame of the next call's row 0 out of the window. Its stepped client
+(`SteppedPraxisClient`) sends each chunk's frames (H.264 per camera), state and
+step echo in one `Reactor.step` and sends no `time_us`; `join: newest` is
+expected there and must not be warned about. Both call `Robot.hold()` when an
+episode ends, on any error, and on exit.
+Its offline tests run in the robotics CI matrix; a live run needs
+`REACTOR_API_KEY`.
+
+The Cosmos simulation clients live in `robotics/simulation/`. Transfer's
+`test_preparation.py` runs in the robotics CI matrix without credentials or GPUs;
+it checks depth normalization and preserving render reports on cleanup failure.
+Hosted inference validation is separate. Bimanual's README links a pinned upstream
+sample image without redistributing it.

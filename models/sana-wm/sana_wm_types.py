@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import field
 from typing import Literal
 
 from reactor_runtime import (
@@ -30,47 +29,6 @@ IntrinsicsSource = Literal["uploaded", "built_in", "estimated"]
 ControlMode = Literal["interactive", "trajectory"]
 
 
-@dataclass(frozen=True)
-class HubAsset:
-    """Describe one public Hugging Face asset at an immutable revision."""
-
-    repo_id: str
-    revision: str
-
-
-@dataclass(frozen=True)
-class BuiltInScene:
-    """Describe one first-frame, prompt, and camera-calibration example."""
-
-    name: str
-    image: Path
-    prompt: Path
-    intrinsics: Path
-
-
-@dataclass(frozen=True)
-class SanaWMConfig:
-    """Hold validated source, asset, rollout, and motion settings."""
-
-    source_path: Path
-    source_url: str
-    source_revision: str
-    upstream_config: Path
-    streaming: HubAsset
-    stage1_text_encoder: HubAsset
-    pi3x_model: HubAsset
-    pi3x_source_url: str
-    pi3x_source_revision: str
-    scenes: tuple[BuiltInScene, ...]
-    seed: int
-    max_chunks: int
-    num_cached_blocks: int
-    refiner_kv_max_frames: int
-    translation_speed: float
-    rotation_speed_degrees: float
-    pitch_limit_degrees: float
-
-
 class SanaWMOutput(Output):
     """Stream one generated SANA-WM RGB frame on `main_video`."""
 
@@ -91,7 +49,8 @@ class SanaWMState(InputState):
     )
     _trajectory_exhausted: bool = False
     _held_controls: set[str] = field(default_factory=set)
-    _reset_requested: bool = False
+    _world_id: int = 0
+    _applied_world_id: int | None = None
 
 
 class StateUpdate(ModelMessage):

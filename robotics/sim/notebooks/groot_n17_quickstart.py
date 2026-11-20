@@ -28,7 +28,7 @@ async def main():
     # Capacity: one B200 serves one session. A busy cluster returns HTTP 429
     # "no available capacity" at session creation. Wait and retry, or ask
     # Reactor for more.
-    client = GrootN17Client()      # model="groot-n17", 15 fps tracks
+    client = GrootN17Client()      # model="reactor/groot-n17", 15 fps tracks
     await client.connect()         # handlers -> connect -> await READY -> tracks -> ping
 
     print("status transitions :", " -> ".join(client.session.status_log))

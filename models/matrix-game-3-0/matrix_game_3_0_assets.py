@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -14,10 +15,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
-from reactor_runtime import get_weights_path
-from reactor_runtime.log import get_logger
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 SOURCE_ENV = "MATRIX_GAME_3_0_PATH"
 SNAPSHOT_MARKER = ".reactor-snapshot.json"
@@ -62,10 +61,15 @@ class MatrixGame30Config:
     chunk_timeout_seconds: float
 
 
-def read_config(config_path: Path | None) -> MatrixGame30Config:
+def read_config(
+    config_path: Path | None, weights_root: Path | None = None
+) -> MatrixGame30Config:
     """Read and validate the Matrix-Game 3.0 adapter YAML."""
     if config_path is None:
         raise ValueError("Matrix-Game 3.0 requires runtime.config in reactor.yaml")
+    weights_root = (
+        weights_root if weights_root is not None else config_path.resolve().parent
+    )
     document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(document, dict):
         raise TypeError(f"{config_path}: expected a YAML mapping")
@@ -74,8 +78,8 @@ def read_config(config_path: Path | None) -> MatrixGame30Config:
     checkpoint = _mapping(document.get("checkpoint"), "checkpoint")
     inference = _mapping(document.get("inference"), "inference")
     stream = _mapping(document.get("stream"), "stream")
-    source_path = _source_path(source.get("path"))
-    checkpoint_path = get_weights_path() / "checkpoints" / "Matrix-Game-3.0"
+    source_path = _source_path(source.get("path"), weights_root)
+    checkpoint_path = weights_root / "checkpoints" / "Matrix-Game-3.0"
 
     examples_document = document.get("examples")
     if not isinstance(examples_document, list) or not examples_document:
@@ -126,10 +130,10 @@ def read_config(config_path: Path | None) -> MatrixGame30Config:
     )
 
 
-def prepare_assets(config: MatrixGame30Config) -> None:
+def prepare_assets(config: MatrixGame30Config, weights_root: Path) -> None:
     """Prepare and verify the unmodified source checkout and distilled weights."""
     ensure_source_checkout(config)
-    ensure_checkpoint(config)
+    ensure_checkpoint(config, weights_root)
 
 
 def ensure_source_checkout(config: MatrixGame30Config) -> None:
@@ -137,10 +141,10 @@ def ensure_source_checkout(config: MatrixGame30Config) -> None:
     checkout = config.source_path
     if not checkout.exists():
         logger.info(
-            "downloading Matrix-Game 3.0 source checkout",
-            url=config.source_url,
-            revision=config.source_revision,
-            destination=str(checkout),
+            "downloading Matrix-Game 3.0 source checkout: url=%s revision=%s destination=%s",
+            config.source_url,
+            config.source_revision,
+            checkout,
         )
         checkout.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
@@ -175,7 +179,7 @@ def ensure_source_checkout(config: MatrixGame30Config) -> None:
         raise FileNotFoundError(f"Matrix interactive pipeline is missing: {required}")
 
 
-def ensure_checkpoint(config: MatrixGame30Config) -> None:
+def ensure_checkpoint(config: MatrixGame30Config, weights_root: Path) -> None:
     """Download and verify the pinned fast distilled checkpoint subset."""
     from huggingface_hub import snapshot_download
 
@@ -198,16 +202,16 @@ def ensure_checkpoint(config: MatrixGame30Config) -> None:
         return
     config.checkpoint_path.mkdir(parents=True, exist_ok=True)
     logger.info(
-        "downloading Matrix-Game 3.0 distilled checkpoint",
-        repo_id=config.checkpoint_repo_id,
-        revision=config.checkpoint_revision,
-        destination=str(config.checkpoint_path),
+        "downloading Matrix-Game 3.0 distilled checkpoint: repo=%s revision=%s destination=%s",
+        config.checkpoint_repo_id,
+        config.checkpoint_revision,
+        config.checkpoint_path,
     )
     snapshot_download(
         repo_id=config.checkpoint_repo_id,
         revision=config.checkpoint_revision,
         local_dir=config.checkpoint_path,
-        cache_dir=get_weights_path() / ".huggingface",
+        cache_dir=weights_root / ".huggingface",
         allow_patterns=list(_MODEL_ALLOW_PATTERNS),
     )
     missing = [str(path) for path in required if not path.is_file()]
@@ -233,11 +237,11 @@ def _example(root: Path, value: object, index: int) -> ExampleScene:
     return ExampleScene(image=image, prompt=prompt)
 
 
-def _source_path(value: object) -> Path:
-    """Resolve the source checkout under the Runtime weights directory."""
+def _source_path(value: object, weights_root: Path) -> Path:
+    """Resolve the source checkout under the caller's weights directory."""
     configured = os.environ.get(SOURCE_ENV)
     path = Path(configured if configured else str(value or "Matrix-Game")).expanduser()
-    candidate = path if path.is_absolute() else get_weights_path() / path
+    candidate = path if path.is_absolute() else weights_root / path
     return Path(os.path.abspath(candidate))
 
 

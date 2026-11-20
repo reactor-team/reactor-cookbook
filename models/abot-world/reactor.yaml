@@ -1,8 +1,8 @@
-$schema: reactor/v1
+$schema: reactor/v2
 
 model:
   name: abot-world
-  version: v0.1.0
+  version: v0.1.4
   description: |
     Play the distilled ABot-World model with uploaded images, prompts, and native keyboard controls.
   resources:
@@ -31,7 +31,7 @@ runtime:
       crf: 23
 
 build:
-  runtime_version: "3.2.5"
+  runtime_version: "3.10.0"
   python_requirements: requirements.txt
   cuda_version: "12.8.1"
   python_version: "3.12"
