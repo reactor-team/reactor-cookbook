@@ -16,7 +16,7 @@ from reactor_runtime import get_logger, get_weights_path
 from avatar_app import AvatarApp
 from avatar_contract import AvatarModel
 from liveavatar_assets import prepare_weights
-from liveavatar_model import DEFAULT_PROMPT, LiveAvatarModel
+from liveavatar_model import DEFAULT_LISTENING_PROMPT, DEFAULT_PROMPT, LiveAvatarModel
 
 logger = get_logger(__name__)
 
@@ -30,7 +30,8 @@ class LiveAvatar(AvatarApp):
         """Load LiveAvatar on the GPU from the mounted weights and render its warm-up blocks.
 
         ``config.yml`` keys: ``avatar`` (the default portrait; relative paths resolve against the upstream
-        source checkout), ``prompt``, ``seed``, ``width`` and ``height``, ``fp8``, ``warmup_blocks``.
+        source checkout), ``prompt``, ``listening_prompt``, ``audio_context_s``, ``seed``, ``width`` and ``height``,
+        ``fp8``, ``warmup_blocks``.
         """
         source = Path(os.environ.get("LIVEAVATAR_SOURCE", "/opt/liveavatar-source"))
         weights = prepare_weights(get_weights_path(), source)
@@ -45,6 +46,9 @@ class LiveAvatar(AvatarApp):
             width=int(config.get("width", 512)),
             height=int(config.get("height", 512)),
             prompt=str(config.get("prompt") or DEFAULT_PROMPT),
+            listening_prompt=config.get("listening_prompt", DEFAULT_LISTENING_PROMPT)
+            or None,
+            audio_context_s=float(config.get("audio_context_s", 4.0)),
             seed=int(config.get("seed", 420)),
             fp8=bool(config.get("fp8", True)),
             warmup_avatar=avatar,

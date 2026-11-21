@@ -119,7 +119,7 @@ participant joins and shows what flows between them.
 | `client/.env.local` | `REACTOR_RUNTIME_URL`, or `REACTOR_API_KEY` and `REACTOR_MODEL` | Where the avatar model runs |
 | `voice-agent/.env` | `LIVEKIT_*`, `OPENAI_API_KEY`, `AVATAR_AGENT_NAME` | The agent's project, model and name |
 | `voice-agent/.env` | `AVATAR_AGENT_VOICE` | The voice when a call names none |
-| `liveavatar-model/config.yml` | `fp8`, `prompt`, `avatar`, `width`/`height`, pacing | See the comments in the file |
+| `liveavatar-model/config.yml` | `fp8`, `prompt`, `listening_prompt`, `audio_context_s`, `avatar`, `width`/`height`, pacing | See the comments in the file |
 
 Every secret stays on a server: the page's server holds the LiveKit secret and, for Reactor, the API key; the browser
 only ever gets a room token.

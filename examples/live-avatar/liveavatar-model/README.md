@@ -123,7 +123,13 @@ warm-up, and how speech is paced into blocks. Each key is documented in place.
   audio encoder once per block; each step then compiles and is captured as a CUDA graph.
 - **Its own loop.** The app overrides `run()`: a block renders on a worker thread while commands, the speech
   pump and the playback reports run on the event loop, so `clear_buffer` lands mid-render.
-- **No listening pose.** LiveAvatar renders a block marked listening like any silent one.
+- **Quiet between utterances.** LiveAvatar was trained and evaluated on continuous speech, and on its speaking prompt
+  the face keeps moving in silence about two thirds as much as when it talks. Silent and listening blocks therefore
+  render on a listening prompt (`listening_prompt`), and the audio encoder reads 4 s of earlier speech with each block
+  (`audio_context_s`), so silence is encoded next to the speech before it, as upstream's whole-file encoding does.
+  Together they bring a silent block to under half the motion of a speech block, with speech unchanged. The prompt is
+  switched by copying its cached cross-attention keys into the buffers the captured steps read, so it costs nothing
+  per block.
 
 ## Tests
 

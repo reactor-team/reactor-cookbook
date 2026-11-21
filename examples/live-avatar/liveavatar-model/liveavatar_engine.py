@@ -68,7 +68,8 @@ class BlockEngine:
         lora: The LiveAvatar checkpoint directory (``liveavatar.safetensors``).
         height: Output height in pixels, a multiple of 64.
         width: Output width in pixels, a multiple of 64.
-        prompt: The scene and performance text the denoiser is conditioned on.
+        prompt: The scene and performance text the denoiser is conditioned on while the avatar speaks.
+        listening_prompt: The text for blocks rendered as listening, or ``None`` to use ``prompt`` for every block.
         seed: Seed of the clip noise and of upstream's rotary offsets.
         audio_context_s: Seconds of earlier audio the encoder reads before a block.
         device: The CUDA device.
@@ -83,8 +84,9 @@ class BlockEngine:
         height: int = 512,
         width: int = 512,
         prompt: str = "",
+        listening_prompt: str | None = None,
         seed: int = 420,
-        audio_context_s: float = 1.0,
+        audio_context_s: float = 4.0,
         device: str = "cuda:0",
     ) -> None:
         if height % 64 or width % 64:
@@ -95,6 +97,7 @@ class BlockEngine:
         self.height = height
         self.width = width
         self.prompt = prompt
+        self.listening_prompt = listening_prompt
         self.seed = seed
         self.audio_context = int(audio_context_s * ENCODER_RATE)
         self.device_name = device
@@ -107,7 +110,7 @@ class BlockEngine:
     def load(self, *, compile_dit: bool = False, fp8: bool = False) -> None:
         """Load the denoiser with the LiveAvatar weights merged, the VAE, wav2vec and the text encoder.
 
-        Encodes :attr:`prompt` once and leaves the text encoder on the CPU.
+        Encodes :attr:`prompt` and :attr:`listening_prompt` once and leaves the text encoder on the CPU.
 
         Args:
             compile_dit: Compile the denoiser's forward and the decoder, and capture each step as a CUDA graph.
@@ -206,7 +209,15 @@ class BlockEngine:
             window_tokens=self.cache_tokens,
             steps=SAMPLING_STEPS,
         )
-        self.fast.set_context(self.context[0])
+        self.fast.add_prompt("speaking", self.context[0])
+        if self.listening_prompt:
+            with torch.no_grad():
+                pipe.text_encoder.model.to(self.device)
+                listening = pipe.text_encoder([self.listening_prompt], self.device)
+                pipe.text_encoder.model.cpu()
+            torch.cuda.empty_cache()
+            self.fast.add_prompt("listening", listening[0])
+        self.fast.use_prompt("speaking")
         if fp8:
             quantize_blocks_fp8(pipe.noise_model)
         self._allocate_reference_cache()
@@ -340,12 +351,14 @@ class BlockEngine:
         """Video frames block number ``block`` of a clip-chain decodes to."""
         return BLOCK_FRAMES - FIRST_BLOCK_DROP if block == 0 else BLOCK_FRAMES
 
-    def render(self, audio: np.ndarray) -> np.ndarray:
+    def render(self, audio: np.ndarray, *, listening: bool = False) -> np.ndarray:
         """Render the next block from its audio.
 
         Args:
             audio: float32 mono at :data:`ENCODER_RATE`, ``BLOCK_FRAMES * ENCODER_SAMPLES_PER_FRAME``
                 samples, in [-1, 1]. The engine keeps the audio of earlier blocks as the encoder's context.
+            listening: Condition the block on :attr:`listening_prompt` rather than :attr:`prompt`, when one
+                was given.
 
         Returns:
             RGB uint8 ``(N, height, width, 3)``; ``N`` is :meth:`frames_for_block` of the block.
@@ -391,6 +404,9 @@ class BlockEngine:
             )
             latents = self._clip_noise[:, span]
             start = self.block * self.block_tokens
+            self.fast.use_prompt(
+                "listening" if listening and self.listening_prompt else "speaking"
+            )
             self.fast.encode_audio(
                 audio_input, (self.motion_frames, self.lat_motion_frames)
             )
