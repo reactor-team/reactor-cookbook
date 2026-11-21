@@ -1,7 +1,7 @@
 $schema: reactor/v2
 model:
   name: liveavatar
-  version: v0.4.0
+  version: v0.4.1
   description: |
     A talking avatar from one portrait that lip-syncs, live, to speech another participant streams
     to it, at 512x512 and 25 FPS on one B200. It joins a LiveKit room as a LiveKit avatar: speech

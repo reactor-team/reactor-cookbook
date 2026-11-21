@@ -7,6 +7,7 @@
 - How the face follows the voice
 - How the picture and the sound stay together
 - Interrupts and playback reports
+- Quiet between utterances
 - Keeping real time on one B200
 - Where the latency goes
 
@@ -52,7 +53,8 @@ The agent's speech arrives at 24 kHz. For each block the model half (`liveavatar
 Inside the transformer, a small audio encoder turns those per-frame features into audio tokens, and at twelve of the
 forty layers each latent frame's video tokens cross-attend to the audio tokens of that same latent frame (four video
 frames). That per-frame pairing is what moves the mouth with the sound: the frame shown at time *t* was generated from
-the speech at time *t*. Between utterances the block's speech is silence, and the model renders an idle, listening face.
+the speech at time *t*. Between utterances the block's speech is silence, and the model renders an idle, listening
+face (see "Quiet between utterances" below).
 
 ## How the picture and the sound stay together
 
@@ -82,8 +84,29 @@ The application half (`liveavatar-model/avatar_app.py`) never lets the two drift
   played, read off the playout clock) and `interrupted`. The agent uses it to know what the user heard, so its
   conversation history matches what was said.
 - `lk.playback_started` goes back when the first frame of an utterance plays, not when its first byte arrived.
-- `user_speaking_state` (data packets on `avatar.user_speaking_state`) marks idle blocks as listening. LiveAvatar has no
-  separate listening pose, so it renders them like any idle block.
+- `user_speaking_state` (data packets on `avatar.user_speaking_state`) marks idle blocks as listening. LiveAvatar
+  renders every idle block on its listening prompt already, so the flag changes nothing in the picture.
+
+## Quiet between utterances
+
+LiveAvatar was trained and evaluated on continuous speech; its paper loops the audio of long-video tests to avoid
+silence gaps. Left alone, its face keeps moving in silence as if it were still talking. Measured as the mean change
+between consecutive frames over three seeds and two portraits, a silent block moved about two thirds as much as a
+speech block, where upstream's own offline pipeline, run on the same audio, moves about half as much.
+
+Two settings in `liveavatar-model/config.yml` bring it below upstream:
+
+- **`listening_prompt`:** silent and listening blocks are conditioned on a text that asks for closed lips and a still
+  head, rather than on the speaking prompt, which asks for lively expressions and head movement. Speech blocks keep
+  the speaking prompt, and the switch shows no jump in or out of silence. Each prompt's cross-attention keys and values
+  are computed once at load and copied into the buffers the captured steps read, so switching costs nothing per block.
+- **`audio_context_s: 4`:** the audio encoder reads 4 s of earlier speech with each block. Upstream encodes a whole
+  file, so silence is encoded next to the speech around it; with 1 s, a block a second into a silence is encoded as
+  bare digital silence, and the face moves more. Of 1, 2, 4, 6 and 8 s, 4 s calmed silence the most.
+
+With both, a silent block moves under half as much as a speech block, and speech moves as before. Two other levers
+made silence move more and are not used: rendering silent blocks on a schedule that stays nearer to noise, and feeding
+the audio encoder zero features in place of silence (the model's "no audio" mode is a lively, talking face).
 
 ## Keeping real time on one B200
 

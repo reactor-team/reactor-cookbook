@@ -291,3 +291,49 @@ async def test_speech_resamples_to_the_encoders_block_without_an_edge() -> None:
     assert a.shape == b.shape == (BLOCK_SAMPLES * 2 // 3,)
     joined = np.concatenate([a, b])
     assert np.abs(np.diff(joined)).max() < 0.05
+
+
+class FakeEngine:
+    """The engine by shape: records whether each block was rendered as listening."""
+
+    width = height = 512
+    bound = True
+    block = 0
+
+    def __init__(self) -> None:
+        self.listening: list[bool] = []
+        self.timing = type(
+            "Timing",
+            (),
+            {"audio_ms": 0.0, "dit_ms": 0.0, "decode_ms": 0.0, "total_ms": 0.0},
+        )()
+
+    def render(self, audio: np.ndarray, *, listening: bool = False) -> np.ndarray:
+        self.listening.append(listening)
+        return np.zeros((BLOCK_FRAMES, 8, 8, 3), dtype=np.uint8)
+
+
+async def test_silent_and_listening_blocks_render_on_the_listening_prompt() -> None:
+    model = LiveAvatarModel()
+    engine = FakeEngine()
+    model.engine = engine  # type: ignore[assignment]  # the engine by shape
+    model.avatar_id = 1
+    for silent, listening in [
+        (False, False),
+        (True, False),
+        (True, True),
+        (False, True),
+    ]:
+        audio = (
+            np.zeros(BLOCK_SAMPLES, dtype=np.int16) if silent else voiced(BLOCK_SAMPLES)
+        )
+        model.generate(
+            AvatarInput(
+                audio=audio,
+                silent=silent,
+                listening=listening,
+                avatar=None,
+                avatar_id=1,
+            )
+        )
+    assert engine.listening == [False, True, True, True]

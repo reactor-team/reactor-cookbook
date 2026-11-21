@@ -33,6 +33,11 @@ DEFAULT_PROMPT = (
     "A person faces the camera and talks naturally, with clear lip movements, lively facial expressions "
     "and small, natural head movements. The background stays still. The lighting is soft and even."
 )
+DEFAULT_LISTENING_PROMPT = (
+    "A person faces the camera in complete silence, listening. The lips are closed and do not move, the jaw is "
+    "relaxed, and the head is still. Only the eyes blink now and then. The background stays still. The lighting "
+    "is soft and even."
+)
 
 
 class NoAvatar(Exception):
@@ -43,8 +48,8 @@ class LiveAvatarModel:
     """LiveAvatar behind ``load`` / ``generate`` / ``reset``.
 
     Holds the engine, the id of the portrait it bound, and the speech it last read, which the next
-    block resamples from. LiveAvatar has no listening pose: a block marked ``listening`` renders like
-    any silent one.
+    block resamples from. A block marked ``silent`` or ``listening`` renders on the listening prompt:
+    on the speaking prompt the face keeps moving as if it talked.
     """
 
     fps = FPS
@@ -64,6 +69,8 @@ class LiveAvatarModel:
         width: int = 512,
         height: int = 512,
         prompt: str = DEFAULT_PROMPT,
+        listening_prompt: str | None = DEFAULT_LISTENING_PROMPT,
+        audio_context_s: float = 4.0,
         seed: int = 420,
         compile_dit: bool = True,
         fp8: bool = False,
@@ -77,7 +84,10 @@ class LiveAvatarModel:
             source: The pinned upstream LiveAvatar checkout.
             width: Output width, a multiple of 64.
             height: Output height, a multiple of 64.
-            prompt: The scene and performance text every block is conditioned on.
+            prompt: The scene and performance text blocks with speech are conditioned on.
+            listening_prompt: The text silent and listening blocks are conditioned on, or ``None`` for
+                ``prompt`` on every block.
+            audio_context_s: Seconds of earlier speech the audio encoder reads with each block.
             seed: Seed of the clip noise.
             compile_dit: Compile the denoiser's forward with ``torch.compile``. The warm-up then pays the
                 compilation, so the first session does not.
@@ -92,7 +102,9 @@ class LiveAvatarModel:
             height=height,
             width=width,
             prompt=prompt,
+            listening_prompt=listening_prompt,
             seed=seed,
+            audio_context_s=audio_context_s,
         )
         engine.load(compile_dit=compile_dit, fp8=fp8)
         self.engine = engine
@@ -119,7 +131,10 @@ class LiveAvatarModel:
             self.avatar_id = input.avatar_id
             self._tail[:] = 0
         block = engine.block
-        frames = engine.render(self._to_encoder_rate(input.audio))
+        frames = engine.render(
+            self._to_encoder_rate(input.audio),
+            listening=input.silent or input.listening,
+        )
         t = engine.timing
         timing = {
             "audio_ms": t.audio_ms,

@@ -76,6 +76,8 @@ class FastForward:
         self._rope: dict[int, torch.Tensor] = {}
         self._cond_rope: dict[int, torch.Tensor] = {}
         self._cross_kv: list[tuple[torch.Tensor, torch.Tensor]] = []
+        self._prompts: dict[str, list[tuple[torch.Tensor, torch.Tensor]]] = {}
+        self._prompt: str | None = None
         self._attention = _attend
         layers = model.num_layers
         self.caches = [
@@ -116,8 +118,8 @@ class FastForward:
 
     # -- per clip and per prompt ----------------------------------------------------
 
-    def set_context(self, context: torch.Tensor) -> None:
-        """Cache each layer's cross-attention keys and values for the encoded prompt ``(L, 4096)``."""
+    def add_prompt(self, name: str, context: torch.Tensor) -> None:
+        """Cache each layer's cross-attention keys and values for an encoded prompt ``(L, 4096)``, as ``name``."""
         model = self.model
         padded = torch.cat(
             [
@@ -127,14 +129,31 @@ class FastForward:
         )
         with torch.no_grad(), torch.amp.autocast("cuda", dtype=self.dtype):
             text = model.text_embedding(padded[None])
-            self._cross_kv = []
+            kv = []
             for block in model.blocks:
                 attn = block.cross_attn
                 k = attn.norm_k(attn.k(text)).view(1, -1, self.heads, self.head_dim)
                 v = attn.v(text).view(1, -1, self.heads, self.head_dim)
-                self._cross_kv.append(
+                kv.append(
                     (k.to(self.dtype).contiguous(), v.to(self.dtype).contiguous())
                 )
+        self._prompts[name] = kv
+
+    def use_prompt(self, name: str) -> None:
+        """Condition the next steps on the prompt added as ``name``.
+
+        The keys and values are copied into the buffers every step reads, so captured graphs see the change.
+        """
+        if name == self._prompt:
+            return
+        source = self._prompts[name]
+        if not self._cross_kv:
+            self._cross_kv = [(k.clone(), v.clone()) for k, v in source]
+        else:
+            for (k, v), (k_src, v_src) in zip(self._cross_kv, source, strict=True):
+                k.copy_(k_src)
+                v.copy_(v_src)
+        self._prompt = name
 
     def set_reference(self, cond_cache: list[dict[str, torch.Tensor]]) -> None:
         """Take the reference keys and values upstream's prefill wrote, and reset every window.
