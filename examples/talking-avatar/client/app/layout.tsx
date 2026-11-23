@@ -4,7 +4,7 @@ import "@fontsource/ibm-plex-mono/500.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Live Avatar | Reactor",
+  title: "Talking Avatar | Reactor",
   description: "Talk to a voice agent through a real-time talking avatar served by Reactor.",
 };
 

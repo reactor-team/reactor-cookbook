@@ -34,7 +34,7 @@ const PHASE_TEXT: Record<Phase, string> = {
   ending: "Ending the call",
 };
 
-export function LiveAvatar() {
+export function TalkingAvatar() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
@@ -204,7 +204,7 @@ export function LiveAvatar() {
       <header className="topbar">
         <div className="brand">
           <img src="/brand/reactor-logo-white.svg" alt="Reactor" className="logo" />
-          <span className="product">Live Avatar</span>
+          <span className="product">Talking Avatar</span>
         </div>
         <div className="status" title={status ? `${status.avatar} · LiveKit: ${status.livekit ?? "not set"} · agent: ${status.agent ?? "not set"}` : ""}>
           <span className={`dot ${ready ? "is-ok" : ""}`} />

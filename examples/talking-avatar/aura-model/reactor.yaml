@@ -1,0 +1,36 @@
+$schema: reactor/v2
+model:
+  name: aura
+  version: v0.1.0
+runtime:
+  import: aura_app:AuraAvatar
+  config: config.yml
+  weights_path: ~/.cache/reactor_registry/aura
+  # A LiveKit room reaches the avatar the way LiveKit's avatar protocol does: speech as byte streams
+  # on lk.audio_stream, an interrupt as the lk.clear_buffer RPC, and the playback reports as RPC calls
+  # back to the sender. Data packets on avatar.<command> run the other commands
+  # (avatar.user_speaking_state).
+  livekit:
+    rpc:
+      - method: lk.clear_buffer
+        command: clear_buffer
+      - method: lk.playback_finished
+        message: playback_finished
+      - method: lk.playback_started
+        message: playback_started
+    topics: [avatar]
+    media_inputs:
+      lk.audio_stream: agent_audio
+build:
+  runtime_version: "3.11.9"
+  python_version: "3.12"
+  cuda_version: "12.8.1"
+  python_requirements: requirements.txt
+  python_indexes:
+    - https://download.pytorch.org/whl/cu128
+  system_packages: [ffmpeg, git, build-essential, libsndfile1]
+  runtime_env:
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+    OMP_NUM_THREADS: "8"
+    TOKENIZERS_PARALLELISM: "false"

@@ -1,0 +1,29 @@
+# The model: AURA-1.3B, one B200.
+#
+# The portrait a session starts from until `set_avatar` replaces it, relative to this folder. AURA crops it to the
+# training size closest to its aspect ratio: 576x576 for a square portrait.
+avatar: portrait.jpg
+# The scene and performance text every chunk is conditioned on (AURA's default).
+prompt: >-
+  A person is talking to the camera, with natural facial expressions and head movements.
+# Seconds of earlier speech Mimi reads with each chunk. AURA encodes a whole file, so each chunk's features are
+# computed next to the speech around them; here the speech before the chunk stands in for it.
+audio_context_s: 4
+seed: 42
+# Compile each transformer block. A 1.0 s chunk renders in about 0.61 s with it on one B200.
+compile: true
+# Chunks rendered at load: the compilation happens here, not in a session.
+warmup_blocks: 6
+
+# The application: how speech becomes chunks.
+#
+# Silent chunks after an utterance before the avatar counts as listening.
+listen_after_blocks: 1
+# A speech chunk quieter than this (int16 RMS) is marked silent.
+silence_rms: 100
+# Video still queued, in seconds, when the next silent chunk lands.
+idle_margin_s: 0.1
+# How far ahead of playout speech renders, in seconds: more than one 1.0 s chunk, so the next one is ready in time.
+speech_lead_s: 2.0
+# Drop the idle frames queued ahead of an utterance's first chunk, so the reply starts at once.
+cut_idle_for_speech: true

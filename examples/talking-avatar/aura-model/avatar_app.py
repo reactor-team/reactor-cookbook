@@ -39,12 +39,21 @@ once.
 stops, the last frame holds until the next block, the speech still queued is
 dropped, and ``playback_finished`` reports how far the utterance played. A
 block rendered for the cut speech is dropped when it lands.
+
+**Failures.** A session that cannot run does not start: ``set_avatar``
+refuses a portrait that is not a decodable image. When the model raises while
+a session runs, that session renders nothing more: the last frame holds,
+``avatar_failed`` tells its clients why, and the model is reset when the
+session ends, as after every session. The runtime stays up. Each portrait gets
+an id unique for the app's life, and the app tracks the one the model has
+bound, so a block carries the portrait whenever the model does not hold it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import io
+import itertools
 import json
 import time
 from collections import deque
@@ -121,6 +130,12 @@ class AvatarOutput(Output):
 
 class PlaybackStarted(ModelMessage):
     """Sent when the first frame of an utterance received on `agent_audio` plays on `main_video`."""
+
+
+class AvatarFailed(ModelMessage):
+    """Sent when the avatar cannot go on in this session; no more frames follow until the session ends."""
+
+    reason: str = MessageField(description="Why the avatar stopped.")
 
 
 class PlaybackFinished(ModelMessage):
@@ -252,15 +267,17 @@ class _Playout:
 class _Session:
     """Everything one session keeps."""
 
-    def __init__(self, avatar: bytes) -> None:
+    def __init__(self, avatar: bytes, avatar_id: int) -> None:
         self.active = False
         self.utterances: dict[str, _Utterance] = {}
         self.playout = _Playout()
         self.silent_run = 0
         self.user_speaking = False
         self.avatar = avatar
-        self.avatar_id = 1
-        self.applied_avatar_id: int | None = None
+        #: Unique across the app's sessions, so a portrait is never mistaken for another one the model bound.
+        self.avatar_id = avatar_id
+        #: The model failed in this session: nothing more renders until it ends.
+        self.failed = False
         #: Seconds a block takes to render, smoothed; paces the silent blocks.
         self.render_s = 0.5
         #: When the last block that carries speech ends on the playout clock.
@@ -337,7 +354,10 @@ class AvatarApp(ReactorApp):
 
     def _init_loop_state(self) -> None:
         self.clock = time.monotonic
-        self.session = _Session(self.default_avatar)
+        self._avatar_ids = itertools.count(1)
+        #: The portrait the model has bound, or ``None`` after a reset; only the render loop changes it.
+        self._bound_avatar_id: int | None = None
+        self.session = _Session(self.default_avatar, next(self._avatar_ids))
         self._epoch = 0
         self._wake = asyncio.Event()
         self._render_thread = ThreadPoolExecutor(
@@ -355,7 +375,11 @@ class AvatarApp(ReactorApp):
             plan = await self._next_plan()
             if plan is None:
                 continue
-            result = await self._render(plan)
+            try:
+                result = await self._render(plan)
+            except Exception as error:
+                await self._fail(plan.session, error)
+                continue
             await self._land(plan, result)
 
     async def _until_live(self) -> None:
@@ -365,6 +389,7 @@ class AvatarApp(ReactorApp):
             await asyncio.get_running_loop().run_in_executor(
                 self._render_thread, self.model.reset
             )
+            self._bound_avatar_id = None
         while not self._session_live():
             await self._sleep_until_woken(_MAX_WAIT_S)
 
@@ -397,7 +422,7 @@ class AvatarApp(ReactorApp):
     async def _land(self, plan: _Plan, result: AvatarResult) -> AvatarOutput | None:
         """Emit a rendered block, unless an interrupt or the session's end overtook it, and report it."""
         s = plan.session
-        s.applied_avatar_id = result.avatar_id
+        self._bound_avatar_id = result.avatar_id
         if plan.utterance is not None:
             plan.utterance.rendering -= plan.speech_samples
         speaks = plan.utterance is not None
@@ -413,7 +438,24 @@ class AvatarApp(ReactorApp):
         return out
 
     def _session_live(self) -> bool:
-        return self.session.active and self.connected.is_set()
+        return (
+            self.session.active and not self.session.failed and self.connected.is_set()
+        )
+
+    async def _fail(self, session: _Session, error: Exception) -> None:
+        """Stop rendering for ``session`` after a model failure and tell its clients why.
+
+        The runtime stays up: the session renders nothing more, holding its last frame, until its caller
+        ends it; the model is reset then, as after every session.
+        """
+        logger.error(
+            "the avatar model failed; this session renders nothing more", exc_info=error
+        )
+        if session is not self.session:
+            return
+        session.failed = True
+        self.output.flush(hold=True)
+        await self.send(AvatarFailed(reason=f"{type(error).__name__}: {error}"))
 
     async def _sleep_until_woken(self, timeout: float) -> None:
         try:
@@ -472,7 +514,7 @@ class AvatarApp(ReactorApp):
         listening: bool = False,
     ) -> _Plan:
         s = self.session
-        new_avatar = s.avatar_id != s.applied_avatar_id
+        new_avatar = s.avatar_id != self._bound_avatar_id
         model_input = AvatarInput(
             audio=audio,
             silent=silent,
@@ -672,7 +714,7 @@ class AvatarApp(ReactorApp):
             ) from exc
         s = self.session
         s.avatar = image.data
-        s.avatar_id += 1
+        s.avatar_id = next(self._avatar_ids)
         logger.info("portrait accepted", name=image.name, avatar_id=s.avatar_id)
         self._wake.set()
 
@@ -680,7 +722,7 @@ class AvatarApp(ReactorApp):
     async def on_session_started(self) -> None:
         """Start the session from the default portrait, with its speech pump and playback reports."""
         self._epoch += 1
-        self.session = _Session(self.default_avatar)
+        self.session = _Session(self.default_avatar, next(self._avatar_ids))
         self.session.active = True
         loop = asyncio.get_running_loop()
         self._session_tasks = [
@@ -700,7 +742,7 @@ class AvatarApp(ReactorApp):
         self._reset_model = True
         self.output.flush()
         cast(InputBuffer, self.media.agent_audio).clear()
-        self.session = _Session(self.default_avatar)
+        self.session = _Session(self.default_avatar, next(self._avatar_ids))
         self._wake.set()
 
 

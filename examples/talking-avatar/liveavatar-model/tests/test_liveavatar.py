@@ -8,8 +8,10 @@ arrives the way the LiveKit transport cuts a byte stream. Run from the model fol
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +22,13 @@ from reactor_runtime import ClientInfo, CommandError, InputFrame, UploadedFile
 from reactor_runtime.interface.internal.reactor_core import MediaOps
 from reactor_runtime.manifest import check_livekit_block, load_config
 
-from avatar_app import SAMPLE_RATE, AvatarSettings, PlaybackFinished, PlaybackStarted
+from avatar_app import (
+    SAMPLE_RATE,
+    AvatarFailed,
+    AvatarSettings,
+    PlaybackFinished,
+    PlaybackStarted,
+)
 from avatar_contract import AvatarInput, AvatarResult
 from liveavatar_app import LiveAvatar
 from liveavatar_model import BLOCK_SAMPLES, LiveAvatarModel, crop_portrait
@@ -273,6 +281,70 @@ async def test_user_speaking_state_makes_idle_blocks_listen() -> None:
     h.app.user_speaking_state(state="speaking")
     await h.step()
     assert h.model.blocks[-1].listening
+
+
+# -- failures -----------------------------------------------------------------------------------------------------
+
+
+async def until(condition: Callable[[], bool]) -> None:
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("timed out")
+
+
+async def test_a_model_failure_stops_the_session_and_not_the_runtime() -> None:
+    h = Harness()
+    app = h.app
+    render = h.model.generate
+    calls = 0
+
+    def fail_the_second_block(input: AvatarInput) -> AvatarResult:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("the model lost its portrait")
+        return render(input)
+
+    h.model.generate = fail_the_second_block
+    app.connected.set()
+    h.speak("s1", voiced(6 * BLOCK_SAMPLES))
+    loop = asyncio.create_task(app.run())
+    try:
+        await until(lambda: any(isinstance(m, AvatarFailed) for m in h.sent))
+        failed = next(m for m in h.sent if isinstance(m, AvatarFailed))
+        assert failed.reason == "RuntimeError: the model lost its portrait"
+        assert not loop.done() and h.flushes[-1] is True
+        await asyncio.sleep(0.1)
+        assert calls == 2
+
+        await app.on_session_ended()
+        await app.on_session_started()
+        await until(lambda: calls > 2)
+        assert h.model.resets == 1
+        assert h.model.blocks[-1].avatar == b"portrait"
+    finally:
+        loop.cancel()
+        for task in app._session_tasks:
+            task.cancel()
+
+
+async def test_a_new_session_after_a_reset_sends_its_portrait() -> None:
+    h = Harness()
+    await h.step()
+    await h.step()
+    assert h.model.blocks[0].avatar is not None and h.model.blocks[1].avatar is None
+    await h.app.on_session_ended()
+    await h.app.on_session_started()
+    h.app.connected.set()
+    await h.app._until_live()
+    assert h.model.resets == 1
+    await h.step()
+    assert h.model.blocks[-1].avatar == b"portrait"
+    assert h.model.blocks[-1].avatar_id != h.model.blocks[0].avatar_id
+    for task in h.app._session_tasks:
+        task.cancel()
 
 
 # -- the model half's CPU helpers ---------------------------------------------------------------------------------
