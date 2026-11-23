@@ -8,7 +8,7 @@ const sans = Host_Grotesk({ subsets: ["latin"], weight: ["400", "500", "700"], v
 const mono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
-  title: "Endless Livestream",
+  title: "Pika Endless Livestream",
   description: "An endless live video stream on Pika H3 Flex, powered by Reactor.",
 };
 

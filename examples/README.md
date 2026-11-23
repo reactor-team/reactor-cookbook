@@ -22,7 +22,7 @@ Looking for the one reference frontend per API model — the templates
   OpenAI Realtime speaks through AURA, a real-time talking avatar on one B200, with
   LiveAvatar as an alternative model, and the agent, the page and a setup skill in
   one folder.
-- [`endless-livestream`](./endless-livestream): a 24/7-style live channel on
+- [`pika-endless-livestream`](./pika-endless-livestream): a 24/7-style live channel on
   Pika H3 Flex — describe a show, and a Claude showrunner and director keep
   queuing clips ahead of the playhead with frame continuity, reference inputs,
   and live steering.

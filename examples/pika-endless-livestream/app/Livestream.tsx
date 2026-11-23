@@ -549,7 +549,7 @@ function Stream() {
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/reactor-wordmark-white.svg" alt="Reactor" />
             <span className="divider" aria-hidden="true" />
-            <h1>Endless Livestream</h1>
+            <h1>Pika Endless Livestream</h1>
           </div>
 
           <div className="controls">

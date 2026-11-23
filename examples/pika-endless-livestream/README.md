@@ -1,4 +1,4 @@
-# Endless Livestream (Pika H3 Flex on Reactor)
+# Pika Endless Livestream (Pika H3 Flex on Reactor)
 
 A bare-bones endless livestream on [Pika H3 Flex](https://docs.reactor.inc). Connect
 to the model, turn autoplay on, and keep queuing clips so a built clip is always
