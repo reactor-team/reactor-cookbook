@@ -226,3 +226,7 @@ textarea:focus-visible, button:focus-visible, input:focus-visible { outline: 2px
 .keys-drop summary em { font-style: normal; font-size: 10px; letter-spacing: 0.1em; color: var(--faint); }
 .keys-drop .keys-bar { border-bottom: none; padding: 6px 0 4px; }
 .stage-ready .api-note { font-size: 13px; color: var(--faint); max-width: 420px; }
+.key.on-server em { color: var(--accent); }
+.key-note { height: 36px; display: flex; align-items: center; padding: 0 10px; border-radius: 8px; border: 1px dashed var(--line-3); color: var(--muted); font-size: 13px; }
+.keys-set { margin: 0; color: var(--muted); display: flex; gap: 8px; align-items: baseline; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.keys-set em { font-style: normal; font-size: 10px; letter-spacing: 0.1em; color: var(--accent); }

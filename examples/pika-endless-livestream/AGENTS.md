@@ -18,8 +18,9 @@ prompt, and the page keeps clips queued ahead of the playhead on either Reactor 
 ## Rules
 
 - Keys: `REACTOR_API_KEY`, `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` live in `.env.local` and are read only by
-  route handlers under `app/api/`. A key pasted in the page travels in the `x-*-api-key` headers to those same
-  handlers and overrides the environment. Never call Reactor, Anthropic or OpenAI from the browser with a key,
+  route handlers under `app/api/`. A key the server has shows as set with no input; a key it
+  lacks can be pasted in the page and travels in the `x-*-api-key` headers to those same handlers. A pasted
+  key is never sent for a key the server has. Never call Reactor, Anthropic or OpenAI from the browser with a key,
   and never commit `.env.local`.
 - Session JWTs are minted in `app/api/token/route.ts` for `reactor/pika-h3-flex` only, one per page load (or
   per Reactor key). Keep that the only streaming auth path. `app/api/generations` always sends that model,

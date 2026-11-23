@@ -37,11 +37,18 @@ export function saveKeys(keys: Keys) {
   }
 }
 
+// Keys the server has in its environment. A key set there has no field, so a
+// copy saved in the tab earlier is never sent: the server's key wins.
+let onServer: Partial<Record<"reactor" | "anthropic" | "openai", boolean>> = {};
+export function setServerKeys(keys: typeof onServer) {
+  onServer = keys;
+}
+
 /** Headers carrying the pasted keys to this app's route handlers. */
 export function keyHeaders(): Record<string, string> {
   const h: Record<string, string> = { [KEY_HEADERS.writer]: current.writer };
-  if (current.reactor) h[KEY_HEADERS.reactor] = current.reactor;
-  if (current.anthropic) h[KEY_HEADERS.anthropic] = current.anthropic;
-  if (current.openai) h[KEY_HEADERS.openai] = current.openai;
+  if (current.reactor && !onServer.reactor) h[KEY_HEADERS.reactor] = current.reactor;
+  if (current.anthropic && !onServer.anthropic) h[KEY_HEADERS.anthropic] = current.anthropic;
+  if (current.openai && !onServer.openai) h[KEY_HEADERS.openai] = current.openai;
   return h;
 }

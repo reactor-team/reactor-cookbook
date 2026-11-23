@@ -10,7 +10,7 @@ import {
 } from "@reactor-models/pika-h3-flex";
 import { InputsPanel } from "./InputsPanel";
 import { KeysBar, type ServerKeys } from "./KeysBar";
-import { EMPTY_KEYS, keyHeaders, loadKeys, saveKeys, type Keys, type Writer } from "./lib/keys";
+import { EMPTY_KEYS, keyHeaders, loadKeys, saveKeys, setServerKeys as setServerKeysInHeaders, type Keys, type Writer } from "./lib/keys";
 import { EXAMPLES, exampleInputs, type Example } from "./lib/examples";
 import { RECENT_PROMPTS, type ClipFormat, type DirectorRequest } from "./lib/director";
 import { EMPTY_INPUTS, frameAlignmentLine, frameSet, hasReferences, referenceList, thumbnail, type Inputs, type Item } from "./lib/inputs";
@@ -167,7 +167,11 @@ function Stream() {
     setKeys(loadKeys());
     void fetch("/api/keys", { cache: "no-store" })
       .then((r) => r.json() as Promise<ServerKeys>)
-      .then(setServerKeys)
+      .then((server) => {
+        setServerKeysInHeaders(server);
+        token = null;
+        setServerKeys(server);
+      })
       .catch(() => setServerKeys(null));
   }, []);
 

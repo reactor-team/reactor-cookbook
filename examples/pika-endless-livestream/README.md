@@ -16,11 +16,13 @@ pnpm dev                     # http://127.0.0.1:3000
 
 Describe a show or story, or pick one of the **Examples**, and press **Start live stream**. While live, type a direction and press **Steer**.
 
-Keys the server doesn't have get a field at the top of the panel. Keys pasted there stay in that browser tab
+The **API keys** dropdown at the top of the panel lists the Reactor, Claude and OpenAI keys. A key set on
+the server (`.env`, `.env.local`, or the host's environment) shows as set, with no input, and wins over
+anything pasted. A key the server lacks gets a field. Pasted keys stay in that browser tab
 (`sessionStorage`) and go only to this app's own route handlers. The Reactor key is still exchanged for a
-session token on the server. A key set in the server's environment gets no field, so a hosted copy with
-every key set shows no key inputs. On a public deployment, anyone who opens the page then spends on those
-keys, so put it behind protection. **Reset** ends the stream and starts over, for trying another example.
+session token on the server. With all three keys set on the server, the page only says so. On a public
+deployment, anyone who opens the page spends on those keys, so put it behind protection. **Reset** ends the
+stream and starts over, for trying another example.
 
 ## Streaming API or Generations API
 
