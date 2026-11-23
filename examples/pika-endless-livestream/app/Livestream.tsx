@@ -966,22 +966,25 @@ function Stream() {
           </div>
 
           <div className="controls">
-            <div role="radiogroup" aria-label="Reactor API" className="tabs">
-              {(["streaming", "generations"] as const).map((a) => (
-                <button
-                  key={a}
-                  type="button"
-                  role="radio"
-                  aria-checked={api === a}
-                  aria-selected={api === a}
-                  className="tab mono"
-                  disabled={live || busy}
-                  title={a === "streaming" ? "One realtime session; clips continue each other" : "Each clip is its own generation; the page plays them back to back"}
-                  onClick={() => setApi(a)}
-                >
-                  {a === "streaming" ? "Streaming API" : "Generations API"}
-                </button>
-              ))}
+            <div className="api-switch">
+              <div role="radiogroup" aria-label="Reactor API" className="tabs">
+                {(["streaming", "generations"] as const).map((a) => (
+                  <button
+                    key={a}
+                    type="button"
+                    role="radio"
+                    aria-checked={api === a}
+                    aria-selected={api === a}
+                    className="tab mono"
+                    disabled={live || busy}
+                    title={a === "streaming" ? "One realtime session; clips continue each other" : "Each clip is its own generation; the page plays them back to back"}
+                    onClick={() => setApi(a)}
+                  >
+                    {a === "streaming" ? "Streaming API" : "Generations API"}
+                  </button>
+                ))}
+              </div>
+              <ApiInfo />
             </div>
             <dl className="stats">
               <div>
@@ -1241,3 +1244,51 @@ const API_NOTES: Record<Api, string> = {
   generations:
     "Generations API: each clip is its own generation job. The page plays the finished videos in order, joined by cuts, and with Enhance prompt on it checks each clip's last frame and retakes a broken one before it plays.",
 };
+
+const DOCS = {
+  sessions: "https://docs.reactor.inc/concepts/sessions",
+  generations: "https://docs.reactor.inc/generations/overview",
+  model: "https://docs.reactor.inc/model-api-reference/pika-h3-flex/overview",
+};
+
+/** An ⓘ beside the API switch: hover, focus or click for what each API does, with links to the docs. */
+function ApiInfo() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
+  return (
+    <div ref={ref} className={`api-info${open ? " open" : ""}`}>
+      <button type="button" className="info-btn" aria-label="About the streaming and generations APIs" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        i
+      </button>
+      <div className="info-pop" role="dialog" aria-label="Streaming API and Generations API">
+        <p>
+          <strong>Streaming API</strong>: one realtime WebRTC session with the model. It plays each clip the moment it
+          is built, and every clip continues the one before, so the stream is one continuous take.{" "}
+          <a href={DOCS.sessions} target="_blank" rel="noreferrer">Sessions docs ↗</a>
+        </p>
+        <p>
+          <strong>Generations API</strong>: each clip is its own HTTP job that returns a video file. This page plays
+          the finished clips in order, joined by cuts. Because each clip arrives before it plays, the page can check
+          its last frame and retake a broken clip.{" "}
+          <a href={DOCS.generations} target="_blank" rel="noreferrer">Generations docs ↗</a>
+        </p>
+        <p className="info-foot">
+          Same model, writers and inputs either way.{" "}
+          <a href={DOCS.model} target="_blank" rel="noreferrer">Pika H3 Flex docs ↗</a>
+        </p>
+      </div>
+    </div>
+  );
+}
