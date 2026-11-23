@@ -9,9 +9,13 @@ import {
   usePikaH3FlexTrack,
 } from "@reactor-models/pika-h3-flex";
 import { InputsPanel } from "./InputsPanel";
+import { KeysBar, type ServerKeys } from "./KeysBar";
+import { EMPTY_KEYS, keyHeaders, loadKeys, saveKeys, type Keys, type Writer } from "./lib/keys";
+import { EXAMPLES, exampleInputs, type Example } from "./lib/examples";
 import { RECENT_PROMPTS, type ClipFormat, type DirectorRequest } from "./lib/director";
 import { EMPTY_INPUTS, frameAlignmentLine, frameSet, hasReferences, referenceList, thumbnail, type Inputs, type Item } from "./lib/inputs";
 import type { Story } from "./lib/story";
+import type { Verdict } from "./lib/check";
 
 // How many clips to keep queued (building or built) ahead of the one playing.
 const CLIPS_AHEAD = 2;
@@ -19,13 +23,20 @@ const CLIPS_AHEAD = 2;
 const CLIP_SECONDS = 10 as const;
 // Ask for the next episode when this many beats of the current one are left.
 const PREFETCH_AT = 4;
-const DEFAULT_PROMPT =
-  "A dog news show: a golden retriever anchor covers the neighborhood's biggest stories, with the weather and a reporter on the scene.";
+const DEFAULT_PROMPT = EXAMPLES[0].concept;
 
-// One JWT per page load. A session can only be driven by the token that created it.
+// Which Reactor API runs the stream. Streaming: one realtime session whose
+// playout queue plays each clip as soon as it is built, with latent continuation
+// between clips. Generations: each clip is its own POST /generations, and the
+// page plays the finished videos back to back.
+type Api = "streaming" | "generations";
+// How often to check on a generation that is still building.
+const POLL_MS = 2000;
+
+// One JWT per page load (or per Reactor key). A session can only be driven by the token that created it.
 let token: Promise<string> | null = null;
 function getToken(): Promise<string> {
-  token ??= fetch("/api/token", { cache: "no-store" }).then(async (res) => {
+  token ??= fetch("/api/token", { cache: "no-store", headers: keyHeaders() }).then(async (res) => {
     const data = (await res.json()) as { jwt?: string; error?: string };
     if (!res.ok || !data.jwt) {
       token = null;
@@ -46,6 +57,17 @@ type Plan = { story: Story; episode: number; index: number };
 type Frames = { first: Item | null; last: Item | null };
 /** A clip whose prompt is written and waits only for its inputs to be sent. */
 type Prepared = { from: string | null; format: ClipFormat; inputs: Inputs; plan: Plan | null; text: string; steer: string };
+/** A clip on the generation API: queued, then built (url set) once its video is downloaded and checked. */
+type GenClip = {
+  prompt: string;
+  seconds: number;
+  prep: Prepared;
+  url?: string;
+  lastFrame?: string;
+  score?: number;
+  /** A second take, written after the first failed its check. */
+  retake?: { verdict: Verdict; first: { url: string; lastFrame?: string; score: number } };
+};
 
 export function Livestream() {
   return (
@@ -66,6 +88,10 @@ function Stream() {
   // Pika's raw inputs, and which kind the panel shows.
   const [inputs, setInputs] = useState<Inputs>(EMPTY_INPUTS);
   const [tab, setTab] = useState<"references" | "frames">("references");
+  const [exampleId, setExampleId] = useState<string | null>(EXAMPLES[0].id);
+  const [loadingExample, setLoadingExample] = useState(false);
+  const [api, setApi] = useState<Api>("streaming");
+  const [keys, setKeys] = useState<Keys>(EMPTY_KEYS);
   const [live, setLive] = useState(false);
   const [starting, setStarting] = useState(false);
   const [log, setLog] = useState<string[]>([]);
@@ -120,9 +146,30 @@ function Stream() {
   const fetchingNext = useRef(false);
   const beatOf = useRef(new Map<string, BeatRef>());
 
+  // The generation API's own queue: clips in the order they will play, each
+  // one's video once built, uploads as file ids, and which run a poll belongs to.
+  const genVideo = useRef<HTMLVideoElement>(null);
+  const genOrder = useRef<string[]>([]);
+  const genClips = useRef(new Map<string, GenClip>());
+  const genUploads = useRef(new Map<string, string>());
+  const genPlaying = useRef<string | null>(null);
+  const genRun = useRef(0);
+  // The last frame of the latest clip that passed, for the check's body comparison.
+  const genPrevFrame = useRef<string | undefined>(undefined);
+
   // The hook returns new functions every render; read them through a ref.
-  const latest = useRef({ model, prompt, enhance, live, inputs });
-  latest.current = { model, prompt, enhance, live, inputs };
+  const latest = useRef({ model, prompt, enhance, live, inputs, api });
+  latest.current = { model, prompt, enhance, live, inputs, api };
+
+  // Which keys .env.local has, so the page can tell whether a writer will run.
+  const [serverKeys, setServerKeys] = useState<ServerKeys | null>(null);
+  useEffect(() => {
+    setKeys(loadKeys());
+    void fetch("/api/keys", { cache: "no-store" })
+      .then((r) => r.json() as Promise<ServerKeys>)
+      .then(setServerKeys)
+      .catch(() => setServerKeys(null));
+  }, []);
 
   const say = (line: string) =>
     setLog((l) => [`${new Date().toLocaleTimeString()}  ${line}`, ...l].slice(0, 200));
@@ -224,7 +271,8 @@ function Stream() {
   // motion, camera, sound and the references across the cut, and needs that
   // clip built first. A clip with frames starts fresh and needs no wait.
   useEffect(() => {
-    if (!live || model.status !== "ready" || enqueuing || ahead.length >= CLIPS_AHEAD) return;
+    const engineReady = api === "generations" || model.status === "ready";
+    if (!live || !engineReady || enqueuing || ahead.length >= CLIPS_AHEAD) return;
     const from = tip.current;
     const next = prepared.current;
     if (!next || next.from !== from) {
@@ -234,7 +282,7 @@ function Stream() {
     if (next.format.kind !== "fl2va" && from && !built.current.has(from)) return;
     prepared.current = null;
     void send(next);
-  }, [live, model.status, enqueuing, ahead.length, builtTick, prepTick]);
+  }, [live, api, model.status, enqueuing, ahead.length, builtTick, prepTick]);
 
   /** Write the next clip's prompt now, against the inputs as they are now. */
   async function prepare(from: string | null) {
@@ -252,6 +300,7 @@ function Stream() {
   }
 
   async function send(next: Prepared) {
+    if (latest.current.api === "generations") return sendGeneration(next);
     setEnqueuing(true);
     const m = latest.current.model;
     const { format, text, plan, from } = next;
@@ -283,6 +332,274 @@ function Stream() {
       say(`queued  ${short(id)}${from && format.kind === "ref2va" && format.tail ? ` (continues ${short(from)})` : ""}${what}${plan ? ` · ep ${plan.episode} beat ${plan.index + 1}` : ""}`);
     }
     setEnqueuing(false);
+  }
+
+  /** Start one clip on the generation API and watch it until its video is ready. */
+  async function sendGeneration(next: Prepared) {
+    setEnqueuing(true);
+    const run = genRun.current;
+    const { format, text, plan } = next;
+    const started = performance.now();
+    try {
+      const id = await createGeneration(next, text);
+      if (run !== genRun.current) return;
+      if (!id) {
+        setLive(false);
+        return;
+      }
+      recent.current = [...recent.current, text].slice(-RECENT_PROMPTS);
+      applied.current = next.steer;
+      queuedAt.current.set(id, started);
+      if (plan) beatOf.current.set(id, { episode: plan.episode, index: plan.index, segment: plan.story.beats[plan.index].segment });
+      genOrder.current.push(id);
+      setAhead((a) => [...a, id]);
+      showGenQueue();
+      say(`queued  ${short(id)} (generation)${format.kind === "fl2va" ? ` · frames: ${format.frames}` : ""}${plan ? ` · ep ${plan.episode} beat ${plan.index + 1}` : ""}`);
+      void watchGeneration(id, run);
+    } catch (err) {
+      if (run !== genRun.current) return;
+      setError(err instanceof Error ? err.message : "The generation request failed.");
+      say("generation request failed, stopping");
+      setLive(false);
+    } finally {
+      setEnqueuing(false);
+    }
+  }
+
+  /** POST one generation. Returns its id, or null when Reactor refused it (the reason goes to the error line). */
+  async function createGeneration(next: Prepared, text: string): Promise<string | null> {
+    const { format } = next;
+    const prompt = format.kind === "fl2va" ? `${frameAlignmentLine(format.frames, CLIP_SECONDS)}\n\n${text}` : text;
+    const input = { prompt, seconds: CLIP_SECONDS, aspect: "16:9", ...(await generationFiles(next)) };
+    const res = await fetch("/api/generations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...keyHeaders() },
+      body: JSON.stringify({ input }),
+    });
+    const data = (await res.json().catch(() => null)) as { id?: string; error?: string; message?: string } | null;
+    if (!res.ok || !data?.id) {
+      const reason = data?.message ?? data?.error ?? `status ${res.status}`;
+      setError(`The generation API refused the clip: ${reason}`);
+      say(`generation refused (${reason})`);
+      return null;
+    }
+    genClips.current.set(data.id, { prompt, seconds: CLIP_SECONDS, prep: { ...next, text } });
+    return data.id;
+  }
+
+  /** Poll a generation; once it succeeds, download the video so playback never waits on the network. */
+  async function watchGeneration(id: string, run: number) {
+    while (run === genRun.current) {
+      await new Promise((r) => setTimeout(r, POLL_MS));
+      if (run !== genRun.current) return;
+      const res = await fetch(`/api/generations/${id}`, { cache: "no-store", headers: keyHeaders() }).catch(() => null);
+      if (!res) continue;
+      const data = (await res.json().catch(() => null)) as {
+        status?: string;
+        files?: { name: string; url: string }[] | null;
+        error?: { code: string; message: string } | string | null;
+      } | null;
+      if (!res.ok && res.status !== 429 && res.status < 500) {
+        failGeneration(id, typeof data?.error === "string" ? data.error : `status ${res.status}`);
+        return;
+      }
+      if (data?.status === "failed") {
+        failGeneration(id, typeof data.error === "object" && data.error ? data.error.message : "failed");
+        return;
+      }
+      if (data?.status !== "succeeded") continue;
+      const file = data.files?.find((f) => /\.(mp4|webm|mov)$/i.test(f.name)) ?? data.files?.[0];
+      const blob = file ? await fetch(file.url).then((r) => (r.ok ? r.blob() : null)).catch(() => null) : null;
+      if (run !== genRun.current) return;
+      if (!blob) {
+        failGeneration(id, "the video could not be downloaded");
+        return;
+      }
+      const clip = genClips.current.get(id);
+      if (!clip) return;
+      clip.url = URL.createObjectURL(blob);
+      clip.lastFrame = data.files?.find((f) => /last_frame\.(png|jpe?g|webp)$/i.test(f.name))?.url;
+      say(`built   ${short(id)}  (${((performance.now() - (queuedAt.current.get(id) ?? performance.now())) / 1000).toFixed(1)}s after request)`);
+      await checkGeneration(id, run);
+      return;
+    }
+  }
+
+  /**
+   * The shot check: with a story and a writer, judge the clip's last frame
+   * against its beat and cast before it plays. A failed first take is written
+   * again once, aimed at what failed; the better-scored take plays.
+   */
+  async function checkGeneration(id: string, run: number) {
+    const clip = genClips.current.get(id);
+    if (!clip) return;
+    const plan = clip.prep.plan;
+    if (!latest.current.enhance || !plan || !clip.lastFrame) return finishGeneration(id);
+    const beat = plan.story.beats[plan.index];
+    const onScreen = new Set(beat.on_screen.map((l) => l.toLowerCase()));
+    const cast = [...plan.story.cast, ...plan.story.props.map((p) => ({ label: p.label, look: p.look }))]
+      .filter((c) => onScreen.has(c.label.toLowerCase()))
+      .map((c) => ({ label: c.label, look: c.look }));
+    const started = performance.now();
+    const res = await fetch("/api/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...keyHeaders() },
+      body: JSON.stringify({ beat: beat.beat, prompt: clip.prompt, cast, frame: clip.lastFrame, earlier: genPrevFrame.current }),
+    }).catch(() => null);
+    const data = (await res?.json().catch(() => null)) as { verdict?: Verdict; error?: string } | null;
+    if (run !== genRun.current) return;
+    const verdict = data?.verdict;
+    if (!verdict) {
+      say(`check: ${data?.error ?? "no verdict"}; playing as built`);
+      return finishGeneration(id);
+    }
+    clip.score = verdict.score;
+    const secs = ((performance.now() - started) / 1000).toFixed(1);
+    if (clip.retake) {
+      // Second take: keep whichever take scored higher.
+      const first = clip.retake.first;
+      if (!verdict.passed && first.score > verdict.score) {
+        URL.revokeObjectURL(clip.url!);
+        clip.url = first.url;
+        clip.lastFrame = first.lastFrame;
+        say(`check   ${short(id)} retake ${verdict.score}/5 < first take ${first.score}/5: keeping the first (${secs}s)`);
+      } else {
+        URL.revokeObjectURL(first.url);
+        say(`check   ${short(id)} retake ${verdict.passed ? "passed" : "failed"} ${verdict.score}/5: ${verdict.reason} (${secs}s)`);
+      }
+      return finishGeneration(id);
+    }
+    if (verdict.passed || !verdict.missed) {
+      say(`check   ${short(id)} passed ${verdict.score}/5 (${secs}s)`);
+      return finishGeneration(id);
+    }
+    say(`check   ${short(id)} FAILED (${verdict.missed}) ${verdict.score}/5: ${verdict.reason} · retaking`);
+    const text = await direct(clip.prep.steer, plan, clip.prep.format, { prompt: clip.prompt, missed: verdict.missed, reason: verdict.reason });
+    if (run !== genRun.current) return;
+    const retakeId = await createGeneration(clip.prep, text).catch(() => null);
+    if (run !== genRun.current) return;
+    if (!retakeId) {
+      say(`retake for ${short(id)} could not start; playing the first take`);
+      return finishGeneration(id);
+    }
+    // The retake takes the first take's place in line.
+    const second = genClips.current.get(retakeId)!;
+    second.retake = { verdict, first: { url: clip.url!, lastFrame: clip.lastFrame, score: verdict.score } };
+    genClips.current.delete(id);
+    genOrder.current = genOrder.current.map((x) => (x === id ? retakeId : x));
+    queuedAt.current.set(retakeId, queuedAt.current.get(id) ?? performance.now());
+    const b = beatOf.current.get(id);
+    if (b) beatOf.current.set(retakeId, b);
+    setAhead((a) => a.map((x) => (x === id ? retakeId : x)));
+    showGenQueue();
+    say(`queued  ${short(retakeId)} (retake of ${short(id)})`);
+    void watchGeneration(retakeId, run);
+  }
+
+  /** A clip is ready to play: count its build time and hand it to the player. */
+  function finishGeneration(id: string) {
+    const clip = genClips.current.get(id);
+    if (!clip) return;
+    if (clip.lastFrame) genPrevFrame.current = clip.lastFrame;
+    built.current.add(id);
+    const t = queuedAt.current.get(id);
+    if (t) setBuildTimes((b) => [...b, (performance.now() - t) / 1000].slice(-20));
+    setBuiltTick((n) => n + 1);
+    showGenQueue();
+    playNextGeneration();
+  }
+
+  function failGeneration(id: string, reason: string) {
+    genOrder.current = genOrder.current.filter((x) => x !== id);
+    genClips.current.delete(id);
+    setAhead((a) => a.filter((x) => x !== id));
+    setError(`A clip failed to build: ${reason}`);
+    say(`FAILED  ${short(id)}: ${reason}`);
+    showGenQueue();
+    playNextGeneration();
+  }
+
+  /** Play the next clip in order once it is built. A later clip never jumps ahead of an earlier one. */
+  function playNextGeneration() {
+    const el = genVideo.current;
+    const id = genOrder.current[0];
+    if (!el || genPlaying.current || !id) return;
+    const clip = genClips.current.get(id);
+    if (!clip?.url || !built.current.has(id)) return;
+    genOrder.current.shift();
+    genPlaying.current = id;
+    el.src = clip.url;
+    void el.play().catch(() => {
+      // No sound without a gesture: play muted and offer unmute.
+      el.muted = true;
+      setSoundBlocked(true);
+      void el.play();
+    });
+    setPlaying({ id, prompt: clip.prompt, seconds: clip.seconds });
+    setAired((n) => n + 1);
+    setAhead((a) => a.filter((x) => x !== id));
+    showGenQueue();
+    say(`playing ${short(id)}`);
+  }
+
+  function onGenerationEnded() {
+    const id = genPlaying.current;
+    genPlaying.current = null;
+    if (id) {
+      say(`done    ${short(id)}`);
+      const url = genClips.current.get(id)?.url;
+      genClips.current.delete(id);
+      // The element keeps showing the last frame until the next clip loads.
+      if (url) setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    const next = genOrder.current[0];
+    if (latest.current.live && (!next || !built.current.has(next))) setStalls((n) => n + 1);
+    playNextGeneration();
+  }
+
+  /** The sidebar's Ready and Building lists, from the generation queue. */
+  function showGenQueue() {
+    const items = genOrder.current.map((clip_id) => ({ clip_id, ...genClips.current.get(clip_id)! })).filter((c) => c.prompt);
+    setReady(items.filter((c) => built.current.has(c.clip_id)).map(({ clip_id, prompt, seconds }) => ({ clip_id, prompt, seconds })));
+    setBuilding(items.filter((c) => !built.current.has(c.clip_id)).map(({ clip_id, prompt, seconds }) => ({ clip_id, prompt, seconds })));
+  }
+
+  /** Upload a file for the generation API once: reserve it, then PUT the bytes to the presigned URL. */
+  async function uploadForGeneration(item: Item): Promise<string> {
+    const cached = genUploads.current.get(item.id);
+    if (cached) return cached;
+    const { file } = item;
+    const res = await fetch("/api/files", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...keyHeaders() },
+      body: JSON.stringify({ name: file.name, size: file.size, mime_type: file.type }),
+    });
+    const data = (await res.json().catch(() => null)) as { file_id?: string; presigned_url?: string; error?: string } | null;
+    if (!res.ok || !data?.file_id || !data.presigned_url) throw new Error(`Could not upload ${file.name}: ${data?.error ?? res.status}`);
+    const put = await fetch(data.presigned_url, { method: "PUT", body: file, headers: { "Content-Type": file.type } });
+    if (!put.ok) throw new Error(`Could not upload ${file.name}.`);
+    genUploads.current.set(item.id, data.file_id);
+    return data.file_id;
+  }
+
+  /** The generation input's file fields: frames, or references (never both). */
+  async function generationFiles(next: Prepared): Promise<Record<string, unknown>> {
+    const { format, inputs: i } = next;
+    const fields: Record<string, unknown> = {};
+    if (format.kind === "fl2va") {
+      if (i.first) fields.first_frame_image = await uploadForGeneration(i.first);
+      if (i.last) fields.last_frame_image = await uploadForGeneration(i.last);
+      return fields;
+    }
+    if (format.kind === "t2va") return fields;
+    const audios = i.audios.slice(0, format.audios);
+    if (i.images.length) fields.reference_images = await Promise.all(i.images.map(uploadForGeneration));
+    if (audios.length) fields.reference_audios = await Promise.all(audios.map(uploadForGeneration));
+    if (i.videos.length) fields.reference_videos = await Promise.all(i.videos.map(uploadForGeneration));
+    if (i.images.length + audios.length + i.videos.length) {
+      fields.reference_order = [...i.images.map(() => "image"), ...audios.map(() => "audio"), ...i.videos.map(() => "video")];
+    }
+    return fields;
   }
 
   /** Upload an input once per session. */
@@ -391,7 +708,7 @@ function Stream() {
       const refs = await storyReferences();
       const res = await fetch("/api/story", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...keyHeaders() },
         body: JSON.stringify({ ...body, ...refs }),
       });
       const data = (await res.json()) as { story?: Story; error?: string };
@@ -409,17 +726,35 @@ function Stream() {
 
   // Ask the server-side director for the next prompt. Any failure falls back to
   // the steer text so the stream keeps going; a missing key turns Claude off.
-  async function direct(steer: string, plan: Plan | null, format: ClipFormat): Promise<string> {
+  async function direct(steer: string, plan: Plan | null, format: ClipFormat, retake?: DirectorRequest["retake"]): Promise<string> {
     const started = performance.now();
-    const body: DirectorRequest = { direction: steer, recent: recent.current, fresh: steer.trim() !== applied.current, format };
+    const body: DirectorRequest = {
+      direction: steer,
+      recent: recent.current,
+      fresh: steer.trim() !== applied.current,
+      format,
+      independent: latest.current.api === "generations",
+      retake,
+    };
     if (plan) {
       const { story: s, index } = plan;
-      body.story = { title: s.title, bible: s.bible, beat: s.beats[index], number: index + 1, total: s.beats.length, next: s.beats[index + 1]?.beat };
+      const beat = s.beats[index];
+      body.story = {
+        title: s.title,
+        bible: s.bible,
+        beat,
+        number: index + 1,
+        total: s.beats.length,
+        next: s.beats[index + 1]?.beat,
+        cast: s.cast,
+        props: s.props,
+        place: s.places.find((p) => p.name === beat.place),
+      };
     }
     try {
       const res = await fetch("/api/director", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...keyHeaders() },
         body: JSON.stringify(body),
       });
       const data = (await res.json()) as { prompt?: string; error?: string };
@@ -474,7 +809,7 @@ function Stream() {
       if (enhance) setWriting("first");
       const [first] = await Promise.all([
         enhance ? writeStory({ mode: "new", premise: text }) : Promise.resolve(null),
-        model.status !== "ready" ? model.connect() : Promise.resolve(),
+        api === "streaming" && model.status !== "ready" ? model.connect() : Promise.resolve(),
       ]);
       setWriting(null);
       if (enhance && !first) setError("The story writer failed, so clips follow your text directly.");
@@ -494,6 +829,29 @@ function Stream() {
   async function stop() {
     setLive(false);
     setLiveSince(null);
+    if (api === "generations") {
+      // Generations already started finish on Reactor's side; the page stops waiting for them.
+      genRun.current += 1;
+      genVideo.current?.pause();
+      for (const clip of genClips.current.values()) if (clip.url) URL.revokeObjectURL(clip.url);
+      genClips.current.clear();
+      genOrder.current = [];
+      genPlaying.current = null;
+      genPrevFrame.current = undefined;
+      recent.current = [];
+      applied.current = null;
+      prepared.current = null;
+      armed.current = null;
+      nextStory.current = null;
+      built.current.clear();
+      beatOf.current.clear();
+      setAhead([]);
+      setPlaying(null);
+      setReady([]);
+      setBuilding([]);
+      say("stopped");
+      return;
+    }
     await model.disconnect();
     say("disconnected");
   }
@@ -520,6 +878,51 @@ function Stream() {
     showStory(rewritten, episodeRef.current, beatIndex.current);
   }
 
+  /** End the stream if it is live and start over: no story, no inputs, no log, the first example's text. */
+  async function reset() {
+    if (live || model.status !== "disconnected") await stop();
+    for (const item of [...inputs.images, ...inputs.audios, ...inputs.videos]) URL.revokeObjectURL(item.url);
+    setInputs(EMPTY_INPUTS);
+    setDraft(DEFAULT_PROMPT);
+    setPrompt(DEFAULT_PROMPT);
+    setExampleId(EXAMPLES[0].id);
+    setError(null);
+    setLog([]);
+    setAired(0);
+    setBuildTimes([]);
+    setStalls(0);
+    setWriting(null);
+    showStory(null, 1, 0);
+    nextStory.current = null;
+    uploads.current.clear();
+    genUploads.current.clear();
+    thumbs.current.clear();
+    queuedAt.current.clear();
+  }
+
+  function changeKeys(k: Keys) {
+    if (k.reactor !== keys.reactor) token = null;
+    saveKeys(k);
+    setKeys(k);
+  }
+
+  async function pickExample(example: Example) {
+    setError(null);
+    setLoadingExample(true);
+    try {
+      const next = await exampleInputs(example);
+      for (const item of [...inputs.images, ...inputs.audios, ...inputs.videos]) URL.revokeObjectURL(item.url);
+      setInputs(next);
+      setDraft(example.concept);
+      setExampleId(example.id);
+      setTab("references");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load the example.");
+    } finally {
+      setLoadingExample(false);
+    }
+  }
+
   function submit(e?: React.FormEvent) {
     e?.preventDefault();
     if (live) void steer();
@@ -527,6 +930,12 @@ function Stream() {
   }
 
   function unmute() {
+    if (api === "generations") {
+      const v = genVideo.current;
+      if (v) v.muted = false;
+      setSoundBlocked(false);
+      return;
+    }
     const el = audio.current;
     if (!el) return;
     void el.play().then(() => setSoundBlocked(false)).catch(() => setSoundBlocked(true));
@@ -535,7 +944,7 @@ function Stream() {
   const avgBuild = buildTimes.length ? buildTimes.reduce((a, b) => a + b, 0) / buildTimes.length : null;
   const elapsed = liveSince === null ? 0 : Math.max(0, Math.floor((now - liveSince) / 1000));
   const timer = `${String(Math.floor(elapsed / 60)).padStart(2, "0")}:${String(elapsed % 60).padStart(2, "0")}`;
-  const busy = starting || model.status === "connecting";
+  const busy = starting || (api === "streaming" && model.status === "connecting");
   const framesSet = Boolean(inputs.first || inputs.last);
   const pending = draft.trim() !== prompt.trim() || framesSet;
   const playingBeat = playing ? beatOf.current.get(playing.id) : undefined;
@@ -553,6 +962,23 @@ function Stream() {
           </div>
 
           <div className="controls">
+            <div role="radiogroup" aria-label="Reactor API" className="tabs">
+              {(["streaming", "generations"] as const).map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  role="radio"
+                  aria-checked={api === a}
+                  aria-selected={api === a}
+                  className="tab mono"
+                  disabled={live || busy}
+                  title={a === "streaming" ? "One realtime session; clips continue each other" : "Each clip is its own generation; the page plays them back to back"}
+                  onClick={() => setApi(a)}
+                >
+                  {a === "streaming" ? "Streaming API" : "Generations API"}
+                </button>
+              ))}
+            </div>
             <dl className="stats">
               <div>
                 <dt className="mono">Clips aired</dt>
@@ -574,14 +1000,23 @@ function Stream() {
             {live && (
               <button type="button" className="btn btn-ghost" onClick={stop}>End stream</button>
             )}
+            <button type="button" className="btn btn-ghost" onClick={() => void reset()} disabled={busy} title="End the stream and start over with a clean slate">
+              Reset
+            </button>
           </div>
         </header>
 
         <div className="body">
           <section className="stream" aria-label="Stream">
             <div className="stage">
-              <PikaH3FlexMainVideoView style={{ width: "100%", height: "100%" }} muted />
-              <audio ref={audio} autoPlay />
+              {api === "streaming" ? (
+                <>
+                  <PikaH3FlexMainVideoView style={{ width: "100%", height: "100%" }} muted />
+                  <audio ref={audio} autoPlay />
+                </>
+              ) : (
+                <video ref={genVideo} className="gen-video" playsInline onEnded={onGenerationEnded} />
+              )}
               {!playing && (
                 <div className="stage-empty">
                   {writing === "first" ? (
@@ -603,6 +1038,7 @@ function Stream() {
                       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2" y="5" width="15" height="14" rx="2" /><path d="m17 10 5-3v10l-5-3" /></svg>
                       <strong>Nothing on air yet</strong>
                       <span>Describe what to stream below, then start the live stream.</span>
+                      <span className="api-note">{API_NOTES[api]}</span>
                     </div>
                   )}
                 </div>
@@ -619,12 +1055,45 @@ function Stream() {
             </div>
 
             <form className="panel" onSubmit={submit}>
+              <KeysBar
+                keys={keys}
+                server={serverKeys}
+                onChange={changeKeys}
+              />
+              {!live && (
+                <div className="examples" role="group" aria-label="Examples">
+                  <span className="mono">Examples</span>
+                  <div className="example-row">
+                    {EXAMPLES.map((ex) => (
+                      <button
+                        key={ex.id}
+                        type="button"
+                        className="example"
+                        aria-pressed={exampleId === ex.id}
+                        disabled={loadingExample || busy}
+                        onClick={() => void pickExample(ex)}
+                      >
+                        {ex.thumbnail ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={ex.thumbnail} alt="" />
+                        ) : (
+                          <span className="example-blank" aria-hidden="true" />
+                        )}
+                        <span>{ex.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <textarea
                 aria-label={live ? "Steer the stream" : "Describe the stream"}
                 placeholder="A dog news show, a heist in a bakery, a nature documentary about one pigeon…"
-                rows={3}
+                rows={2}
                 value={draft}
-                onChange={(e) => setDraft(e.target.value)}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  setExampleId(null);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
                 }}
@@ -632,10 +1101,29 @@ function Stream() {
               <InputsPanel inputs={inputs} onChange={setInputs} tab={tab} onTab={setTab} onError={setError} />
               {error && <p className="error" role="alert">{error}</p>}
               <div className="steer-row">
-                <label className="toggle">
-                  <input type="checkbox" checked={enhance} onChange={(e) => setEnhance(e.target.checked)} disabled={live} />
-                  Enhance prompt
-                </label>
+                <div className="writer">
+                  <label className="toggle">
+                    <input type="checkbox" checked={enhance} onChange={(e) => setEnhance(e.target.checked)} disabled={live} />
+                    Enhance prompt with
+                  </label>
+                  <div role="radiogroup" aria-label="Prompt writer" className="tabs">
+                    {(["claude", "openai"] as const).map((w) => (
+                      <button
+                        key={w}
+                        type="button"
+                        role="radio"
+                        aria-checked={keys.writer === w}
+                        aria-selected={keys.writer === w}
+                        className="tab mono"
+                        disabled={!enhance}
+                        onClick={() => changeKeys({ ...keys, writer: w })}
+                      >
+                        {WRITERS[w].name}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="hint">{enhance ? writerHint(keys, serverKeys) : "Off: your text goes to the model as written."}</span>
+                </div>
                 {live ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                     {framesSet && <span className="hint">The next clip {inputs.first ? "starts" : "ends"} on this image.</span>}
@@ -723,3 +1211,29 @@ function SideEmpty({ text }: { text: string }) {
     </>
   );
 }
+
+// Who writes the stream when Enhance prompt is on. Matches app/lib/server/writer.ts.
+const WRITERS: Record<Writer, { name: string; story: string; clip: string; key: "anthropic" | "openai" }> = {
+  claude: { name: "Claude", story: "Claude Sonnet 5.5", clip: "Claude Haiku 5.5", key: "anthropic" },
+  openai: { name: "OpenAI", story: "GPT-5.1", clip: "GPT-5.1 mini", key: "openai" },
+};
+
+function writerHint(keys: Keys, server: ServerKeys | null): string {
+  const w = WRITERS[keys.writer];
+  const has = (k: "anthropic" | "openai") => Boolean(keys[k] || server?.[k]);
+  if (!has(w.key)) {
+    const other = keys.writer === "claude" ? WRITERS.openai : WRITERS.claude;
+    return has(other.key)
+      ? `No ${w.name} key, so ${other.name} writes instead. Paste a ${w.name} key above.`
+      : `No ${w.name} key: paste one above, or your text goes to the model as written.`;
+  }
+  return `${w.story} plans each episode; ${w.clip} writes every clip's prompt.`;
+}
+
+// What the header's API switch changes, shown on the empty stage.
+const API_NOTES: Record<Api, string> = {
+  streaming:
+    "Streaming API: one realtime session. The model plays each clip as soon as it is built, and every clip continues the one before, as one continuous take.",
+  generations:
+    "Generations API: each clip is its own generation job. The page plays the finished videos in order, joined by cuts, and with Enhance prompt on it checks each clip's last frame and retakes a broken one before it plays.",
+};

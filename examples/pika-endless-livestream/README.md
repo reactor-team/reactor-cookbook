@@ -10,15 +10,48 @@ Describe a show or story, start the live stream, and steer it while it plays.
 
 ```bash
 pnpm install
-cp .env.example .env.local   # add REACTOR_API_KEY (and ANTHROPIC_API_KEY for the director)
+cp .env.example .env.local   # add REACTOR_API_KEY (and ANTHROPIC_API_KEY or OPENAI_API_KEY for the writers)
 pnpm dev                     # http://127.0.0.1:3000
 ```
 
-Describe a show or story and press **Start live stream**. While live, type a direction and press **Steer**.
+Describe a show or story, or pick one of the **Examples**, and press **Start live stream**. While live, type a direction and press **Steer**.
+
+Keys the server doesn't have get a field at the top of the panel. Keys pasted there stay in that browser tab
+(`sessionStorage`) and go only to this app's own route handlers. The Reactor key is still exchanged for a
+session token on the server. A key set in the server's environment gets no field, so a hosted copy with
+every key set shows no key inputs. On a public deployment, anyone who opens the page then spends on those
+keys, so put it behind protection. **Reset** ends the stream and starts over, for trying another example.
+
+## Streaming API or Generations API
+
+Reactor serves Pika H3 Flex two ways, and the switch in the header picks one. The story, the director, the
+inputs and the sidebar work the same with both; only the engine that films and plays the clips changes.
+
+**Streaming API.** The page opens one realtime WebRTC session with the model (`@reactor-models/pika-h3-flex`)
+and calls `enqueue` for each clip. The model keeps a playout queue: with autoplay on, it plays each clip the
+moment it is built, straight into the video and audio tracks, and holds the last frame if the queue runs dry.
+Each clip continues the one before it (latent continuation), so motion, camera and sound carry across the
+cut. Use it when the clips should flow as one continuous take.
+
+**Generations API.** Each clip is its own HTTP job: `POST /generations` with the model and the clip's input,
+then `GET /generations/{id}` until it succeeds and returns `output.mp4` and `last_frame.png`. The app proxies
+both through `app/api/generations` so the API key stays on the server, downloads each video, and plays them
+in order in a plain `<video>`, keeping `CLIPS_AHEAD` jobs running. Reference files are reserved with
+`POST /files` and uploaded to the presigned URL once. The clips are independent, so the joins are cuts and
+continuity comes from the writers and the references. In exchange, each clip arrives as a file before it
+plays, which is what lets the shot check look at its last frame and retake a broken clip.
+
+| | Streaming API | Generations API |
+| --- | --- | --- |
+| Transport | One WebRTC session | One HTTP job per clip |
+| Playback | The model's playout queue, live tracks | The page's `<video>`, downloaded MP4s |
+| Between clips | Latent continuation: one continuous take | Independent clips: hard cuts |
+| Shot check and retake | No (clips play as they are built) | Yes, with Enhance prompt on |
+| Code | `send()`, `clipParams()` | `sendGeneration()`, `watchGeneration()`, `checkGeneration()` |
 
 ## How it works
 
-All of it is in `app/Livestream.tsx` (~150 lines) and `app/api/token/route.ts`.
+The streaming loop is in `app/Livestream.tsx`, and the session token is minted in `app/api/token/route.ts`.
 
 1. **Auth.** `/api/token` trades `REACTOR_API_KEY` for a short-lived JWT scoped to
    `reactor/pika-h3-flex`. The browser connects with the JWT.
@@ -38,6 +71,13 @@ All of it is in `app/Livestream.tsx` (~150 lines) and `app/api/token/route.ts`.
 The log shows each clip's queue → build → play timeline, including how long a build
 took after enqueue. If builds take longer than a clip plays, raise `CLIPS_AHEAD` or
 `CLIP_SECONDS`.
+
+## Examples
+
+The **Examples** row loads a starting show: its description and its reference pictures and voices. Dog news is
+text only. Treehouse, Product reveal, Sitcom and Food truck are the Pika H3 Flex examples from reactor.inc,
+recast as shows that keep going. Reactor made every picture and voice in `public/examples/`. The shows are in
+`app/lib/examples.ts`.
 
 ## Model inputs
 
@@ -59,7 +99,9 @@ once per session.
 
 ## Enhance prompt (story writer + director)
 
-With `ANTHROPIC_API_KEY` set and **Enhance prompt** on, two Claude models write the stream:
+With a writer key set and **Enhance prompt** on, two models write the stream. With Claude (the default) they
+are Claude Sonnet 5.5 and Claude Haiku 5.5; with OpenAI (pick it under **Keys**, or set only
+`OPENAI_API_KEY`) they are GPT-5.1 and GPT-5.1 mini. Both are in `app/lib/server/writer.ts`.
 
 - **Showrunner** (`/api/story`, Claude Sonnet 5.5): turns your concept into an episode of
   8–12 beats with a beginning, middle and end, plus a bible of characters, places and
@@ -85,3 +127,20 @@ adapted from [DreamVerse Harness](https://github.com/fastvideo-project/dreamvers
 | --- | --- | --- |
 | `CLIPS_AHEAD` | 2 | Clips kept queued ahead of the playing one |
 | `CLIP_SECONDS` | 10 | Clip length; whole seconds 5–15 |
+
+## Cast, shot check and retake
+
+The approach comes from Reactor's Slack video bot.
+
+- **Fixed cast.** The showrunner declares each recurring character, prop and place once, with one look.
+  The director names them only as `@label`, and `fillLabels` in `app/lib/story.ts` writes each look in
+  word for word. The model never paraphrases a character between clips.
+- **Craft rules.** The director's prompt carries the rules the bot learned on the same family of models.
+  Silent clips say "their lips remain completely closed and nobody speaks". Lines are at most eight words.
+  Feelings become body actions, and prompts say what is there, not what is absent. In generation mode,
+  clips are filmed alone and never point back to the clip before.
+- **Shot check (generation API).** Each generation returns its last frame before it plays. With Enhance
+  prompt on, `/api/check` has the writer's fast model compare it with the beat and the cast. It fails a clip
+  when a cast member is missing, doubled, merged or has a new body, or the beat's event plainly did not
+  happen. A failed clip is written again once, aimed at what failed, and the better-scored take plays. The
+  debug log shows each verdict. The streaming API plays clips as they are built, so it has no check.

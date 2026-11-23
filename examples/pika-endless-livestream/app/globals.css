@@ -165,3 +165,64 @@ textarea:focus-visible, button:focus-visible, input:focus-visible { outline: 2px
 .queue .beats { max-height: none; }
 .prompts { display: flex; flex-direction: column; gap: 10px; }
 .raw { margin: 0; max-height: 260px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono), "Andale Mono", monospace; font-size: 11.5px; line-height: 1.55; color: var(--text-2); }
+
+/* Examples */
+.examples { display: flex; flex-direction: column; gap: 8px; }
+.examples > .mono { color: var(--muted); }
+.example-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+.example { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 12px 0 4px; border-radius: 8px; border: 1px solid var(--line-3); background: var(--bg); color: var(--text-2); font-size: 14px; cursor: pointer; }
+.example:hover { border-color: var(--muted); }
+.example[aria-pressed="true"] { border-color: var(--accent); color: var(--text); }
+.example:disabled { opacity: 0.5; cursor: default; }
+.example img, .example-blank { width: 36px; height: 36px; border-radius: 5px; object-fit: cover; background: var(--surface-2); display: block; }
+
+/* Desktop: everything on one screen. The stage takes the height that is left
+   and letterboxes the video; the sidebar scrolls on its own. */
+@media (min-width: 1024px) and (min-height: 640px) {
+  .page { height: 100dvh; padding: 16px 24px; overflow: hidden; }
+  .wrap { height: 100%; max-width: 1760px; gap: 14px; }
+  .header { padding-bottom: 14px; flex: none; }
+  .body { flex: 1 1 auto; min-height: 0; flex-wrap: nowrap; align-items: stretch; }
+  .stream { flex: 1 1 auto; min-height: 0; gap: 12px; }
+  .stage { flex: 1 1 auto; min-height: 200px; aspect-ratio: auto; }
+  .stage video { object-fit: contain; }
+  .panel { flex: none; padding: 12px 14px; gap: 8px; }
+  .panel textarea { padding: 8px 12px; font-size: 15px; }
+  .panel .steer-row { padding-top: 8px; }
+  .examples { flex-direction: row; align-items: center; gap: 12px; }
+  .example { height: 36px; }
+  .example img, .example-blank { width: 28px; height: 28px; }
+  .thumb, .add-square { width: 40px; height: 40px; }
+  .media { height: 40px; }
+  .btn, .toggle { min-height: 0; height: 38px; }
+  .queue { flex: 0 0 360px; min-height: 0; overflow-y: auto; padding-right: 4px; }
+  .debug { flex: none; }
+  .debug summary { min-height: 24px; }
+  .debug pre { max-height: 140px; }
+}
+
+/* Generations API playback */
+.stage .gen-video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
+
+/* Keys */
+.keys-bar { display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.key { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.key .mono { color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
+.key em { font-style: normal; font-size: 10px; letter-spacing: 0.1em; color: var(--faint); }
+.key.set em { color: var(--accent); }
+.key.server em { color: var(--text-2); }
+.key input { height: 36px; min-width: 0; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line-3); background: var(--bg); color: var(--text); font-family: var(--font-mono), monospace; font-size: 12px; }
+.key.set input { border-color: var(--accent); }
+.key input::placeholder { color: var(--faint); }
+@media (max-width: 640px) { .keys-bar { grid-template-columns: 1fr; } }
+.tab:disabled { opacity: 0.5; cursor: default; }
+.writer { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.writer .hint { font-size: 13px; }
+.keys-drop { border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.keys-drop summary { cursor: pointer; color: var(--muted); display: flex; align-items: center; gap: 8px; list-style: none; width: fit-content; min-height: 28px; }
+.keys-drop summary::-webkit-details-marker { display: none; }
+.keys-drop summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 0.15s ease; }
+.keys-drop[open] summary::before { transform: rotate(45deg); }
+.keys-drop summary em { font-style: normal; font-size: 10px; letter-spacing: 0.1em; color: var(--faint); }
+.keys-drop .keys-bar { border-bottom: none; padding: 6px 0 4px; }
+.stage-ready .api-note { font-size: 13px; color: var(--faint); max-width: 420px; }

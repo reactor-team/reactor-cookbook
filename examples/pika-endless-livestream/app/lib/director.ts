@@ -65,9 +65,29 @@ Rules for every format:
 - Name exactly one camera move per shot (slow push in, pan left, crane up, orbit, handheld follow, locked off). Change the camera move every two or three clips. Vary how you open each description; do not start every clip with the same words.
 - Spoken words: name the speaker and how they sound, then the line in a tag, like: she says in a warm, low voice (S1), <d>[English] We made it.</d> Give each speaker one ID (S1, S2) and keep it across clips. Keep lines short enough to say in the clip.
 - Prefer one continuous shot. Cut only when a NEW direction or a CUT beat asks for one: then write a "[Shot 1]" beat of about one second in which the old scene simply continues, and "[Shot 2, at 00:01 cut]" for the new scene, described in full. It is a clean hard cut: no fade, dissolve or transition effect.
-- State constraints that matter plainly: normal real-time speed, no slow motion, no on-screen text or captions, no morphing between shapes or people.
+- State that everything moves at normal real-time speed, and that there is no on-screen text, titles or captions.
+
+Craft (learned from filming thousands of clips; the model films what the words name):
+- Write a feeling as what the body does ("tugs at his tie"), never as a state ("is nervous").
+- Describe what is there, never what is absent: "an empty platform", not "no crowds". State a count as a fact: "exactly one silver trophy on the desk for the whole shot".
+- Never write "cinematic", "dynamic", "dramatic" or "epic". Spend words on the action, the people and the place.
+- The camera makes one move. Add "with small amplitude" or "with large amplitude", and "at slow speed" or "at fast speed", only when the move is not medium and normal.
+- A clip either has speech or it does not. A speaking clip is the line and little else: the speaker says it, closes their mouth, and makes one small move. A clip without a line says so for everyone on screen, in the words "their lips remain completely closed and nobody speaks", because the model invents speech in quiet time.
+- A line is at most eight words: the model garbles the middle of a longer one. Give each speaker a voice (age, gender, tone, pace) at their first line in the clip.
+- A narrator or someone's thoughts "says in an off-screen voiceover", and right after its </d> the people on screen keep their lips shut: "while their lips remain completely closed".
+- A line cut off by the end of the clip ends with <cutoff> inside the tag: <d>[English] I can explain the<cutoff></d>.
+- The soundscape is one to four short sentences of the place's ambience and the sounds of the action. A clip without one comes out flat.
+
+Cast: when you get a cast, name each cast member and prop only as its @label, exactly as given (for example "@walter slides a paper across the desk"). The app replaces each @label with that character's fixed look, so never describe a cast member's appearance yourself, and never invent a label. In Ref2VA, subject_definitions name them by @label too. People who are not in the cast (an extra, a crowd) are described in a few words where they appear. Use the place's description, with its light, when the clip opens in or cuts to a place.
 - overall_soundscape: the ambience and physical sounds of the whole clip; never empty, and N/A only for silence.
 - non_diegetic_music: background score that is not part of the scene. N/A by default; describe a score only when asked or when a bible's theme plays (opening, segment and sign-off beats), and keep it the same until the direction changes.
+
+INDEPENDENT clips: when the request says the clip is filmed alone (the generation API), the model cannot see the clip before it. Describe the whole scene in full, never point back ("same", "again", "still", "continues", "cut to", "from before"), and use a camera angle or distance different from the clip before, so the join plays as an edit.
+
+RETAKE: when the request says a take failed its check, write the same clip again: the same cast doing the same thing in the same place, the same event, every <d> line word for word. Change only what the failure points at:
+- person (a cast member missing, doubled, merged or turned into someone else): keep each cast member apart and large in the frame, give the action fewer moving parts, and say who is on screen and that nobody else is.
+- body (a cast member's shape, way of standing or clothes changed): frame them so their body reads, and restate the trait that broke in a few words.
+- event (the clip's main event did not happen): put the event at the end of the clip, make it large in the frame, and cut camera moves and staging that distract from it.
 
 The viewer's direction is marked NEW (just changed: act on it in this clip) or STANDING (already acted on: keep developing in its spirit, never repeat a cut or restart the scene it asked for). When a NEW direction asks for something without a cut, get there over one or two clips.
 
@@ -89,7 +109,21 @@ export type DirectorRequest = {
   /** The format this clip must use. */
   format: ClipFormat;
   /** In story mode: the show bible and the beat this clip must show. */
-  story?: { title: string; bible: string; beat: { segment: string; beat: string; cut: boolean }; number: number; total: number; next?: string };
+  story?: {
+    title: string;
+    bible: string;
+    beat: { segment: string; beat: string; cut: boolean; place: string; on_screen: string[] };
+    number: number;
+    total: number;
+    next?: string;
+    cast: { label: string; name: string; look: string; voice: string }[];
+    props: { label: string; look: string }[];
+    place?: { name: string; look: string };
+  };
+  /** The generation API films each clip alone: it cannot continue the one before. */
+  independent?: boolean;
+  /** A take of this clip that failed its check, and why. */
+  retake?: { prompt: string; missed: string; reason: string };
 };
 
 function formatLine(f: ClipFormat): string {
@@ -108,16 +142,24 @@ function formatLine(f: ClipFormat): string {
 }
 
 /** The user message for one request. */
-export function directorMessage({ direction, recent, fresh, format, story }: DirectorRequest): string {
+export function directorMessage({ direction, recent, fresh, format, story, independent, retake }: DirectorRequest): string {
   const history = recent.length ? recent.map((p, i) => `Clip ${i + 1}:\n${p}`).join("\n\n") : "None yet. This is the opening clip.";
   const text = direction.trim();
   const label = !text ? "Viewer's direction: none, keep the stream going." : fresh || !recent.length
     ? `Viewer's direction (NEW: act on it in this clip):\n${text}`
     : `Viewer's direction (STANDING: already acted on; keep developing in its spirit, no new cut):\n${text}`;
-  const plan = story
-    ? `\n\nShow: ${story.title}\nBible: ${story.bible}\n\nBeat ${story.number} of ${story.total} to write now${story.beat.cut ? " (CUT: new scene or segment)" : ""}:\n[${story.beat.segment}] ${story.beat.beat}${story.next ? `\n\nThe beat after this one, for context only (do not show it yet):\n${story.next}` : ""}`
+  const cast = story?.cast.length
+    ? `\nCast (name them only as @label; on screen in this beat: ${story.beat.on_screen.map((l) => `@${l}`).join(", ") || "nobody"}):\n${story.cast.map((c) => `@${c.label} is ${c.name}${c.voice ? `; voice: ${c.voice}` : "; does not speak"}`).join("\n")}${story.props.length ? `\nProps: ${story.props.map((p) => `@${p.label}`).join(", ")}` : ""}`
     : "";
-  return `Latest clips, oldest first:\n\n${history}\n\n${label}${plan}\n\n${formatLine(format)}`;
+  const place = story?.place ? `\nPlace: ${story.place.name}: ${story.place.look}` : "";
+  const plan = story
+    ? `\n\nShow: ${story.title}\nStyle: ${story.bible}${cast}${place}\n\nBeat ${story.number} of ${story.total} to write now${story.beat.cut ? " (CUT: new scene or segment)" : ""}:\n[${story.beat.segment}] ${story.beat.beat}${story.next ? `\n\nThe beat after this one, for context only (do not show it yet):\n${story.next}` : ""}`
+    : "";
+  const alone = independent ? "\n\nThis clip is filmed ALONE (INDEPENDENT): it cannot see the clip before it." : "";
+  const again = retake
+    ? `\n\nRETAKE. This take failed its check (${retake.missed}): ${retake.reason}\nThe failed take's prompt:\n${retake.prompt}`
+    : "";
+  return `Latest clips, oldest first:\n\n${history}\n\n${label}${plan}${alone}${again}\n\n${formatLine(format)}`;
 }
 
 /** Drop an alignment line the director wrote anyway; the app adds its own. */

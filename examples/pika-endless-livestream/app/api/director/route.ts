@@ -1,13 +1,16 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { BeatSchema } from "../../lib/story";
+import { BeatSchema, CastSchema, PlaceSchema, PropSchema, fillLabels } from "../../lib/story";
+import { writeClip, writerError } from "../../lib/server/writer";
 import { DIRECTOR_SYSTEM_PROMPT, RECENT_PROMPTS, directorMessage, withoutAlignmentLine } from "../../lib/director";
 
-// Writes the next clip's prompt. Runs on the server so the Anthropic key never
-// reaches the browser. Without a key the client sends the steer text as is.
+// Writes the next clip's prompt. Runs on the server; keys from .env.local never
+// reach the browser. Without a key the client sends the steer text as is.
 export async function POST(req: Request) {
-  const body = (await req.json().catch(() => null)) as { direction?: unknown; recent?: unknown; fresh?: unknown; story?: unknown; format?: unknown } | null;
+  const body = (await req.json().catch(() => null)) as { direction?: unknown; recent?: unknown; fresh?: unknown; story?: unknown; format?: unknown; independent?: unknown; retake?: unknown } | null;
+  const independent = body?.independent === true;
+  const retakeParsed = RetakeSchema.safeParse(body?.retake);
+  const retake = retakeParsed.success ? retakeParsed.data : undefined;
   const formatParsed = ClipFormatSchema.safeParse(body?.format);
   const format = formatParsed.success ? formatParsed.data : ({ kind: "t2va" } as const);
   const fresh = body?.fresh === true;
@@ -19,41 +22,15 @@ export async function POST(req: Request) {
     : [];
 
   try {
-    // Built per request: the constructor throws when it finds no credentials.
-    const client = new Anthropic();
-    const response = await client.messages.create({
-      // A short, frequent writing job: Haiku is fast and cheap enough to run every clip.
-      model: "claude-haiku-5-5",
-      max_tokens: 16000,
-      // The next clip should be written well before the current one ends; low effort keeps it quick.
-      output_config: { effort: "low" },
-      system: DIRECTOR_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: directorMessage({ direction, recent, fresh, story, format }) }],
-    });
-
-    if (response.stop_reason === "refusal") {
-      return NextResponse.json({ error: "The director declined this direction." }, { status: 422 });
-    }
     const prompt = withoutAlignmentLine(
-      response.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
+      await writeClip(req, DIRECTOR_SYSTEM_PROMPT, directorMessage({ direction, recent, fresh, story, format, independent, retake })),
     );
-    if (!prompt) return NextResponse.json({ error: "The director returned no prompt." }, { status: 502 });
-    return NextResponse.json({ prompt });
+    // Each @label becomes the cast member's fixed look, word for word.
+    const filled = story ? fillLabels(prompt, story) : prompt;
+    if (!filled) return NextResponse.json({ error: "The director returned no prompt." }, { status: 502 });
+    return NextResponse.json({ prompt: filled });
   } catch (error) {
-    if (error instanceof Anthropic.AuthenticationError) {
-      return NextResponse.json({ error: "Director not configured: set ANTHROPIC_API_KEY in .env.local" }, { status: 503 });
-    }
-    if (error instanceof Anthropic.RateLimitError) {
-      return NextResponse.json({ error: "Director rate limited." }, { status: 429 });
-    }
-    if (error instanceof Anthropic.APIError) {
-      return NextResponse.json({ error: `Director error ${error.status}: ${error.message}` }, { status: 502 });
-    }
-    if (error instanceof Error && /api key|authToken|credentials/i.test(error.message)) {
-      // The SDK throws before any request when it finds no credentials at all.
-      return NextResponse.json({ error: "Director not configured: set ANTHROPIC_API_KEY in .env.local" }, { status: 503 });
-    }
-    return NextResponse.json({ error: "Director failed." }, { status: 500 });
+    return writerError(error, "Director");
   }
 }
 
@@ -64,6 +41,15 @@ const StoryBeatContext = z.object({
   number: z.number().int().positive(),
   total: z.number().int().positive(),
   next: z.string().max(2000).optional(),
+  cast: z.array(CastSchema).max(12),
+  props: z.array(PropSchema).max(4),
+  place: PlaceSchema.optional(),
+});
+
+const RetakeSchema = z.object({
+  prompt: z.string().max(6000),
+  missed: z.string().max(40),
+  reason: z.string().max(1000),
 });
 
 const ClipFormatSchema = z.discriminatedUnion("kind", [
