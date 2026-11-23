@@ -1,0 +1,14 @@
+# Model dependencies resolved with Reactor Runtime during `reactor build`.
+# `build.runtime_version` in reactor.yaml selects the Runtime release.
+# The LiveKit transport: the avatar joins a LiveKit room.
+reactor-runtime[livekit]
+numpy==2.2.6
+Pillow
+huggingface-hub<1
+PyYAML
+# AURA's reference code, at the pinned commit, and the versions it was measured with.
+aura @ git+https://github.com/kyutai-labs/aura.git@c06aa7dc8b850405273345089da521454ffd607e
+torch==2.8.0
+torchvision==0.23.0
+transformers==4.57.6
+moshi==0.2.13

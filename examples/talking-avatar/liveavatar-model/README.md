@@ -6,8 +6,9 @@ The model joins a [LiveKit](https://livekit.io) room as a LiveKit avatar, so any
 through it with LiveKit's avatar protocol: the agent sends speech, the avatar publishes video and that speech,
 lip-synced, on the agent's behalf.
 
-This folder is the model, a `reactor` workspace. [The example's README](../README.md) runs it with a voice agent and a
-page you talk to it from.
+This folder is the model, a `reactor` workspace, and the example's alternative to its default model,
+[AURA](../aura-model): same contract, same application code, for commercial use (Apache 2.0) or 25 FPS.
+[The example's README](../README.md) runs it with a voice agent and a page you talk to it from; do its step 1 here.
 
 ## How a call works
 
@@ -42,6 +43,7 @@ the room with the avatar's token. [`../client/lib/reactor.ts`](../client/lib/rea
 | Command | `user_speaking_state` | `speaking` or `idle` (data packets on `avatar.user_speaking_state`) |
 | Message | `playback_started` | The first frame of an utterance plays (the `lk.playback_started` RPC to the agent) |
 | Message | `playback_finished` | An utterance played to its end or was cut, with `playback_position` and `interrupted` |
+| Message | `avatar_failed` | The model failed during the session, with the reason; no more frames follow in it |
 
 The `runtime.livekit` block in [`reactor.yaml`](reactor.yaml) maps them onto the room. `GET /schema` on a running
 model lists every field.
@@ -110,7 +112,7 @@ warm-up, and how speech is paced into blocks. Each key is documented in place.
   dates the playback reports, interrupts, and the commands. It drives any model that implements
   [`avatar_contract.py`](avatar_contract.py): render a block of video from a block of speech, and reset.
   [`liveavatar_app.py`](liveavatar_app.py) only builds LiveAvatar's model half. Another avatar model fits the same
-  application by implementing that contract.
+  application by implementing that contract, as [`../aura-model/`](../aura-model) does with an identical copy.
 - **The model streams one block per call.** Upstream renders a whole file in 48-frame clips of four causal blocks,
   each denoising step keeping its own key/value cache. [`liveavatar_engine.py`](liveavatar_engine.py) runs that
   loop one block at a time from audio that arrives during the session: the per-step caches roll over one clip,
@@ -130,6 +132,10 @@ warm-up, and how speech is paced into blocks. Each key is documented in place.
   Together they bring a silent block to under half the motion of a speech block, with speech unchanged. The prompt is
   switched by copying its cached cross-attention keys into the buffers the captured steps read, so it costs nothing
   per block.
+
+- **Failures stop the session, not the runtime.** A portrait that cannot be decoded is refused at `set_avatar`, so the
+  call does not start. An error from the model during a call stops that call's video and sends `avatar_failed`; the
+  model is reset when the call ends, and the runtime keeps serving.
 
 ## Tests
 
