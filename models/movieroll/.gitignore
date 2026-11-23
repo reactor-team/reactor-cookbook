@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+
+# Upstream ignores generated PNGs; keep the documented running-demo image.
+!assets/demo.png
