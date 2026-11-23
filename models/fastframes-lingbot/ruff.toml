@@ -1,0 +1,5 @@
+line-length = 120
+src = ["."]
+
+[lint]
+select = ["E", "F", "W", "I"]

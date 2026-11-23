@@ -1,0 +1,34 @@
+$schema: reactor/v2
+
+model:
+  name: fastframes
+  version: v0.1.0
+  description: Stream Apple's FastFrames-S or FastFrames-L text-to-video model.
+  resources:
+    gpu:
+      type: NVIDIA_B200
+      count: 1
+    cpu:
+      request: "8"
+      limit: "16"
+    memory:
+      request: 96Gi
+      limit: 160Gi
+
+runtime:
+  import: apple_fastframes:FastFramesApp
+  config: apple_fastframes.yaml
+  weights_path: ~/.cache/reactor_registry/fastframes
+
+build:
+  runtime_version: "3.11.7"
+  python_requirements: requirements.txt
+  cuda_version: "12.8.1"
+  python_version: "3.12"
+  system_packages: [git]
+  run:
+    - --mount=type=cache,target=/root/.cache/uv UV_LINK_MODE=copy uv pip install 'torch==2.9.1+cu128' --index-url https://download.pytorch.org/whl/cu128
+    - --mount=type=bind,source=.,target=/port python /port/apple_fastframes_assets.py --checkout /opt/fastframes
+  runtime_env:
+    OMP_NUM_THREADS: "4"
+    TOKENIZERS_PARALLELISM: "false"
