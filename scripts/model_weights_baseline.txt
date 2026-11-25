@@ -11,7 +11,6 @@ evoke
 fasth3
 hy-world-1-5
 joy-video-edit
-lingbot-world-v1-fast
 lingbot-world-v2
 lyra-2
 matrix-game-2-0
