@@ -183,14 +183,43 @@ def load_adapter_dependencies() -> dict[str, Any]:
     hydra = importlib.import_module("hydra")
     return {
         "torch": importlib.import_module("torch"),
-        "snapshot_download": importlib.import_module(
-            "huggingface_hub"
-        ).snapshot_download,
         "compose": hydra.compose,
         "initialize_config_dir": hydra.initialize_config_dir,
         "instantiate": importlib.import_module("hydra.utils").instantiate,
         "omega_conf": importlib.import_module("omegaconf").OmegaConf,
     }
+
+
+def weights_ref(config: AdapterConfig) -> str:
+    """Return the pinned weight set: ``hf://<repo>@<revision>``."""
+    return f"hf://{config.repo_id}@{config.revision}"
+
+
+# Files that the model reads from the weight set, relative to its root.
+CHECKPOINT_FILES = (
+    "csgo/config/agent/csgo.yaml",
+    "csgo/config/env/csgo.yaml",
+    "csgo/model/csgo.pt",
+)
+SPAWN_DIR = "csgo/spawn"
+
+
+def resolve_snapshot(config: AdapterConfig, weights_root: Path) -> Path:
+    """Return the weight set root after checking the files DIAMOND reads.
+
+    Raises:
+        FileNotFoundError: If a checkpoint file or the spawn folder is absent.
+            Nothing downloads.
+    """
+    missing = [name for name in CHECKPOINT_FILES if not (weights_root / name).is_file()]
+    if not (weights_root / SPAWN_DIR).is_dir():
+        missing.append(SPAWN_DIR)
+    if missing:
+        raise FileNotFoundError(
+            f"DIAMOND weights missing under {weights_root}: {', '.join(missing)}; "
+            f"deploy with `--weights {weights_ref(config)}`"
+        )
+    return weights_root
 
 
 def select_device(requested: str, torch_module: Any) -> Any:

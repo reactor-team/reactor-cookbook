@@ -576,3 +576,40 @@ def test_initial_session_frame_retains_controls_but_requested_reset_clears(monke
     app.state._pressed_keys = frozenset({"a"})
     _step(app)
     assert not app.state._pressed_keys
+
+
+def _adapter_config():
+    return assets_module.read_config(EXAMPLE_DIR / "diamond.yaml")
+
+
+def _populate(root: Path) -> None:
+    for name in assets_module.CHECKPOINT_FILES:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_bytes(b"x")
+    (root / assets_module.SPAWN_DIR / "0").mkdir(parents=True)
+
+
+def test_manifest_weight_set_matches_the_pinned_checkpoint() -> None:
+    manifest = yaml.safe_load((EXAMPLE_DIR / "reactor.yaml").read_text())
+    assert manifest["runtime"]["weights_path"] == assets_module.weights_ref(
+        _adapter_config()
+    )
+    assert manifest["build"]["runtime_env"]["HF_HUB_OFFLINE"] == "1"
+
+
+def test_snapshot_resolves_in_the_weight_set(tmp_path: Path) -> None:
+    _populate(tmp_path)
+    assert assets_module.resolve_snapshot(_adapter_config(), tmp_path) == tmp_path
+
+
+def test_missing_weights_name_the_fix_and_download_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+    _populate(tmp_path)
+    (tmp_path / "csgo/model/csgo.pt").unlink()
+    config = _adapter_config()
+    with pytest.raises(FileNotFoundError, match=r"csgo/model/csgo\.pt") as raised:
+        assets_module.resolve_snapshot(config, tmp_path)
+    assert f"--weights {assets_module.weights_ref(config)}" in str(raised.value)
+    assert not (tmp_path / "csgo/model/csgo.pt").exists()
