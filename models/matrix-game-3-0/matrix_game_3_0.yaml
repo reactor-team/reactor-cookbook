@@ -1,5 +1,6 @@
 source:
-  path: Matrix-Game
+  # The image holds this checkout at the pinned revision (build.run in reactor.yaml).
+  path: /opt/Matrix-Game
   url: https://github.com/SkyworkAI/Matrix-Game.git
   revision: 71c3cd7f741311f8100f6cf9cde942b6c1378d11
 

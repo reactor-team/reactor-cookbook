@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: matrix-game-3-0-distilled
-  version: v0.1.3
+  version: v0.2.0
   description: |
     Explore a memory-augmented autoregressive world from an image, a prompt,
     player movement, and pitch/yaw view controls.
@@ -24,8 +24,8 @@ runtime:
   # larger than the default 64 MiB.
   webrtc:
     max_message_size: 256Mi
-  # Source checkout, distilled checkpoint, and uploads stay here.
-  weights_path: ~/.cache/reactor_registry/matrix-game-3-0-distilled
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 4
@@ -46,3 +46,13 @@ build:
     - git
     - libgl1
     - libglib2.0-0
+  runtime_env:
+    HF_HUB_OFFLINE: "1"
+  # Pin the upstream source that matrix_game_3_0.yaml's source.path names.
+  run:
+    - >-
+      git init /opt/Matrix-Game
+      && git -C /opt/Matrix-Game fetch --depth 1
+      https://github.com/SkyworkAI/Matrix-Game.git
+      71c3cd7f741311f8100f6cf9cde942b6c1378d11
+      && git -C /opt/Matrix-Game checkout --detach FETCH_HEAD

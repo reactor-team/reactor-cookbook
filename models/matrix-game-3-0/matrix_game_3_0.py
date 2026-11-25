@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from matrix_game_3_0_assets import MatrixGame30Config, prepare_assets, read_config
+from matrix_game_3_0_assets import MatrixGame30Config, check_assets, read_config
 from matrix_game_3_0_backend import action_from_controls
 from matrix_game_3_0_images import validate_uploaded_image
 from matrix_game_3_0_model import (
@@ -67,14 +67,14 @@ class MatrixGame30(ReactorApp):
         self._example_rng = np.random.default_rng()
 
     def load(self, config_path: Path | None) -> None:
-        """Prepare public assets and load the distilled upstream model once.
+        """Check the source and weights, then load the distilled upstream model once.
 
         Args:
             config_path: Path to ``matrix_game_3_0.yaml`` from ``reactor.yaml``.
         """
         weights_root = get_weights_path()
         config = read_config(config_path, weights_root)
-        prepare_assets(config, weights_root)
+        check_assets(config)
         self._engine.load(config)
         self._config = config
         self._seed = config.seed

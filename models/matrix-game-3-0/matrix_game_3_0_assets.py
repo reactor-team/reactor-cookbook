@@ -1,15 +1,11 @@
-"""Prepare pinned public Matrix-Game 3.0 source and distilled model assets."""
+"""Read the Matrix-Game 3.0 config and check its source and distilled model assets."""
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
 import subprocess
-import tempfile
-from collections.abc import Mapping
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -19,9 +15,11 @@ import yaml
 logger = logging.getLogger(__name__)
 
 SOURCE_ENV = "MATRIX_GAME_3_0_PATH"
-SNAPSHOT_MARKER = ".reactor-snapshot.json"
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
-_MODEL_ALLOW_PATTERNS = (
+# The files of the pinned repository that the model reads. The repository
+# also holds the base model and a larger VAE, which this model skips.
+MODEL_ALLOW_PATTERNS = (
     "MG-LightVAE_v2.pth",
     "Wan2.2_VAE.pth",
     "base_distilled_model/*",
@@ -130,43 +128,24 @@ def read_config(
     )
 
 
-def prepare_assets(config: MatrixGame30Config, weights_root: Path) -> None:
-    """Prepare and verify the unmodified source checkout and distilled weights."""
-    ensure_source_checkout(config)
-    ensure_checkpoint(config, weights_root)
+def check_assets(config: MatrixGame30Config) -> None:
+    """Check the source in the image and the checkpoint in the weights folder.
+
+    This function never downloads. The image holds the source at the pinned
+    revision, and ``prepare_weights.py`` builds the weights folder.
+    """
+    check_source(config)
+    check_checkpoint(config)
 
 
-def ensure_source_checkout(config: MatrixGame30Config) -> None:
-    """Clone the pinned public source when absent and verify its revision."""
+def check_source(config: MatrixGame30Config) -> None:
+    """Check that the source checkout exists at the pinned revision."""
     checkout = config.source_path
-    if not checkout.exists():
-        logger.info(
-            "downloading Matrix-Game 3.0 source checkout: url=%s revision=%s destination=%s",
-            config.source_url,
-            config.source_revision,
-            checkout,
-        )
-        checkout.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix=".reactor-matrix-game-3-0-source-", dir=checkout.parent
-        ) as temporary:
-            candidate = Path(temporary) / "checkout"
-            _run_git(
-                [
-                    "clone",
-                    "--filter=blob:none",
-                    "--no-checkout",
-                    config.source_url,
-                    str(candidate),
-                ]
-            )
-            _run_git(
-                ["-C", str(candidate), "checkout", "--detach", config.source_revision]
-            )
-            with suppress(FileExistsError):
-                candidate.rename(checkout)
     if not (checkout / ".git").is_dir():
-        raise RuntimeError(f"Matrix source at {checkout} must be a Git checkout")
+        raise FileNotFoundError(
+            f"Matrix source at {checkout} is not a Git checkout; "
+            "rebuild the image with `reactor build`"
+        )
     actual = _run_git(["-C", str(checkout), "rev-parse", "HEAD"]).stdout.strip()
     if actual != config.source_revision:
         raise RuntimeError(
@@ -179,50 +158,22 @@ def ensure_source_checkout(config: MatrixGame30Config) -> None:
         raise FileNotFoundError(f"Matrix interactive pipeline is missing: {required}")
 
 
-def ensure_checkpoint(config: MatrixGame30Config, weights_root: Path) -> None:
-    """Download and verify the pinned fast distilled checkpoint subset."""
-    from huggingface_hub import snapshot_download
-
-    expected = {
-        "repo_id": config.checkpoint_repo_id,
-        "revision": config.checkpoint_revision,
-        "allow_patterns": list(_MODEL_ALLOW_PATTERNS),
-    }
-    marker = config.checkpoint_path / SNAPSHOT_MARKER
+def check_checkpoint(config: MatrixGame30Config) -> None:
+    """Raise when the weights folder lacks a file that the model reads."""
+    root = config.checkpoint_path
     required = (
-        config.checkpoint_path
-        / "base_distilled_model"
-        / "diffusion_pytorch_model.safetensors",
-        config.checkpoint_path / "MG-LightVAE_v2.pth",
-        config.checkpoint_path / "Wan2.2_VAE.pth",
-        config.checkpoint_path / "models_t5_umt5-xxl-enc-bf16.pth",
-        config.checkpoint_path / "google" / "umt5-xxl" / "tokenizer.json",
+        root / "base_distilled_model" / "diffusion_pytorch_model.safetensors",
+        root / "MG-LightVAE_v2.pth",
+        root / "Wan2.2_VAE.pth",
+        root / "models_t5_umt5-xxl-enc-bf16.pth",
+        root / "google" / "umt5-xxl" / "tokenizer.json",
     )
-    if _json_matches(marker, expected) and all(path.is_file() for path in required):
-        return
-    config.checkpoint_path.mkdir(parents=True, exist_ok=True)
-    logger.info(
-        "downloading Matrix-Game 3.0 distilled checkpoint: repo=%s revision=%s destination=%s",
-        config.checkpoint_repo_id,
-        config.checkpoint_revision,
-        config.checkpoint_path,
-    )
-    snapshot_download(
-        repo_id=config.checkpoint_repo_id,
-        revision=config.checkpoint_revision,
-        local_dir=config.checkpoint_path,
-        cache_dir=weights_root / ".huggingface",
-        allow_patterns=list(_MODEL_ALLOW_PATTERNS),
-    )
-    missing = [str(path) for path in required if not path.is_file()]
+    missing = [str(path.relative_to(root)) for path in required if not path.is_file()]
     if missing:
         raise FileNotFoundError(
-            "Matrix checkpoint download did not produce required files: "
-            + ", ".join(missing)
+            f"Matrix-Game 3.0 weights in {root} lack: {', '.join(missing)}. "
+            f"Run `{PREPARE_COMMAND}` and deploy with `--weights ./weights`."
         )
-    pending = marker.with_suffix(".tmp")
-    pending.write_text(json.dumps(expected, sort_keys=True), encoding="utf-8")
-    os.replace(pending, marker)
 
 
 def _example(root: Path, value: object, index: int) -> ExampleScene:
@@ -240,7 +191,9 @@ def _example(root: Path, value: object, index: int) -> ExampleScene:
 def _source_path(value: object, weights_root: Path) -> Path:
     """Resolve the source checkout under the caller's weights directory."""
     configured = os.environ.get(SOURCE_ENV)
-    path = Path(configured if configured else str(value or "Matrix-Game")).expanduser()
+    path = Path(
+        configured if configured else str(value or "/opt/Matrix-Game")
+    ).expanduser()
     candidate = path if path.is_absolute() else weights_root / path
     return Path(os.path.abspath(candidate))
 
@@ -274,15 +227,6 @@ def _repo_id(value: object, name: str) -> str:
     if "/" not in repo_id:
         raise ValueError(f"{name} must identify a public repository")
     return repo_id
-
-
-def _json_matches(path: Path, expected: Mapping[str, object]) -> bool:
-    """Return whether a JSON completion marker matches the expected identity."""
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return False
-    return bool(document == expected)
 
 
 def _run_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
