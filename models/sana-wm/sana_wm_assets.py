@@ -1,4 +1,4 @@
-"""Resolve pinned public source and model assets for SANA-WM."""
+"""Check the pinned source and weights folder for SANA-WM. Nothing here downloads."""
 
 from __future__ import annotations
 
@@ -12,8 +12,39 @@ from typing import Any
 import yaml
 
 
-def configure_runtime_caches(root: Path) -> None:
-    """Keep downloaded assets inside the Runtime's persistent weights mount."""
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
+STREAMING_DIR = "SANA-WM_streaming"
+TEXT_ENCODER_DIR = "gemma-2-2b-it"
+PI3X_DIR = "Pi3X"
+STREAMING_REQUIRED_FILES = (
+    "sana_dit/model.pt",
+    "ltx2_causal_vae/config.json",
+    "ltx2_causal_vae/diffusion_pytorch_model.safetensors",
+    "refiner_diffusers/connectors/config.json",
+    "refiner_diffusers/connectors/diffusion_pytorch_model.safetensors",
+    "refiner_diffusers/transformer/config.json",
+    "refiner_diffusers/transformer/diffusion_pytorch_model.safetensors",
+    "gemma3_12b/config.json",
+    "gemma3_12b/model.safetensors.index.json",
+    "gemma3_12b/tokenizer.model",
+    "gemma3_12b/tokenizer_config.json",
+    *(f"gemma3_12b/model-0000{i}-of-00005.safetensors" for i in range(1, 6)),
+)
+TEXT_ENCODER_REQUIRED_FILES = (
+    "config.json",
+    "model.safetensors.index.json",
+    "model-00001-of-00002.safetensors",
+    "model-00002-of-00002.safetensors",
+    "tokenizer.json",
+    "tokenizer.model",
+    "tokenizer_config.json",
+)
+PI3X_REQUIRED_FILES = ("config.json", "model.safetensors")
+
+
+def configure_runtime_caches() -> Path:
+    """Point the library caches at the home folder. The weights folder stays read-only."""
+    root = Path.home() / ".cache" / "sana-wm"
     cache_paths = {
         "HF_HOME": root / "huggingface",
         "TORCH_HOME": root / "torch",
@@ -23,9 +54,7 @@ def configure_runtime_caches(root: Path) -> None:
     for name, path in cache_paths.items():
         path.mkdir(parents=True, exist_ok=True)
         os.environ.setdefault(name, str(path))
-
-
-_SOURCE_ENV = "SANA_WM_SOURCE_PATH"
+    return root
 
 
 @dataclass(frozen=True)
@@ -57,6 +86,7 @@ class SanaWMConfig:
     streaming: HubAsset
     stage1_text_encoder: HubAsset
     pi3x_model: HubAsset
+    pi3x_source_path: Path
     pi3x_source_url: str
     pi3x_source_revision: str
     scenes: tuple[BuiltInScene, ...]
@@ -73,6 +103,21 @@ class SanaWMConfig:
     rotation_speed_degrees: float
     pitch_limit_degrees: float
     weights_root: Path
+
+    @property
+    def streaming_path(self) -> Path:
+        """Return the SANA-WM streaming snapshot inside the weights folder."""
+        return self.weights_root / STREAMING_DIR
+
+    @property
+    def text_encoder_path(self) -> Path:
+        """Return the Stage-1 Gemma text-encoder snapshot."""
+        return self.weights_root / TEXT_ENCODER_DIR
+
+    @property
+    def pi3x_path(self) -> Path:
+        """Return the Pi3X calibration weights."""
+        return self.weights_root / PI3X_DIR
 
 
 def _mapping(value: object, name: str) -> Mapping[str, Any]:
@@ -110,13 +155,7 @@ def read_config(config_path: Path | None, weights_root: Path) -> SanaWMConfig:
     inference = _mapping(root.get("inference"), "inference")
     motion = _mapping(root.get("motion"), "motion")
 
-    source_override = os.environ.get(_SOURCE_ENV, "").strip()
-    if source_override:
-        source_path = Path(source_override).expanduser().resolve()
-    else:
-        source_path = (
-            weights_root / "sana-wm" / _required_str(source, "path", "source")
-        ).resolve()
+    source_path = Path(_required_str(source, "path", "source"))
 
     upstream_config = source_path / _required_str(source, "config", "source")
     scene_values = root.get("scenes")
@@ -166,6 +205,7 @@ def read_config(config_path: Path | None, weights_root: Path) -> SanaWMConfig:
             _mapping(pi3x.get("model"), "assets.pi3x.model"),
             "assets.pi3x.model",
         ),
+        pi3x_source_path=Path(_required_str(pi3x, "source_path", "assets.pi3x")),
         pi3x_source_url=_required_str(pi3x, "source_url", "assets.pi3x"),
         pi3x_source_revision=_required_str(pi3x, "source_revision", "assets.pi3x"),
         scenes=tuple(scenes),
@@ -198,67 +238,49 @@ def _git(*args: str, cwd: Path | None = None) -> str:
     return result.stdout.strip()
 
 
-def prepare_source(config: SanaWMConfig) -> None:
-    """Clone the pinned SANA source when absent and verify an existing checkout."""
-    source = config.source_path
-    if not source.exists():
-        source.parent.mkdir(parents=True, exist_ok=True)
-        _git("clone", "--filter=blob:none", config.source_url, str(source))
-        _git("checkout", "--detach", config.source_revision, cwd=source)
-    if not (source / ".git").exists():
-        raise ValueError(f"SANA source path is not a Git checkout: {source}")
-    revision = _git("rev-parse", "HEAD", cwd=source)
-    if revision != config.source_revision:
-        raise ValueError(
-            f"SANA source revision mismatch at {source}: expected "
-            f"{config.source_revision}, got {revision}"
+def _check_checkout(name: str, path: Path, revision: str) -> None:
+    """Require a Git checkout at the pinned revision in the image."""
+    if not (path / ".git").exists():
+        raise FileNotFoundError(
+            f"{name} source is missing at {path}; rebuild the image with `reactor build`"
         )
+    actual = _git("rev-parse", "HEAD", cwd=path)
+    if actual != revision:
+        raise ValueError(
+            f"{name} source revision mismatch at {path}: expected {revision}, got {actual}"
+        )
+
+
+def check_source(config: SanaWMConfig) -> None:
+    """Verify the SANA source in the image. This function never clones."""
+    _check_checkout("SANA", config.source_path, config.source_revision)
     required = [config.upstream_config]
     for scene in config.scenes:
         required.extend([scene.image, scene.prompt, scene.intrinsics])
     missing = [path for path in required if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"SANA source is missing required files: {missing}")
+    _check_checkout("Pi3", config.pi3x_source_path, config.pi3x_source_revision)
 
 
-def resolve_model_assets(config: SanaWMConfig) -> tuple[Path, Path]:
-    """Download pinned streaming and Stage-1 text-encoder snapshots."""
-    from huggingface_hub import snapshot_download
-
-    streaming = Path(
-        snapshot_download(
-            repo_id=config.streaming.repo_id,
-            revision=config.streaming.revision,
-        )
+def check_weights(config: SanaWMConfig) -> None:
+    """Raise when the weights folder lacks a file that the model reads."""
+    required = (
+        [config.streaming_path / name for name in STREAMING_REQUIRED_FILES]
+        + [config.text_encoder_path / name for name in TEXT_ENCODER_REQUIRED_FILES]
+        + [config.pi3x_path / name for name in PI3X_REQUIRED_FILES]
     )
-    text_encoder = Path(
-        snapshot_download(
-            repo_id=config.stage1_text_encoder.repo_id,
-            revision=config.stage1_text_encoder.revision,
+    missing = [
+        str(path) for path in required if not path.is_file() or path.stat().st_size == 0
+    ]
+    if missing:
+        raise FileNotFoundError(
+            f"SANA-WM weights lack: {', '.join(missing)}. "
+            f"Run `{PREPARE_COMMAND}` and deploy with `--weights ./weights`."
         )
-    )
-    return streaming, text_encoder
 
 
-def resolve_pi3x_assets(config: SanaWMConfig) -> tuple[Path, Path]:
-    """Prepare pinned Pi3X source and weights for calibration on demand."""
-    from huggingface_hub import snapshot_download
-
-    source = config.weights_root / "sana-wm" / "Pi3"
-    if not source.exists():
-        source.parent.mkdir(parents=True, exist_ok=True)
-        _git("clone", "--filter=blob:none", config.pi3x_source_url, str(source))
-        _git("checkout", "--detach", config.pi3x_source_revision, cwd=source)
-    revision = _git("rev-parse", "HEAD", cwd=source)
-    if revision != config.pi3x_source_revision:
-        raise ValueError(
-            f"Pi3X source revision mismatch at {source}: expected "
-            f"{config.pi3x_source_revision}, got {revision}"
-        )
-    model = Path(
-        snapshot_download(
-            repo_id=config.pi3x_model.repo_id,
-            revision=config.pi3x_model.revision,
-        )
-    )
-    return source, model
+def check_runtime(config: SanaWMConfig) -> None:
+    """Check the source and the weights. This function never downloads."""
+    check_source(config)
+    check_weights(config)

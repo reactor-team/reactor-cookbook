@@ -1,5 +1,5 @@
 source:
-  path: SANA
+  path: /opt/SANA
   url: https://github.com/NVlabs/SANA.git
   revision: 5498e5b2070ef8c808ee7eab7f7c7707b53cd8ea
   config: configs/sana_wm/sana_wm_streaming_1600m_720p.yaml
@@ -12,6 +12,7 @@ assets:
     repo_id: Efficient-Large-Model/gemma-2-2b-it
     revision: 569d9809d0c8b6722d4d31b5a77a2ec7a400650a
   pi3x:
+    source_path: /opt/Pi3
     source_url: https://github.com/yyfz/Pi3.git
     source_revision: 9fa3ddb3f8d53041f8b2738df404f62223bbaa7b
     model:

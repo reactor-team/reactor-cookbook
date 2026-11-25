@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image
-from sana_wm_assets import SanaWMConfig, resolve_model_assets, resolve_pi3x_assets
+from sana_wm_assets import SanaWMConfig
 
 FPS = 16
 PIXEL_FRAMES_PER_CHUNK = 24
@@ -81,7 +81,10 @@ class SanaStreamingBackend:
                 "inference_video_scripts.wm.inference_sana_wm_streaming"
             )._apply_fast_defaults()
 
-        streaming_root, text_encoder_root = resolve_model_assets(config)
+        streaming_root, text_encoder_root = (
+            config.streaming_path,
+            config.text_encoder_path,
+        )
         self._install_pinned_text_encoder(text_encoder_root)
         upstream_config = self._pyrallis.parse(
             config_class=self._wm.InferenceConfig,
@@ -376,7 +379,7 @@ class SanaStreamingBackend:
 
     def _estimate_intrinsics(self, image: Image.Image) -> np.ndarray:
         """Estimate calibration with the pinned Pi3X implementation and weights."""
-        source, weights = resolve_pi3x_assets(self._config)
+        source, weights = self._config.pi3x_source_path, self._config.pi3x_path
         _prepend_import_path(source)
         pi3x_module = importlib.import_module("pi3.models.pi3x")
         geometry = importlib.import_module("pi3.utils.geometry")

@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: sana-wm-streaming
-  version: v0.2.2
+  version: v0.3.0
   description: |
     Explore SANA-WM's distilled autoregressive video world from an image,
     a prompt, and native camera controls.
@@ -20,7 +20,8 @@ model:
 runtime:
   import: sana_wm:SanaWM
   config: sana_wm.yaml
-  weights_path: ~/.cache/reactor_registry/sana-wm-streaming-reactor
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 4
@@ -43,7 +44,21 @@ build:
     - libgl1
     - libglib2.0-0
   runtime_env:
+    HF_HUB_OFFLINE: "1"
     PYTORCH_ALLOC_CONF: expandable_segments:True
     TOKENIZERS_PARALLELISM: "false"
   run:
     - python -m pip install --no-build-isolation mmcv==1.7.2
+    # Pin the upstream sources that sana_wm.yaml's source paths name.
+    - >-
+      git init /opt/SANA
+      && git -C /opt/SANA fetch --depth 1
+      https://github.com/NVlabs/SANA.git
+      5498e5b2070ef8c808ee7eab7f7c7707b53cd8ea
+      && git -C /opt/SANA checkout --detach FETCH_HEAD
+    - >-
+      git init /opt/Pi3
+      && git -C /opt/Pi3 fetch --depth 1
+      https://github.com/yyfz/Pi3.git
+      9fa3ddb3f8d53041f8b2738df404f62223bbaa7b
+      && git -C /opt/Pi3 checkout --detach FETCH_HEAD
