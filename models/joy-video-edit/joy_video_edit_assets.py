@@ -1,24 +1,19 @@
 # Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
-"""Parse ``joy_video_edit.yaml`` and resolve the pinned checkpoints under the weights root.
+"""Parse ``joy_video_edit.yaml`` and find the pinned checkpoints in the weights folder.
 
-First load downloads the pinned Hugging Face revisions into the weights root; a marker per
-snapshot records the revision it holds, so later loads skip the network. ``checkpoint_dir``
-points at a directory that already holds the same layout instead.
+``prepare_weights.py`` builds the folder; this module only reads it.
 """
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-logger = logging.getLogger(__name__)
-
-# Files the text-encoder repository carries for its model card, not for loading.
-_CARD_ONLY = ["*.gif", "*.png", "*.jpeg", "*.jpg"]
+# The command that builds a weights folder with this layout.
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
 
 
 @dataclass(frozen=True)
@@ -41,71 +36,28 @@ def read_config(config_path: Path | None) -> dict[str, Any]:
 
 
 def resolve_checkpoints(config: dict[str, Any], weights_root: Path | str) -> Checkpoints:
-    """Return the checkpoint paths, downloading the pinned snapshots first when they are missing.
+    """Return the checkpoint paths under ``weights_root``.
 
     Raises:
-        ValueError: The ``checkpoints`` section is missing a field, or ``checkpoint_dir`` is relative.
-        FileNotFoundError: A checkpoint is absent after resolution.
+        ValueError: The ``checkpoints`` section is missing a field.
+        FileNotFoundError: A checkpoint is absent; the message names the command that builds the folder.
     """
     section = _mapping(config.get("checkpoints"), "checkpoints")
     joyai = _mapping(section.get("joyai"), "checkpoints.joyai")
     text_encoder = _mapping(section.get("text_encoder"), "checkpoints.text_encoder")
-    dit_rel = _field(joyai, "dit", "checkpoints.joyai")
-    vae_rel = _field(joyai, "vae", "checkpoints.joyai")
-    te_rel = _field(text_encoder, "path", "checkpoints.text_encoder")
-
-    fixed = config.get("checkpoint_dir")
-    if fixed:
-        root = Path(fixed).expanduser()
-        if not root.is_absolute():
-            raise ValueError(f"checkpoint_dir must be an absolute path, got {fixed!r}")
-    else:
-        root = Path(weights_root)
-        _download(
-            _field(joyai, "repo_id", "checkpoints.joyai"),
-            _field(joyai, "revision", "checkpoints.joyai"),
-            root,
-            allow_patterns=[dit_rel, f"{vae_rel}/*"],
-        )
-        _download(
-            _field(text_encoder, "repo_id", "checkpoints.text_encoder"),
-            _field(text_encoder, "revision", "checkpoints.text_encoder"),
-            root / te_rel,
-            ignore_patterns=_CARD_ONLY,
-        )
-
-    checkpoints = Checkpoints(dit=root / dit_rel, vae=root / vae_rel, text_encoder=root / te_rel)
+    root = Path(weights_root)
+    checkpoints = Checkpoints(
+        dit=root / _field(joyai, "dit", "checkpoints.joyai"),
+        vae=root / _field(joyai, "vae", "checkpoints.joyai"),
+        text_encoder=root / _field(text_encoder, "path", "checkpoints.text_encoder"),
+    )
     for name, path in (("DiT", checkpoints.dit), ("VAE", checkpoints.vae), ("text encoder", checkpoints.text_encoder)):
         if not path.exists():
-            raise FileNotFoundError(f"JoyAI-Video-Edit {name} checkpoint not found at {path}")
+            raise FileNotFoundError(
+                f"JoyAI-Video-Edit {name} checkpoint not found at {path}. "
+                f"Build the weights folder with `{PREPARE_COMMAND}` and deploy with `--weights ./weights`."
+            )
     return checkpoints
-
-
-def _download(
-    repo_id: str,
-    revision: str,
-    local_dir: Path,
-    *,
-    allow_patterns: list[str] | None = None,
-    ignore_patterns: list[str] | None = None,
-) -> None:
-    """Fetch one pinned snapshot into ``local_dir`` unless its marker already records the revision."""
-    marker = local_dir / ".revisions" / repo_id.replace("/", "--")
-    if marker.is_file() and marker.read_text().strip() == revision:
-        return
-    from huggingface_hub import snapshot_download
-
-    logger.info("downloading %s@%s into %s", repo_id, revision, local_dir)
-    local_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_download(
-        repo_id=repo_id,
-        revision=revision,
-        local_dir=local_dir,
-        allow_patterns=allow_patterns,
-        ignore_patterns=ignore_patterns,
-    )
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(revision + "\n")
 
 
 def _mapping(value: Any, name: str) -> dict[str, Any]:

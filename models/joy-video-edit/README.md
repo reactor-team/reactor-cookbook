@@ -35,29 +35,38 @@ CUDA 13.2, PyTorch 2.14, Reactor Runtime 3.6.0 (keep the Dockerfile's
 `RUNTIME_VERSION` equal to `build.runtime_version` in `reactor.yaml`), and the
 `joyomni_ops` kernels compiled from `./joyomni_ops` against CUTLASS.
 
+First build the weights folder from the pinned checkpoints, about 48 GB. Run
+this once, on any machine; `HF_TOKEN` is optional, because both repositories
+are public:
+
 ```sh
 cd models/joy-video-edit
+pip install huggingface-hub==0.36.2 pyyaml
+python prepare_weights.py --output ./weights
+```
+
+Then build and run. `reactor run` mounts `./weights` (`runtime.weights_path`)
+into the container:
+
+```sh
 reactor validate
 reactor build
 reactor run --gpus device=0
 ```
 
-First startup downloads the pinned checkpoints into the CLI-mounted weights
-cache (`runtime.weights_path`, `~/.cache/reactor_registry/joy-video-edit` by
-default), about 48 GB, then warms up: it runs whole editing sessions and
-captures every CUDA graph a session can use, so the first client's first chunk
-is as fast as its hundredth. The compile caches are kept under the weights
-cache, so later starts are faster. Public downloads need no token; to forward
-one without putting it on the command line:
+To deploy, push the same folder as the deployment's weight set. Reactor makes
+it available on the GPU node before the container starts, so a new instance
+does not download the checkpoints:
 
 ```sh
-export HF_TOKEN=hf_your_read_token
-reactor run --gpus device=0 -e HF_TOKEN
+reactor deploy production --weights ./weights
 ```
 
-If you already have the checkpoints in the layout `joy_video_edit.yaml`
-describes, set `checkpoint_dir` to that absolute directory and nothing is
-downloaded.
+Startup loads the checkpoints, then warms up: it runs whole editing sessions
+and captures every CUDA graph a session can use, so the first client's first
+chunk is as fast as its hundredth. The compile caches go to `~/.cache` in the
+container. Nothing downloads at runtime (`HF_HUB_OFFLINE=1`); a missing
+checkpoint stops `load()` with an error that names `prepare_weights.py`.
 
 ## Commands
 

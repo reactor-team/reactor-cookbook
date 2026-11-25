@@ -4,8 +4,8 @@
 
 # ── Checkpoints ─────────────────────────────────────────────────────────────
 #
-# First load downloads these pinned Hugging Face revisions into the weights root
-# (reactor.yaml's runtime.weights_path) and later loads reuse them:
+# prepare_weights.py downloads these pinned Hugging Face revisions into the
+# weights folder, and load() reads them from there:
 #   <root>/dit/joyai_video_edit_dit_0811.pth   16B MMDiT, ~31 GB
 #   <root>/vae/                                causal video VAE, ~1.5 GB
 #   <root>/MiMo-VL-7B-RL-2508/                 multimodal text encoder, ~16 GB
@@ -19,10 +19,6 @@ checkpoints:
     repo_id: XiaomiMiMo/MiMo-VL-7B-RL-2508
     revision: 4bfb270765825d2fa059011deb4c96fdd579be6f
     path: MiMo-VL-7B-RL-2508
-
-# An absolute directory that already holds the layout above.  When set, it is
-# used as the root and nothing is downloaded.
-checkpoint_dir: null
 
 # ── Devices ─────────────────────────────────────────────────────────────────
 #

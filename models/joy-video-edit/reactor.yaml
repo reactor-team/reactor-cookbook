@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: joy-video-edit
-  version: v0.2.0
+  version: v0.3.0
   description: |
     Edit a live camera stream from a natural-language instruction, with an
     optional reference image, in real time at 1248x720. JoyAI-Video-Edit
@@ -25,7 +25,8 @@ model:
 runtime:
   import: joy_video_edit:JoyVideoEdit
   config: joy_video_edit.yaml
-  weights_path: ~/.cache/reactor_registry/joy-video-edit
+  # Build it with `python prepare_weights.py --output ./weights`.
+  weights_path: ./weights
   recording:
     # Session recording encodes video on the same GPU the model edits on,
     # which costs the model most of its throughput.
