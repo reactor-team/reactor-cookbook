@@ -311,3 +311,57 @@ open_oasis_model.OpenOasisModel()
         cwd=MODEL_DIR,
         check=True,
     )
+
+
+def _config():
+    from open_oasis_assets import read_config
+
+    return read_config(MODEL_DIR / "open_oasis.yaml")
+
+
+def test_manifest_weight_set_matches_the_pinned_checkpoint() -> None:
+    import yaml
+    from open_oasis_assets import weights_ref
+
+    manifest = yaml.safe_load((MODEL_DIR / "reactor.yaml").read_text())
+    assert manifest["runtime"]["weights_path"] == weights_ref(_config())
+
+
+def test_checkpoints_resolve_in_the_weight_set(tmp_path: Path) -> None:
+    from open_oasis_assets import resolve_checkpoints
+
+    config = _config()
+    for name in (config.model_filename, config.vae_filename):
+        (tmp_path / name).write_bytes(b"x")
+    assert resolve_checkpoints(config, tmp_path) == (
+        tmp_path / "oasis500m.safetensors",
+        tmp_path / "vit-l-20.safetensors",
+    )
+
+
+def test_missing_checkpoint_names_the_weight_set_and_downloads_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_oasis_assets import resolve_checkpoints
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+    config = _config()
+    (tmp_path / config.model_filename).write_bytes(b"x")
+    with pytest.raises(FileNotFoundError, match="vit-l-20.safetensors") as raised:
+        resolve_checkpoints(config, tmp_path)
+    assert (
+        "--weights hf://Etched/oasis-500m@4ca7d2d811f4f0c6fd1d5719bf83f14af3446c0c"
+        in str(raised.value)
+    )
+    assert sorted(p.name for p in tmp_path.iterdir()) == [config.model_filename]
+
+
+def test_missing_source_asks_for_a_rebuild(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from open_oasis_assets import check_source
+
+    config = replace(_config(), source_path=str(tmp_path / "absent"))
+    with pytest.raises(FileNotFoundError, match="reactor build"):
+        check_source(config)
+    assert not (tmp_path / "absent").exists()
