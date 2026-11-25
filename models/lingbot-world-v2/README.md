@@ -11,8 +11,8 @@ as an interactive Reactor backend. Start from an uploaded or built-in image,
 change the text prompt without resetting the world, and explore with continuous
 six-axis camera motion.
 
-The adapter loads an exact tested source revision from Reactor's weights cache
-and calls the upstream causal-fast inference components directly.
+The image holds an exact tested source revision, and the adapter calls the
+upstream causal-fast inference components directly.
 
 ## Uploaded camera paths
 
@@ -86,17 +86,31 @@ ready:
 curl -s localhost:8080/health
 ```
 
-On first load, the adapter clones the pinned public source and downloads the
-pinned Hugging Face checkpoint into the CLI-mounted `runtime.weights_path`.
-Later starts verify and reuse both. The checked-in default is
-`~/.cache/reactor_registry/lingbot-world-v2`; change that one manifest value to
-place all model assets on a larger volume. Configure the container engine's
-image and build-cache storage on that volume when the system disk is small.
+The image build clones the pinned public source. The checkpoint is the pinned
+[Hugging Face repository](https://huggingface.co/robbyant/lingbot-world-v2-14b-causal-fast)
+at revision `5c33dd40b213598c418fd25bff30fdbd23fd38a7`, about 86 GB, plus a
+`transformers/config.json` copy that the upstream loader reads. Build that
+weights folder once, on any machine:
 
-`LINGBOT_WORLD_V2_PATH` and `LINGBOT_WORLD_V2_CHECKPOINT_PATH` may point to
-existing copies available inside the container. A source override must be a
-clean Git checkout at the configured revision; an incomplete checkpoint is
-completed with a resumable Hugging Face download.
+```sh
+pip install huggingface-hub pyyaml
+python prepare_weights.py --output ./weights
+reactor run --gpus device=0
+```
+
+`reactor run` mounts `./weights` (`runtime.weights_path`). To deploy, push the
+same folder as the weight set. Reactor makes it available on the GPU node before
+the container starts, so a new instance does not download the checkpoint:
+
+```sh
+reactor deploy production --weights ./weights
+```
+
+Nothing downloads at runtime (`HF_HUB_OFFLINE=1`). A missing file stops
+`load()` with an error that names `prepare_weights.py`. `LINGBOT_WORLD_V2_PATH`
+and `LINGBOT_WORLD_V2_CHECKPOINT_PATH` may point to existing copies available
+inside the container; a source override must be a clean Git checkout at the
+configured revision.
 
 ## Runtime boundary
 

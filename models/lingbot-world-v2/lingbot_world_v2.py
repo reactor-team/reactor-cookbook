@@ -16,7 +16,7 @@ import numpy as np
 from lingbot_world_v2_assets import (
     BuiltInScene,
     LingBotConfig,
-    prepare_runtime_assets,
+    check_runtime_assets,
     read_config,
 )
 from lingbot_world_v2_backend import (
@@ -84,14 +84,14 @@ class LingBotWorldV2(ReactorApp):
         self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
-        """Prepare public assets and load LingBot weights once at startup.
+        """Check the image and weights folder, then load LingBot weights once at startup.
 
         Args:
             config_path: Path to ``lingbot_world_v2.yaml`` from ``reactor.yaml``.
         """
         weights_root = get_weights_path()
         config = read_config(config_path, weights_root)
-        prepare_runtime_assets(config, weights_root)
+        check_runtime_assets(config)
         self._config = config
         self._seed = config.seed
         self._planner = CameraMotionPlanner(

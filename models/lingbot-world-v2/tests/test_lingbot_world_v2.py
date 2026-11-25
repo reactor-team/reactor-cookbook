@@ -293,15 +293,15 @@ def test_config_paths_are_explicit_and_native_settings_are_preserved(
     monkeypatch.delenv("LINGBOT_WORLD_V2_CHECKPOINT_PATH", raising=False)
     path = Path(__file__).parents[1] / "lingbot_world_v2.yaml"
     config = read_config(path, tmp_path)
-    assert config.source_path == tmp_path / "lingbot-world-v2"
-    assert config.checkpoint_path == tmp_path / "lingbot-world-v2-14b-causal-fast"
+    assert config.source_path == Path("/opt/lingbot-world-v2")
+    assert config.checkpoint_path == tmp_path
     assert config.chunk_latents == 4
     assert config.timesteps == (0, 250, 500, 750)
     assert (config.local_attention_frames, config.attention_sink_frames) == (18, 6)
     assert config.max_chunks == 256
     assert config.camera_path_noise_chunks is None
     standalone = read_config(path)
-    assert standalone.source_path == path.resolve().parent / "lingbot-world-v2"
+    assert standalone.source_path == Path("/opt/lingbot-world-v2")
 
 
 @pytest.mark.parametrize("noise", [0, 257])
