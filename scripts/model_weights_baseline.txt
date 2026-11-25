@@ -1,0 +1,31 @@
+# Models that predate GUIDELINES.md "Weights and startup".
+# scripts/check_model_weights.py skips them. The PR that brings a model under
+# the rules removes its line; the check fails while a listed model passes.
+abot-world
+alayaworld
+cosmos3-policy-droid
+diamond-csgo-world-model
+dreamx-world
+echo-wm
+evoke
+fasth3
+hy-world-1-5
+joy-video-edit
+lingbot-world-v1-fast
+lingbot-world-v2
+lyra-2
+matrix-game-2-0
+matrix-game-3-0
+matrix-game-3-5
+matrix-game-4
+open-dreamer
+open-oasis
+rldx-1
+sana-wm
+sgf-plus
+solarwm-stage2
+streamrender-h3
+worldcrafter-fast
+worldplay2
+yume-1-5
+zing-0-5

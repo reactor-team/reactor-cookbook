@@ -75,7 +75,8 @@ modules use the model name as a prefix and split along fixed seams:
 | `<model>.py` | The application half: the `ReactorApp` subclass, commands, lifecycle, the three step hooks |
 | `<model>_model.py` | The model half: `load()` / `generate()` / `reset()`, `<Model>Input`, `<Model>Result`, its own errors; no runtime import |
 | `<model>_types.py` | `InputState`, `Output` tracks, and every `ModelMessage` |
-| `<model>_assets.py` | Config parsing plus source/checkpoint download and validation |
+| `<model>_assets.py` | Config parsing plus checkpoint path resolution and validation; no download |
+| `prepare_weights.py` | Builds the weights folder; the only file that downloads (see [Weights and startup](#weights-and-startup)) |
 | `<model>_backend.py` | The in-process upstream model wrapper (GPU code) the model half calls |
 | `<model>_camera.py`, `<model>_images.py` | Optional camera-planning and image helpers, used by the application half |
 
@@ -83,14 +84,69 @@ Models whose upstream cannot share the runtime's Python environment
 (conflicting dependencies) run it in a separate interpreter with
 `upstream_backend.py` + `worker.py`. A model that only needs its own process
 or several GPUs uses `DistributedRunner` and keeps `<model>_backend.py`.
-Either kind may carry `download_snapshot.py`, a documented `*.patch`, and
-`<model>_config.py` in place of `<model>_assets.py`. Everything else about
-them follows the same rules.
+Either kind may carry a documented `*.patch` and `<model>_config.py` in place
+of `<model>_assets.py`. Everything else about them follows the same rules.
 
 Also uniform across models: a `.dockerignore`, an `example_images/` folder
 when the README shows sample inputs, `tests/test_<model>.py` when tests
 exist, and **no** `__init__.py` — model modules are imported flat by
 `reactor.yaml`'s `runtime.import`.
+
+## Weights and startup
+
+A model starts from two inputs: its image and its weights folder. `load()`
+reads nothing from the network. Reactor copies the selected weight set to the
+GPU node before the model container starts, and mounts it read-only. A model
+that downloads in `load()` downloads again on every new instance, and a model
+deployed with a weight set cannot write into it.
+
+- **Upstream source is in the image.** `build.run` (or the Dockerfile)
+  fetches the upstream repository at its pinned commit. `load()` never runs
+  `git`.
+- **Checkpoints come from `get_weights_path()`.** The application passes the
+  folder to the model half's `load()`, which resolves every checkpoint under
+  it.
+- **One public Hugging Face repository whose tree is the layout `load()`
+  reads is the weight set.** Pin it by commit in `runtime.weights_path` for
+  `reactor run`, and deploy with the same reference:
+
+  ```yaml
+  runtime:
+    weights_path: hf://<org>/<repo>@<commit>
+  ```
+
+  ```sh
+  reactor deploy production --weights hf://<org>/<repo>@<commit>
+  ```
+
+- **Any other layout is built by `prepare_weights.py`:** several
+  repositories, a subset of a large repository, or a converted file. The
+  script pins every source by commit, writes the folder `load()` reads, and
+  is safe to run again. `runtime.weights_path: ./weights` makes `reactor run`
+  use the same folder.
+
+  ```sh
+  python prepare_weights.py --output ./weights
+  reactor deploy production --weights ./weights
+  ```
+
+- **A missing checkpoint is an error, not a download.** `<model>_assets.py`
+  raises an error that names the missing path and the command that supplies
+  it.
+- **The hub is off at runtime.** `build.runtime_env` (or `ENV` in the
+  Dockerfile) sets `HF_HUB_OFFLINE: "1"`, so a stray hub call in upstream
+  code fails at once instead of downloading.
+- **Caches the model writes go to a writable folder**, such as one under
+  `~/.cache`, and never under the weights folder. TorchInductor and Triton
+  compile caches are examples.
+
+CI runs `scripts/check_model_weights.py` on every model. It fails on a
+download or a `git` network call in the model's own modules, on a manifest
+without `HF_HUB_OFFLINE`, and on a `runtime.weights_path` that is not
+`./weights` or a pinned `hf://` reference. A model in
+`scripts/model_weights_baseline.txt` predates the rule. The PR that brings a
+model under the rule removes it from that list, and the check fails when a
+listed model already passes.
 
 ## Typed contracts
 
