@@ -9,6 +9,22 @@ from pathlib import Path
 
 import yaml
 
+# The checkpoint files that the model reads, at their repository paths.
+REQUIRED_FILES = (
+    "generator/model.pt",
+    "pretrained/vae/config.json",
+    "pretrained/vae/diffusion_pytorch_model.safetensors",
+    "pretrained/text_encoder/config.json",
+    "pretrained/text_encoder/model.safetensors.index.json",
+    "pretrained/text_encoder/model-00001-of-00003.safetensors",
+    "pretrained/text_encoder/model-00002-of-00003.safetensors",
+    "pretrained/text_encoder/model-00003-of-00003.safetensors",
+    "pretrained/tokenizer/tokenizer_config.json",
+    "pretrained/tokenizer/tokenizer.json",
+    "pretrained/tokenizer/spiece.model",
+    "pretrained/tokenizer/special_tokens_map.json",
+)
+
 
 @dataclass(frozen=True)
 class ZingAdapterConfig:
@@ -51,23 +67,36 @@ def read_config(path: Path | None, weights_root: Path) -> ZingAdapterConfig:
 
 
 def configure_environment(config: ZingAdapterConfig) -> None:
-    cache = config.asset_path
-    runtime = config.asset_path / "runtime-cache"
+    """Point caches and compiled kernels at ``~/.cache/zing-0-5``, not the weights."""
+    cache = Path.home() / ".cache" / "zing-0-5"
     values = {
         "HF_HOME": cache,
         "HUGGINGFACE_HUB_CACHE": cache / "hub",
-        "XDG_CACHE_HOME": runtime,
-        "TORCHINDUCTOR_CACHE_DIR": runtime / "torchinductor",
-        "CUDA_CACHE_PATH": runtime / "cuda",
+        "XDG_CACHE_HOME": cache / "runtime-cache",
+        "TORCHINDUCTOR_CACHE_DIR": cache / "runtime-cache" / "torchinductor",
+        "CUDA_CACHE_PATH": cache / "runtime-cache" / "cuda",
     }
     for name, value in values.items():
         value.mkdir(parents=True, exist_ok=True)
         os.environ.setdefault(name, str(value))
 
 
-def prepare_assets(config: ZingAdapterConfig) -> None:
+def weights_ref(config: ZingAdapterConfig) -> str:
+    """Return the ``hf://`` weight set that holds the pinned checkpoint."""
+    return f"hf://{config.repo_id}@{config.asset_revision}"
+
+
+def check_assets(config: ZingAdapterConfig) -> None:
+    """Check the source in the image and the checkpoint in the weight set.
+
+    This function never downloads. The image holds the source at the pinned
+    revision, and the weight set holds the checkpoint at its repository paths.
+    """
     if not (config.source_path / ".git").is_dir():
-        raise RuntimeError("The serving image must include the pinned Zing checkout")
+        raise FileNotFoundError(
+            f"Zing source is missing at {config.source_path}; "
+            "rebuild the image with `reactor build`"
+        )
     actual = subprocess.run(
         ["git", "-C", str(config.source_path), "rev-parse", "HEAD"],
         check=True,
@@ -78,50 +107,14 @@ def prepare_assets(config: ZingAdapterConfig) -> None:
         raise RuntimeError(
             f"Zing source is {actual}; expected {config.source_revision}"
         )
-    required = tuple(
-        config.asset_path / name
-        for name in (
-            "generator/model.pt",
-            "pretrained/vae/config.json",
-            "pretrained/vae/diffusion_pytorch_model.safetensors",
-            "pretrained/text_encoder/config.json",
-            "pretrained/text_encoder/model.safetensors.index.json",
-            "pretrained/text_encoder/model-00001-of-00003.safetensors",
-            "pretrained/text_encoder/model-00002-of-00003.safetensors",
-            "pretrained/text_encoder/model-00003-of-00003.safetensors",
-            "pretrained/tokenizer/tokenizer_config.json",
-            "pretrained/tokenizer/tokenizer.json",
-            "pretrained/tokenizer/spiece.model",
-            "pretrained/tokenizer/special_tokens_map.json",
-        )
-    )
-    if any(not path.is_file() or path.stat().st_size == 0 for path in required):
-        from huggingface_hub import snapshot_download
-
-        token = os.environ.get("HF_TOKEN") or os.environ.get("HF_KEY")
-        snapshot_download(
-            repo_id=config.repo_id,
-            revision=config.asset_revision,
-            local_dir=config.asset_path,
-            token=token,
-        )
-    # Hub metadata can consider an existing empty file current; force only those files.
-    empty = [
-        path.relative_to(config.asset_path).as_posix()
-        for path in required
-        if path.is_file() and path.stat().st_size == 0
+    missing = [
+        name
+        for name in REQUIRED_FILES
+        if not (config.asset_path / name).is_file()
+        or (config.asset_path / name).stat().st_size == 0
     ]
-    if empty:
-        from huggingface_hub import snapshot_download
-
-        snapshot_download(
-            repo_id=config.repo_id,
-            revision=config.asset_revision,
-            local_dir=config.asset_path,
-            allow_patterns=empty,
-            force_download=True,
-            token=os.environ.get("HF_TOKEN") or os.environ.get("HF_KEY"),
+    if missing:
+        raise FileNotFoundError(
+            f"Zing weights in {config.asset_path} lack: {', '.join(missing)}. "
+            f"Deploy or run with `--weights {weights_ref(config)}`."
         )
-    for path in required:
-        if not path.is_file() or path.stat().st_size == 0:
-            raise RuntimeError(f"Zing asset is missing or empty: {path}")
