@@ -29,17 +29,19 @@ The demo requires Node 22. Runtime runs in a Docker container with NVIDIA suppor
 
 ## Prepare weights and start the model
 
-Install the [Reactor CLI](https://docs.reactor.inc). Download the official bundle
-to a persistent weights directory:
+Install the [Reactor CLI](https://docs.reactor.inc). Build the weights folder once.
+It downloads the official bundle at a pinned revision, then rebuilds the merged
+backbone with the bundle's `download_assets.py`:
 
 ```sh
-hf download Efficient-Large-Model/StreamRender-H3 \
-  --revision 9f81b42fb6bac3509ccc6ebf4cb6c8aec7469c62 --local-dir /path/to/weights
-python /path/to/weights/download_assets.py
+pip install huggingface-hub
+python prepare_weights.py --output ./weights
 ```
 
-Set `runtime.weights_path` in `reactor.yaml` to that directory, then build from
-the adapter directory (`models/streamrender-h3/` in Cookbook):
+`reactor.yaml` sets `runtime.weights_path: ./weights` and `HF_HUB_OFFLINE`, so a
+missing file stops startup with an error that names this command. Deploy the same
+folder with `reactor deploy production --weights ./weights`. Build from the adapter
+directory (`models/streamrender-h3/` in Cookbook):
 
 ```sh
 reactor build --no-dockerfile
@@ -54,7 +56,7 @@ GPUs. For the default four-GPU image, a local launch is:
 
 ```sh
 docker run --rm --gpus '"device=0,1,2,3"' --shm-size=2g \
-  -p 127.0.0.1:8080:8080 -v /path/to/weights:/weights \
+  -p 127.0.0.1:8080:8080 -v "$PWD/weights:/weights" \
   -e REACTOR_WEIGHTS_PATH=/weights -e STREAMRENDER_ASSETS=/weights/assets.json \
   reactor-local/streamrender-h3:dev
 ```

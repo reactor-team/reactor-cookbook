@@ -8,3 +8,6 @@ node_modules/
 # reach of that folder's own ignore file. Ignoring it here covers the tree.
 .next/
 *.tsbuildinfo
+
+# A model's weights folder, built by its prepare_weights.py and pushed as a weight set.
+models/*/weights/
