@@ -1,15 +1,10 @@
-"""Prepare pinned DreamX-World source and inference assets."""
+"""Read the DreamX-World config and check its source and inference assets."""
 
 from __future__ import annotations
 
-import importlib
 import json
-import os
 import re
 import subprocess
-import tempfile
-from collections.abc import Mapping
-from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,10 +15,10 @@ from reactor_runtime.log import get_logger
 
 logger = get_logger(__name__)
 
-SOURCE_ENV = "DREAMX_WORLD_PATH"
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
-_ASSET_MARKER = ".reactor-assets.json"
-_WAN_REQUIRED_FILES = (
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
+DREAMX_FILE = "model.safetensors"
+WAN_REQUIRED_FILES = (
     "Wan2.2_VAE.pth",
     "models_t5_umt5-xxl-enc-bf16.pth",
     "google/umt5-xxl/special_tokens_map.json",
@@ -33,8 +28,14 @@ _WAN_REQUIRED_FILES = (
 )
 
 
-def read_config(config_path: Path | None) -> DreamXConfig:
-    """Read and validate the DreamX-World adapter YAML."""
+def read_config(
+    config_path: Path | None, weights_root: Path | None = None
+) -> DreamXConfig:
+    """Read and validate the DreamX-World adapter YAML.
+
+    ``weights_root`` is the folder that ``prepare_weights.py`` builds. It
+    defaults to Runtime's weights path.
+    """
     if config_path is None:
         raise ValueError("DreamX-World requires runtime.config in reactor.yaml")
     document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -46,7 +47,7 @@ def read_config(config_path: Path | None) -> DreamXConfig:
     inference = _mapping(document.get("inference"), "inference")
     inputs = _mapping(document.get("inputs"), "inputs")
     stream = _mapping(document.get("stream", {}), "stream")
-    weights_root = get_weights_path().resolve()
+    weights_root = (weights_root or get_weights_path()).resolve()
     source_path = _source_path(source["path"], weights_root)
 
     random_images_raw = inputs.get("random_images")
@@ -87,46 +88,26 @@ def read_config(config_path: Path | None) -> DreamXConfig:
     )
 
 
-def prepare_runtime_assets(config: DreamXConfig) -> dict[Path, str]:
-    """Prepare public source and weights, then return built-in image prompts."""
-    _ensure_source_checkout(config)
-    _ensure_hf_file(config.dreamx, "model.safetensors", "DreamX-World checkpoint")
-    _ensure_hf_files(config.wan, _WAN_REQUIRED_FILES, "Wan2.2 text encoder and VAE")
+def check_runtime_assets(config: DreamXConfig) -> dict[Path, str]:
+    """Check the source and weights, then return built-in image prompts.
+
+    This function never downloads. The image holds the source at the pinned
+    revision, and ``prepare_weights.py`` builds the weights folder.
+    """
+    _check_source(config)
+    check_weights(config)
     _validate_runtime_paths(config)
     return _load_scene_prompts(config)
 
 
-def _ensure_source_checkout(config: DreamXConfig) -> None:
-    """Clone a missing upstream checkout and require the pinned clean revision."""
+def _check_source(config: DreamXConfig) -> None:
+    """Require the pinned clean source checkout in the image."""
     path = config.source_path
-    if not path.exists():
-        logger.info(
-            "downloading DreamX-World source",
-            url=config.source_url,
-            revision=config.source_revision,
-            destination=str(path),
-        )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix=".reactor-dreamx-source-", dir=path.parent
-        ) as tmp:
-            checkout = Path(tmp) / "checkout"
-            _run_git(
-                [
-                    "clone",
-                    "--filter=blob:none",
-                    "--no-checkout",
-                    config.source_url,
-                    str(checkout),
-                ]
-            )
-            _run_git(
-                ["-C", str(checkout), "checkout", "--detach", config.source_revision]
-            )
-            with suppress(FileExistsError):
-                checkout.rename(path)
     if not (path / ".git").exists():
-        raise RuntimeError(f"DreamX-World source at {path} must be a Git checkout")
+        raise FileNotFoundError(
+            f"DreamX-World source is missing at {path}; "
+            "rebuild the image with `reactor build`"
+        )
     actual = _run_git(["-C", str(path), "rev-parse", "HEAD"]).stdout.strip()
     if actual != config.source_revision:
         raise RuntimeError(
@@ -141,78 +122,27 @@ def _ensure_source_checkout(config: DreamXConfig) -> None:
         )
 
 
-def _ensure_hf_file(asset: RepositoryAsset, filename: str, name: str) -> None:
-    """Download one pinned Hugging Face file when its completion marker is absent."""
-    destination = asset.path
-    marker = destination.parent / f".{destination.name}.reactor-asset.json"
-    expected = {
-        "repo_id": asset.repo_id,
-        "revision": asset.revision,
-        "files": [filename],
-    }
-    if (
-        destination.is_file()
-        and destination.stat().st_size > 0
-        and _json_matches(marker, expected)
-    ):
-        return
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    logger.info(
-        "downloading model asset", asset=name, repo_id=asset.repo_id, file=filename
-    )
-    downloaded = _hf_hub_download(
-        repo_id=asset.repo_id,
-        filename=filename,
-        revision=asset.revision,
-        local_dir=destination.parent,
-    )
-    if downloaded.resolve() != destination.resolve() or not destination.is_file():
-        raise RuntimeError(f"{name} download did not create {destination}")
-    _write_json(marker, expected)
-
-
-def _ensure_hf_files(
-    asset: RepositoryAsset,
-    filenames: tuple[str, ...],
-    name: str,
-) -> None:
-    """Download the selected files required from one pinned repository."""
-    marker = asset.path / _ASSET_MARKER
-    expected = {
-        "repo_id": asset.repo_id,
-        "revision": asset.revision,
-        "files": list(filenames),
-    }
-    if all(
-        (asset.path / filename).is_file() for filename in filenames
-    ) and _json_matches(marker, expected):
-        return
-    asset.path.mkdir(parents=True, exist_ok=True)
-    logger.info("downloading model assets", asset=name, repo_id=asset.repo_id)
-    for filename in filenames:
-        _hf_hub_download(
-            repo_id=asset.repo_id,
-            filename=filename,
-            revision=asset.revision,
-            local_dir=asset.path,
-        )
+def check_weights(config: DreamXConfig) -> None:
+    """Raise when the weights folder lacks a file that the model reads."""
+    required = [config.dreamx.path] + [
+        config.wan.path / name for name in WAN_REQUIRED_FILES
+    ]
     missing = [
-        filename for filename in filenames if not (asset.path / filename).is_file()
+        str(path) for path in required if not path.is_file() or path.stat().st_size == 0
     ]
     if missing:
-        raise RuntimeError(f"{name} download is incomplete: {', '.join(missing)}")
-    _write_json(marker, expected)
+        raise FileNotFoundError(
+            f"DreamX-World weights lack: {', '.join(missing)}. "
+            f"Run `{PREPARE_COMMAND}` and deploy with `--weights ./weights`."
+        )
 
 
 def _validate_runtime_paths(config: DreamXConfig) -> None:
-    """Require the pinned source, configs, checkpoints, and built-in images."""
+    """Require the pinned source files, configs, and built-in images."""
     files = {
         "DreamX upstream config": config.upstream_config,
         "DreamX transformer config": config.transformer_config,
         "DreamX evaluation inputs": config.evaluation_inputs,
-        "DreamX checkpoint": config.dreamx.path,
-        "Wan2.2 VAE": config.wan.path / "Wan2.2_VAE.pth",
-        "Wan2.2 text encoder": config.wan.path / "models_t5_umt5-xxl-enc-bf16.pth",
     }
     for name, path in files.items():
         if not path.is_file():
@@ -266,9 +196,8 @@ def _asset(base: Path, value: object, name: str) -> RepositoryAsset:
 
 
 def _source_path(value: object, weights_root: Path) -> Path:
-    """Resolve the source override or configured path without hard-coded host paths."""
-    configured = os.environ.get(SOURCE_ENV)
-    return _resolve(weights_root, configured if configured else value)
+    """Resolve the configured source path. An absolute path stays as it is."""
+    return _resolve(weights_root, value)
 
 
 def _resolve(base: Path, value: object) -> Path:
@@ -301,45 +230,9 @@ def _run_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(command, check=True, capture_output=True, text=True)
     except FileNotFoundError as error:
-        raise RuntimeError("Git is required to prepare DreamX-World") from error
+        raise RuntimeError(
+            "Git is required to check the DreamX-World source"
+        ) from error
     except subprocess.CalledProcessError as error:
         detail = error.stderr.strip() or error.stdout.strip() or "Git command failed"
-        raise RuntimeError(
-            f"Unable to prepare DreamX-World source: {detail}"
-        ) from error
-
-
-def _hf_hub_download(
-    *, repo_id: str, filename: str, revision: str, local_dir: Path
-) -> Path:
-    """Download one Hugging Face file and retain its actionable failure detail."""
-    try:
-        hugging_face = importlib.import_module("huggingface_hub")
-        return Path(
-            hugging_face.hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                revision=revision,
-                local_dir=local_dir,
-            )
-        )
-    except Exception as error:
-        raise RuntimeError(
-            f"Unable to download public asset from {repo_id}: {error}"
-        ) from error
-
-
-def _json_matches(path: Path, expected: Mapping[str, object]) -> bool:
-    """Return whether a completion marker exactly matches its asset identity."""
-    try:
-        return json.loads(path.read_text(encoding="utf-8")) == expected
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return False
-
-
-def _write_json(path: Path, document: Mapping[str, object]) -> None:
-    """Atomically write a small asset completion marker."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pending = path.with_suffix(path.suffix + ".tmp")
-    pending.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
-    os.replace(pending, path)
+        raise RuntimeError(f"Unable to check DreamX-World source: {detail}") from error

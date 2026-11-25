@@ -5,7 +5,6 @@ abot-world
 alayaworld
 cosmos3-policy-droid
 diamond-csgo-world-model
-dreamx-world
 echo-wm
 evoke
 fasth3
