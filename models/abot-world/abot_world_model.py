@@ -23,14 +23,12 @@ _EXPECTED_LOCAL_CACHE_LATENTS = 21
 
 
 @contextmanager
-def _materialized_image(
-    source: Path | bytes, suffix: str, weights_root: Path
-) -> Iterator[Path]:
-    """Keep encoded bytes on the weights volume only while the native encoder needs them."""
+def _materialized_image(source: Path | bytes, suffix: str) -> Iterator[Path]:
+    """Keep encoded bytes in a writable cache only while the native encoder needs them."""
     if isinstance(source, Path):
         yield source
         return
-    temporary_root = weights_root / "temporary-images"
+    temporary_root = Path.home() / ".cache" / "abot-world" / "temporary-images"
     temporary_root.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         prefix="abot-world-", suffix=suffix, dir=temporary_root
@@ -95,7 +93,6 @@ class ABotWorldModel:
 
     def __init__(self) -> None:
         self._config: ABotWorldConfig | None = None
-        self._weights_root: Path | None = None
         self._modules: dict[str, Any] = {}
         self._pipeline: Any = None
         self._device: Any = None
@@ -106,7 +103,6 @@ class ABotWorldModel:
 
     def load(self, config: ABotWorldConfig, weights_root: Path) -> None:
         """Load native weights with application-resolved paths."""
-        self._weights_root = weights_root
         modules = load_upstream_modules(config)
         torch = modules["torch"]
         if not torch.cuda.is_available():
@@ -221,9 +217,7 @@ class ABotWorldModel:
             initial_latent=None,
         )
         self._clear_decoder_cache()
-        with _materialized_image(
-            selected_input, suffix, self._weights_root
-        ) as image_path:
+        with _materialized_image(selected_input, suffix) as image_path:
             pipeline.set_first_frame_latent(
                 str(image_path),
                 height=config.height,

@@ -3,7 +3,7 @@
 import asyncio
 import subprocess
 import sys
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -339,3 +339,89 @@ import abot_world_model
     subprocess.run(
         [sys.executable, "-c", code], cwd=Path(__file__).parents[1], check=True
     )
+
+
+MODEL_DIR = Path(__file__).parents[1]
+
+
+def _in(root: Path):
+    config = _config()
+    return replace(config, checkpoint=replace(config.checkpoint, path=root))
+
+
+def _config():
+    from abot_world_assets import read_config
+
+    return read_config(MODEL_DIR / "abot_world.yaml", Path("/weights"))
+
+
+def _write_checkpoint(root: Path) -> None:
+    from abot_world_assets import _CHECKPOINT_FILES
+
+    for name in _CHECKPOINT_FILES:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_bytes(b"x")
+
+
+def test_manifest_weight_set_matches_the_pinned_checkpoint_and_source() -> None:
+    import yaml
+    from abot_world_assets import weights_ref
+
+    config = _config()
+    manifest = yaml.safe_load((MODEL_DIR / "reactor.yaml").read_text())
+    assert manifest["runtime"]["weights_path"] == weights_ref(config)
+    assert manifest["build"]["runtime_env"]["HF_HUB_OFFLINE"] == "1"
+    clone = manifest["build"]["run"][0]
+    assert config.source_revision in clone and config.source_url in clone
+    assert str(config.source_path) in clone
+    assert config.checkpoint.path == Path("/weights")
+
+
+def test_checkpoint_resolves_in_the_weight_set(tmp_path: Path) -> None:
+    from abot_world_assets import _check_checkpoint
+
+    _write_checkpoint(tmp_path)
+    config = _in(tmp_path)
+    _check_checkpoint(config)
+
+
+def test_missing_checkpoint_names_the_fix_and_downloads_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from abot_world_assets import _check_checkpoint, weights_ref
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+    _write_checkpoint(tmp_path)
+    (tmp_path / "taew2_2.pth").unlink()
+    config = _in(tmp_path)
+    with pytest.raises(FileNotFoundError, match="taew2_2.pth") as raised:
+        _check_checkpoint(config)
+    assert f"--weights {weights_ref(config)}" in str(raised.value)
+    assert not (tmp_path / "taew2_2.pth").exists()
+
+
+def test_missing_source_asks_for_a_rebuild_and_runs_no_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from abot_world_assets import _check_source_checkout
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("git call")
+
+    monkeypatch.setattr(subprocess, "run", refuse)
+    config = replace(_config(), source_path=tmp_path / "absent")
+    with pytest.raises(FileNotFoundError, match="reactor build"):
+        _check_source_checkout(config)
+    assert not (tmp_path / "absent").exists()
+
+
+def test_image_bytes_stay_off_the_weights_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from abot_world_model import _materialized_image
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    with _materialized_image(b"png", ".png") as path:
+        assert path.read_bytes() == b"png"
+        assert tmp_path in path.parents
+    assert not path.exists()
