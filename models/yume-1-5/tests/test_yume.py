@@ -23,24 +23,7 @@ from yume_model import NoAnchor, YumeInput, YumeModel
 from yume_types import YumeOutput, YumeState
 
 
-@pytest.mark.parametrize(
-    "damaged",
-    [
-        "diffusion_pytorch_model.safetensors",
-        "config.json",
-        "Wan2.2_VAE.pth",
-        "models_t5_umt5-xxl-enc-bf16.pth",
-        "google/umt5-xxl/tokenizer.json",
-        "google/umt5-xxl/tokenizer_config.json",
-        "google/umt5-xxl/spiece.model",
-        "google/umt5-xxl/special_tokens_map.json",
-    ],
-)
-@pytest.mark.parametrize("empty", [False, True])
-def test_asset_download_repairs_each_required_file(
-    tmp_path, monkeypatch, damaged, empty
-):
-    import sys
+def _checked_config(tmp_path, monkeypatch):
     from dataclasses import replace
 
     import yume_assets as assets
@@ -53,56 +36,63 @@ def test_asset_download_repairs_each_required_file(
         "run",
         lambda *a, **kw: SimpleNamespace(stdout=config.source_revision),
     )
-    root = config.checkpoint_path
-    files = [
-        "diffusion_pytorch_model.safetensors",
-        "config.json",
-        "Wan2.2_VAE.pth",
-        "models_t5_umt5-xxl-enc-bf16.pth",
-        "google/umt5-xxl/tokenizer.json",
-        "google/umt5-xxl/tokenizer_config.json",
-        "google/umt5-xxl/spiece.model",
-        "google/umt5-xxl/special_tokens_map.json",
-    ]
+    return assets, config
 
-    def populate(**kwargs):
-        for name in files:
-            path = root / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"fixture")
 
-    populate()
-    target = root / damaged
+@pytest.mark.parametrize("empty", [False, True])
+def test_missing_checkpoint_file_names_the_weight_set_and_downloads_nothing(
+    tmp_path, monkeypatch, empty
+):
+    import sys
+
+    assets, config = _checked_config(tmp_path, monkeypatch)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+    for name in assets.REQUIRED_FILES:
+        path = config.checkpoint_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
+    assets.check_assets(config)
+    damaged = config.checkpoint_path / "Wan2.2_VAE.pth"
     if empty:
-        target.write_bytes(b"")
+        damaged.write_bytes(b"")
     else:
-        target.unlink()
+        damaged.unlink()
+    with pytest.raises(FileNotFoundError, match="Wan2.2_VAE.pth") as raised:
+        assets.check_assets(config)
+    assert f"--weights {assets.weights_ref(config)}" in str(raised.value)
 
-    def download_snapshot(**kwargs):
-        # Simulate Hub reusing stale metadata for an existing zero-byte file.
-        populate()
-        if empty and not kwargs.get("force_download"):
-            target.write_bytes(b"")
 
-    download = Mock(side_effect=download_snapshot)
-    monkeypatch.setitem(
-        sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=download)
+def test_manifest_weight_set_matches_the_pinned_checkpoint():
+    import yaml
+    import yume_assets as assets
+
+    config = assets.read_config(Path(__file__).parents[1] / "yume.yaml")
+    manifest = yaml.safe_load((Path(__file__).parents[1] / "reactor.yaml").read_text())
+    assert manifest["runtime"]["weights_path"] == assets.weights_ref(config)
+    assert manifest["build"]["runtime_env"]["HF_HUB_OFFLINE"] == "1"
+
+
+def test_source_at_another_revision_is_refused(tmp_path, monkeypatch):
+    assets, config = _checked_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        assets.subprocess, "run", lambda *a, **kw: SimpleNamespace(stdout="0" * 40)
     )
+    with pytest.raises(RuntimeError, match="expected"):
+        assets.check_assets(config)
 
-    assets.prepare_assets(config)
-    assert download.call_count == (2 if empty else 1)
-    if empty:
-        assert download.call_args.kwargs["force_download"] is True
-        assert download.call_args.kwargs["allow_patterns"] == [damaged]
-    assert download.call_args.kwargs["revision"] == config.checkpoint_revision
 
-    download.reset_mock()
-    assets.prepare_assets(config)
-    download.assert_not_called()
-    target.unlink()
-    download.side_effect = None
-    with pytest.raises(RuntimeError, match="missing or empty"):
-        assets.prepare_assets(config)
+def test_missing_source_asks_for_a_rebuild(tmp_path):
+    from dataclasses import replace
+
+    import yume_assets as assets
+
+    config = replace(
+        assets.read_config(Path(__file__).parents[1] / "yume.yaml", tmp_path),
+        source_path=tmp_path / "absent",
+    )
+    with pytest.raises(FileNotFoundError, match="reactor build"):
+        assets.check_assets(config)
+    assert not (tmp_path / "absent").exists()
 
 
 def uploaded_image() -> UploadedFile:
@@ -476,45 +466,6 @@ yume_model.YumeModel()
         cwd=Path(__file__).parents[1],
         check=True,
     )
-
-
-def test_first_checkout_pins_revision_before_loading_weights(tmp_path, monkeypatch):
-    from dataclasses import replace
-
-    import yume_assets
-
-    config = replace(
-        read_config(Path(__file__).parents[1] / "yume.yaml"),
-        source_path=tmp_path / "source",
-        checkpoint_path=tmp_path / "weights",
-    )
-    config.checkpoint_path.mkdir()
-    for name in [
-        "diffusion_pytorch_model.safetensors",
-        "config.json",
-        "Wan2.2_VAE.pth",
-        "models_t5_umt5-xxl-enc-bf16.pth",
-        "google/umt5-xxl/tokenizer.json",
-        "google/umt5-xxl/tokenizer_config.json",
-        "google/umt5-xxl/spiece.model",
-        "google/umt5-xxl/special_tokens_map.json",
-    ]:
-        path = config.checkpoint_path / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"fixture")
-    calls = []
-
-    def run(args, **kwargs):
-        calls.append(args)
-        if "clone" in args:
-            (config.source_path / ".git").mkdir(parents=True)
-        return SimpleNamespace(stdout=config.source_revision)
-
-    monkeypatch.setattr(yume_assets.subprocess, "run", run)
-    yume_assets.prepare_assets(config)
-    assert calls[0][1] == "clone"
-    assert calls[1][-3:] == ["checkout", "--detach", config.source_revision]
-    assert calls[2][-2:] == ["rev-parse", "HEAD"]
 
 
 def test_video_scene_passes_prepared_cpu_anchor(monkeypatch):

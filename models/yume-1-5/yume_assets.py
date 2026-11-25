@@ -9,6 +9,18 @@ from pathlib import Path
 
 import yaml
 
+# The checkpoint files that the model reads, at their repository paths.
+REQUIRED_FILES = (
+    "diffusion_pytorch_model.safetensors",
+    "config.json",
+    "Wan2.2_VAE.pth",
+    "models_t5_umt5-xxl-enc-bf16.pth",
+    "google/umt5-xxl/tokenizer.json",
+    "google/umt5-xxl/tokenizer_config.json",
+    "google/umt5-xxl/spiece.model",
+    "google/umt5-xxl/special_tokens_map.json",
+)
+
 
 @dataclass(frozen=True)
 class YumeConfig:
@@ -89,23 +101,22 @@ def configure_environment(config: YumeConfig) -> None:
         os.environ["HF_TOKEN"] = os.environ["HF_KEY"]
 
 
-def prepare_assets(config: YumeConfig) -> None:
-    """Ensure immutable upstream source and checkpoint snapshots exist."""
+def weights_ref(config: YumeConfig) -> str:
+    """Return the ``hf://`` weight set that holds the pinned checkpoint."""
+    return f"hf://{config.checkpoint_repo}@{config.checkpoint_revision}"
+
+
+def check_assets(config: YumeConfig) -> None:
+    """Check the source in the image and the checkpoint in the weight set.
+
+    This function never downloads. The image holds the source at the pinned
+    revision, and the weight set holds the checkpoint files at their
+    repository paths.
+    """
     if not (config.source_path / ".git").is_dir():
-        config.source_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "clone", config.source_url, str(config.source_path)], check=True
-        )
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(config.source_path),
-                "checkout",
-                "--detach",
-                config.source_revision,
-            ],
-            check=True,
+        raise FileNotFoundError(
+            f"YUME source is missing at {config.source_path}; "
+            "rebuild the image with `reactor build`"
         )
     actual = subprocess.run(
         ["git", "-C", str(config.source_path), "rev-parse", "HEAD"],
@@ -117,48 +128,17 @@ def prepare_assets(config: YumeConfig) -> None:
         raise RuntimeError(
             f"YUME source is {actual}; expected {config.source_revision}"
         )
-    required = tuple(
-        config.checkpoint_path / name
-        for name in (
-            "diffusion_pytorch_model.safetensors",
-            "config.json",
-            "Wan2.2_VAE.pth",
-            "models_t5_umt5-xxl-enc-bf16.pth",
-            "google/umt5-xxl/tokenizer.json",
-            "google/umt5-xxl/tokenizer_config.json",
-            "google/umt5-xxl/spiece.model",
-            "google/umt5-xxl/special_tokens_map.json",
-        )
-    )
-    if any(not path.is_file() or path.stat().st_size == 0 for path in required):
-        from huggingface_hub import snapshot_download
-
-        snapshot_download(
-            repo_id=config.checkpoint_repo,
-            revision=config.checkpoint_revision,
-            local_dir=config.checkpoint_path,
-            cache_dir=config.cache_dir,
-        )
-    # Hub metadata can consider an existing empty file current; force only those files.
-    empty = [
-        path.relative_to(config.checkpoint_path).as_posix()
-        for path in required
-        if path.is_file() and path.stat().st_size == 0
+    missing = [
+        name
+        for name in REQUIRED_FILES
+        if not (config.checkpoint_path / name).is_file()
+        or (config.checkpoint_path / name).stat().st_size == 0
     ]
-    if empty:
-        from huggingface_hub import snapshot_download
-
-        snapshot_download(
-            repo_id=config.checkpoint_repo,
-            revision=config.checkpoint_revision,
-            local_dir=config.checkpoint_path,
-            allow_patterns=empty,
-            force_download=True,
-            cache_dir=config.cache_dir,
+    if missing:
+        raise FileNotFoundError(
+            f"YUME weights in {config.checkpoint_path} lack: {', '.join(missing)}. "
+            f"Deploy or run with `--weights {weights_ref(config)}`."
         )
-    for path in required:
-        if not path.is_file() or path.stat().st_size == 0:
-            raise RuntimeError(f"YUME asset is missing or empty: {path}")
 
 
 def _local_path(value: object, root: Path) -> Path:

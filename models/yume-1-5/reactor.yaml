@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: yume-1-5
-  version: v0.1.3
+  version: v0.2.0
   description: |
     Explore a continuous YUME-1.5 world from text or an uploaded first frame,
     using its released prompt-encoded keyboard and camera controls.
@@ -24,8 +24,8 @@ runtime:
   # larger than the default 64 MiB.
   webrtc:
     max_message_size: 256Mi
-  # Checkpoints, downloads and compiled kernels use the weights mount.
-  weights_path: ~/.cache/reactor_registry/yume-1-5
+  # yume.yaml's assets section pins the same repository and revision.
+  weights_path: hf://stdstu123/Yume-5B-720P@b117c778405246a0b932d7ec5873b01a4840da3a
   recording:
     enabled: true
     chunk_seconds: 1.208333
@@ -58,3 +58,5 @@ build:
     - libglib2.0-0
   runtime_env:
     PYTORCH_ALLOC_CONF: expandable_segments:True
+    # The checkpoint comes from the weight set; nothing downloads at runtime.
+    HF_HUB_OFFLINE: "1"

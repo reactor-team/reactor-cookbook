@@ -4,8 +4,10 @@ source:
   revision: 111c3fab7fb020d1e261a68be6ec78a3fecc8d5b
 
 assets:
-  cache_dir: cache/huggingface
-  checkpoint_path: weights/Yume-5B-720P
+  # Caches and compiled kernels go here; the weights folder stays read-only.
+  cache_dir: ~/.cache/yume
+  # The weight set root holds the pinned repository's files.
+  checkpoint_path: .
   checkpoint_repo: stdstu123/Yume-5B-720P
   checkpoint_revision: b117c778405246a0b932d7ec5873b01a4840da3a
 

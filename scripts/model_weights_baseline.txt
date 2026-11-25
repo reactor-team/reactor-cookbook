@@ -27,5 +27,4 @@ solarwm-stage2
 streamrender-h3
 worldcrafter-fast
 worldplay2
-yume-1-5
 zing-0-5
