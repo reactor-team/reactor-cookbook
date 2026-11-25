@@ -24,27 +24,36 @@ world continues. This recipe uses the released four-step video model.
 
 - [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
   NVIDIA driver and NVIDIA Container Toolkit.
-- One NVIDIA B200 GPU and persistent checkpoint storage.
-- The public Lyra 2.0 checkpoints, arranged under
-  `source/Lyra-2/checkpoints/` in the weights directory according to the
-  upstream instructions. Review the upstream source and model usage terms.
-- The Hugging Face cache under `hf-cache/` in the weights directory needs
-  `depth-anything/DA3NESTED-GIANT-LARGE-1.1`, `google/umt5-xxl` and
-  `Ruicheng/moge-vitl` (1.3 GB, for the depth rescale), or network access to
-  download them at startup.
-- The image's upstream source directory must allow creation of its checkpoint
-  symlink at startup. With a read-only filesystem, provision that symlink to
-  the selected checkpoint mount before starting the service.
+- One NVIDIA B200 GPU and about 140 GB of disk for the weights folder.
+- Review the upstream source and model usage terms.
 
 ## Run
 
 The YAML manifest declares the serving-image build and Runtime configuration.
+The image holds the pinned Lyra source. The weights folder holds the
+checkpoints and the Hugging Face caches. Build it once:
 
 ```sh
 cd models/lyra-2
-reactor build
-reactor run --gpus device=0 --weights /path/to/lyra-weights
+pip install huggingface-hub pyyaml
+python prepare_weights.py --output ./weights
 ```
+
+The script downloads pinned revisions of `nvidia/Lyra-2.0` (the
+`checkpoints/` folder), `depth-anything/DA3NESTED-GIANT-LARGE-1.1`,
+`google/umt5-xxl` and `Ruicheng/moge-vitl` (1.3 GB, for the depth rescale).
+Then build, run and deploy:
+
+```sh
+reactor build
+reactor run --gpus device=0 --weights ./weights
+reactor deploy production --weights ./weights
+```
+
+Startup reads the weights folder only. It does not download. A missing file
+stops startup with the command that fixes it. Generated outputs and caches go
+to `~/.cache/lyra-2`. The service creates the `checkpoints` symlink in the
+image's source directory, not in the weights folder.
 
 The default endpoint is `http://localhost:8080`. Select another endpoint port
 with `--port`. Connect after the service is available; rebuild after code or

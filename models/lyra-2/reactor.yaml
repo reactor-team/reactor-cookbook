@@ -1,7 +1,7 @@
 $schema: reactor/v2
 model:
   name: lyra-2-dmd
-  version: v0.3.0
+  version: v0.4.0
   description: Autoregressively explore an image-conditioned Lyra 2.0 video world one native 80-frame chunk at a time.
   resources:
     gpu: {type: NVIDIA_B200, count: 1}
@@ -14,7 +14,7 @@ runtime:
   # larger than the default 64 MiB.
   webrtc:
     max_message_size: 256Mi
-  weights_path: ~/.cache/reactor_registry/lyra-2
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 5
@@ -43,6 +43,7 @@ build:
     TORCH_CUDA_ARCH_LIST: "10.0a"
     MAX_JOBS: "32"
   runtime_env:
+    HF_HUB_OFFLINE: "1"
     NVTE_FUSED_ATTN: "0"
     NVTE_FLASH_ATTN: "1"
     LYRA_GUI_USE_DMD: "1"
