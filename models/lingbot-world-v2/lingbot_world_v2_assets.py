@@ -1,24 +1,20 @@
-"""Prepare pinned public source and checkpoint assets for LingBot-World-V2."""
+"""Read the LingBot-World-V2 configuration and check its source, checkpoint and built-in scenes."""
 
 from __future__ import annotations
 
-import json
-import logging
 import os
 import re
-import shutil
 import subprocess
-import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
-logger = logging.getLogger(__name__)
-
 SOURCE_PATH_ENV = "LINGBOT_WORLD_V2_PATH"
 CHECKPOINT_PATH_ENV = "LINGBOT_WORLD_V2_CHECKPOINT_PATH"
+# The command that builds the weights folder.
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _CHECKPOINT_FILES = (
     "Wan2.1_VAE.pth",
@@ -204,53 +200,29 @@ def read_config(
     )
 
 
-def prepare_runtime_assets(config: LingBotConfig, weights_root: Path) -> None:
-    """Clone the pinned public source and download the pinned public checkpoint."""
-    _ensure_source(config)
-    _ensure_checkpoint(config, weights_root)
+def weights_ref(config: LingBotConfig) -> str:
+    """Return the pinned checkpoint repository: ``hf://<repo>@<revision>``."""
+    return f"hf://{config.checkpoint_repo_id}@{config.checkpoint_revision}"
+
+
+def check_runtime_assets(config: LingBotConfig) -> None:
+    """Check the image's source checkout, the weights folder and the built-in scenes.
+
+    Nothing downloads. A missing checkpoint file raises an error that names
+    ``PREPARE_COMMAND``.
+    """
+    _check_source(config)
+    check_checkpoint(config.checkpoint_path)
     _validate_scenes(config.scenes)
 
 
-def _ensure_source(config: LingBotConfig) -> None:
-    """Create or verify an unmodified checkout at the configured revision."""
+def _check_source(config: LingBotConfig) -> None:
+    """Require the image's unmodified checkout at the configured revision."""
     path = config.source_path
-    if not path.exists():
-        logger.info(
-            "downloading LingBot-World-V2 source",
-            extra={
-                "url": config.source_url,
-                "revision": config.source_revision,
-                "destination": str(path),
-            },
-        )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix=".lingbot-source-", dir=path.parent
-        ) as temporary:
-            checkout = Path(temporary) / "checkout"
-            _run(
-                [
-                    "git",
-                    "clone",
-                    "--filter=blob:none",
-                    "--no-checkout",
-                    config.source_url,
-                    str(checkout),
-                ]
-            )
-            _run(
-                [
-                    "git",
-                    "-C",
-                    str(checkout),
-                    "checkout",
-                    "--detach",
-                    config.source_revision,
-                ]
-            )
-            checkout.rename(path)
     if not (path / ".git").is_dir():
-        raise RuntimeError(f"LingBot source at {path} must be a Git checkout")
+        raise FileNotFoundError(
+            f"LingBot source not found at {path}; rebuild the image with `reactor build`"
+        )
     actual = _git(path, "rev-parse", "HEAD").stdout.strip()
     if actual != config.source_revision:
         raise RuntimeError(
@@ -261,59 +233,25 @@ def _ensure_source(config: LingBotConfig) -> None:
         raise RuntimeError(f"LingBot source at {path} has local modifications")
 
 
-def _ensure_checkpoint(config: LingBotConfig, weights_root: Path) -> None:
-    """Download missing checkpoint files and provide the subfolder config upstream expects."""
+def check_checkpoint(checkpoint_path: Path) -> None:
+    """Require every checkpoint file in the weights folder.
+
+    Raises:
+        FileNotFoundError: If a file is absent. The message names the command
+            that builds the folder.
+    """
     missing = [
         relative
-        for relative in _CHECKPOINT_FILES
-        if not (config.checkpoint_path / relative).is_file()
+        for relative in (*_CHECKPOINT_FILES, "transformers/config.json")
+        if not (checkpoint_path / relative).is_file()
     ]
     if missing:
-        from huggingface_hub import snapshot_download
-
-        logger.info(
-            "downloading LingBot-World-V2 checkpoint",
-            extra={
-                "repo_id": config.checkpoint_repo_id,
-                "revision": config.checkpoint_revision,
-                "destination": str(config.checkpoint_path),
-            },
-        )
-        config.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_dir = weights_root / ".huggingface"
-        snapshot_download(
-            repo_id=config.checkpoint_repo_id,
-            revision=config.checkpoint_revision,
-            local_dir=config.checkpoint_path,
-            cache_dir=cache_dir,
-        )
-    still_missing = [
-        relative
-        for relative in _CHECKPOINT_FILES
-        if not (config.checkpoint_path / relative).is_file()
-    ]
-    if still_missing:
         raise FileNotFoundError(
-            "LingBot checkpoint is incomplete: " + ", ".join(still_missing[:4])
+            f"LingBot checkpoint under {checkpoint_path} is incomplete: "
+            + ", ".join(missing[:4])
+            + f". Build the folder with `{PREPARE_COMMAND}` and deploy with "
+            "`--weights ./weights`."
         )
-
-    transformer_config = config.checkpoint_path / "transformers" / "config.json"
-    if not transformer_config.is_file():
-        transformer_config.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(config.checkpoint_path / "config.json", transformer_config)
-    marker = config.checkpoint_path / ".reactor-checkpoint.json"
-    marker.write_text(
-        json.dumps(
-            {
-                "repo_id": config.checkpoint_repo_id,
-                "revision": config.checkpoint_revision,
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
 
 
 def _validate_scenes(scenes: tuple[BuiltInScene, ...]) -> None:

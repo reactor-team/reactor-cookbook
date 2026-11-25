@@ -22,8 +22,14 @@ reactor build
 reactor run --gpus device=0
 ```
 
+`runtime.weights_path` is the pinned weight set
+`hf://seedleap/zing-0.5@b7a6f480d5f36ec6a1e82a489cde8d8305a28438` (34 GB). The
+checkpoint is ready before the container starts, and nothing downloads at
+runtime (`HF_HUB_OFFLINE=1`). Caches and compiled kernels go to
+`~/.cache/zing-0-5`.
+
 The default endpoint is `http://localhost:8080`. Use `--port` to select
-another port and `--weights` to select persistent model storage. Rebuild after
+another port and `--weights` to run with another copy of the checkpoint. Rebuild after
 changing code or dependencies. Connect a client after the service is available.
 
 ## Inputs and controls

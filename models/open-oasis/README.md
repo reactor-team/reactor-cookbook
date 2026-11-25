@@ -15,7 +15,11 @@ controls to guide the generated view.
 
 ## Run
 
-The YAML manifest declares the image build, Runtime and recording configuration.
+The YAML manifest declares the image build, Runtime and recording
+configuration. The image build fetches the pinned upstream source. The
+checkpoints come from the pinned Hugging Face weight set
+`hf://Etched/oasis-500m@4ca7d2d811f4f0c6fd1d5719bf83f14af3446c0c`
+(`runtime.weights_path`). `reactor run` downloads it on the host and mounts it:
 
 ```sh
 cd models/open-oasis
@@ -23,9 +27,20 @@ reactor build
 reactor run --gpus device=0
 ```
 
+To deploy, select the same weight set. Reactor fetches it onto the GPU node
+before the container starts, so a new instance does not download the
+checkpoints. The set holds every file in the repository revision, about 6.7 GB:
+
+```sh
+reactor deploy production --weights hf://Etched/oasis-500m@4ca7d2d811f4f0c6fd1d5719bf83f14af3446c0c
+```
+
+Nothing downloads at runtime (`HF_HUB_OFFLINE=1`). A missing checkpoint stops
+`load()` with an error that names the `--weights` value.
+
 The default endpoint is `http://localhost:8080`. Use `--port` to choose
-another port and `--weights` to select persistent storage. Connect after the
-service is available. Rebuild after changing code or dependencies.
+another port. Connect after the service is available. Rebuild after changing
+code or dependencies.
 
 ## Inputs and controls
 

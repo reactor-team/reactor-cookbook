@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: diamond-csgo-world-model
-  version: v0.1.3
+  version: v0.2.0
   description: |
     Play DIAMOND's Counter-Strike world model with native keyboard and mouse input.
   resources:
@@ -22,6 +22,8 @@ model:
 runtime:
   import: diamond:Diamond
   config: diamond.yaml
+  # diamond.yaml pins the same repository and revision.
+  weights_path: hf://eloialonso/diamond@5d4abca9af6ab1b3ab1c6fc228cacb7281130f7f
   recording:
     enabled: true
     chunk_seconds: 4
@@ -41,6 +43,8 @@ build:
     - git
   runtime_env:
     DIAMOND_PATH: /opt/diamond
+    # The checkpoint comes from the weight set; nothing downloads at runtime.
+    HF_HUB_OFFLINE: "1"
   # Pin the public DIAMOND source checkout the adapter imports at load.
   run:
     - >-

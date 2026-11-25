@@ -134,8 +134,8 @@ class JoyVideoEditModel:
 
         Args:
             config_path: ``joy_video_edit.yaml``; None runs on the defaults.
-            weights_root: The weights directory. The pinned checkpoints are downloaded
-                into it on first load, and the compile caches live under it.
+            weights_root: The weights folder that ``prepare_weights.py`` builds. It is
+                read-only, so the compile caches go under ``~/.cache``.
         """
         config = read_config(config_path)
 
@@ -244,18 +244,10 @@ class JoyVideoEditModel:
         os.environ["JOYOMNI_FP8_IMG"] = "1" if fp8_img_cfg else "0"
         os.environ["JOYOMNI_FP8_TXT"] = "1" if fp8_txt_cfg else "0"
 
-        # TorchInductor / Triton / CUDA graph cache.
-        # `reactor run` mounts the weights directory, so the compile caches live
-        # there and survive container restarts.
-        # IMPORTANT: use os.environ[key] = (force-set), NOT setdefault, because
-        # the Dockerfile sets ENV TORCHINDUCTOR_CACHE_DIR=/root/.cache/... which
-        # would otherwise win over setdefault even though the weights dir IS mounted.
-        # Must be set BEFORE JoyOmniRuntime.load() — warmup triggers compilation.
-        _compile_cache = os.path.join(str(weights_root), ".compile_cache", "joy-video-edit")
-        try:
-            os.makedirs(_compile_cache, exist_ok=True)
-        except OSError:
-            _compile_cache = "/root/.cache"
+        # TorchInductor / Triton / CUDA graph cache, on the container disk: the
+        # weights folder is read-only. Set before JoyOmniRuntime.load(), because
+        # warmup compiles.
+        _compile_cache = os.path.join(os.path.expanduser("~/.cache"), "joy-video-edit")
         os.environ["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "1"
         os.environ["TORCHINDUCTOR_CACHE_DIR"] = os.path.join(_compile_cache, "torchinductor")
         os.environ["TRITON_CACHE_DIR"] = os.path.join(_compile_cache, "triton")
@@ -340,8 +332,8 @@ class JoyVideoEditModel:
         #   Inductor emits a single kernel that handles all KV lengths without
         #   recompiling per chunk.
         #
-        # Compiled Triton kernels are persisted by TORCHINDUCTOR_FX_GRAPH_CACHE → the
-        # first container startup pays the compile cost; subsequent starts reuse cache.
+        # TORCHINDUCTOR_FX_GRAPH_CACHE keeps the compiled kernels on the container
+        # disk, so a restart of the same container reuses them; a new one compiles.
         if config.get("torch_compile_dit", False):
             try:
                 _transformer = self._runtime.pipeline.transformer

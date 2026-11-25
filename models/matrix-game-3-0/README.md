@@ -13,8 +13,8 @@ uploaded image or a bundled example, optionally condition the world with text,
 apply native movement and camera controls, stream autoregressive video, and
 record the session.
 
-The adapter loads an exact tested Matrix-Game revision from its mounted weights
-cache and calls the upstream interactive pipeline directly.
+The adapter reads an exact tested Matrix-Game revision from the image and the
+checkpoint from the prepared weights folder. It calls the upstream interactive pipeline directly.
 
 ## Prerequisites
 
@@ -23,9 +23,9 @@ cache and calls the upstream interactive pipeline directly.
 - An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
   intentionally unsupported. The distilled recipe is tested on a B200; allow
   roughly 90 GB of GPU memory for an active rollout.
-- About 40 GB in Reactor's weights cache for the distilled checkpoint and
-  source checkout, plus about 18 GB of Docker image space.
-- Network access to GitHub and Hugging Face during the first model load.
+- About 41 GB for the weights folder, plus about 18 GB of Docker image space.
+- Network access to GitHub during `reactor build` and to Hugging Face during
+  `prepare_weights.py`.
 
 ## Run
 
@@ -39,16 +39,26 @@ Build the image, then expose one GPU to the container:
 
 ```sh
 cd models/matrix-game-3-0
+pip install huggingface-hub pyyaml
+python prepare_weights.py --output ./weights
 reactor validate
 reactor build
 reactor run --gpus device=0
 ```
 
-`reactor build` prepares the configured model image. `reactor run` reuses that
-image, building it automatically if none exists, and bind-mounts the local
-weights cache into the container. The first model load clones the pinned
-upstream revision and downloads the pinned distilled checkpoint subset; later
-runs reuse both.
+`reactor build` prepares the configured model image and clones the pinned
+upstream source into it. `reactor run` reuses that image, building it
+automatically if none exists, and bind-mounts `./weights` (`runtime.weights_path`)
+into the container. `prepare_weights.py` downloads the distilled checkpoint
+subset from the pinned Hugging Face revision. It skips the base model and the
+larger VAE. To deploy, push the same folder as the weight set:
+
+```sh
+reactor deploy production --weights ./weights
+```
+
+Nothing downloads at runtime (`HF_HUB_OFFLINE=1`). A missing file stops `load()`
+with an error that names `prepare_weights.py`.
 
 The runtime reports ready on `http://localhost:8080`. Rebuild after editing
 anything baked into the image:
@@ -147,7 +157,7 @@ does not emit audio.
 
 ## Storage
 
-Local CLI runs use the workspace's `weights/` cache and mount it at the same
+Local CLI runs use the workspace's `weights/` folder and mount it at the same
 absolute path inside the container. Clone the cookbook onto a disk with enough
 capacity, or set `runtime.weights_path` locally to an existing directory on a
 larger disk. The cache is excluded from Git and the image build context.
@@ -160,7 +170,7 @@ Docker daemon's data root on a large disk when the system disk is constrained.
 - `matrix_game_3_0.yaml` pins the upstream source, distilled checkpoint,
   sampling schedule, INT8 attention projections, MG-LightVAE v2 decoder, and
   native rollout length.
-- The first load downloads the distilled 5B DiT, UMT5 assets, Wan2.2
+- `prepare_weights.py` downloads the distilled 5B DiT, UMT5 assets, Wan2.2
   encoder VAE, and the 0.75-pruned MG-LightVAE v2 decoder.
 - The upstream DiT calls FlashAttention directly and the image does not ship
   it. When FlashAttention 2 or 3 is installed, the adapter uses upstream's

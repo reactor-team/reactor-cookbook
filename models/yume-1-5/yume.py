@@ -22,8 +22,8 @@ from reactor_runtime import (
 )
 from yume_assets import (
     YumeConfig,
+    check_assets,
     configure_environment,
-    prepare_assets,
     read_config,
 )
 from yume_images import (
@@ -82,11 +82,11 @@ class Yume15(ReactorApp):
         self._engine: YumeModel
 
     def load(self, config_path: Path | None) -> None:
-        """Prepare pinned public assets and load the 5B model on one GPU."""
+        """Check the source and weights, then load the 5B model on one GPU."""
         config = read_config(config_path, get_weights_path())
         configure_environment(config)
         self._config = config
-        prepare_assets(config)
+        check_assets(config)
         self._engine = YumeModel()
         self._engine.load(config)
 

@@ -37,15 +37,24 @@ FlashAttention 2.8.1, Git, and FFmpeg. See Reactor's
 supported fields. Run `reactor build` again after changing model code,
 requirements, or build configuration.
 
-The first container start clones the pinned public
-[ABot-World](https://github.com/amap-cvlab/ABot-World) revision and downloads
-the pinned
-[ABot-World-0-5B-LF](https://huggingface.co/acvlab/ABot-World-0-5B-LF)
-snapshot below `runtime.weights_path`. Point that field at a directory on
-high-capacity storage before running when the default cache is too small. The
-CLI bind-mounts the directory into the container, so source and checkpoint
-downloads persist across image rebuilds. A liveness check is available at
+The image build fetches the pinned public
+[ABot-World](https://github.com/amap-cvlab/ABot-World) revision. The weights
+are the pinned [ABot-World-0-5B-LF](https://huggingface.co/acvlab/ABot-World-0-5B-LF)
+repository, `hf://acvlab/ABot-World-0-5B-LF@d26a3003701e70d38cd17e2af2faf63bd4ff7632`
+(`runtime.weights_path`), about 25 GB. `reactor run` downloads it on the host
+and mounts it. A liveness check is available at
 `http://localhost:8080/health`.
+
+To deploy, select the same weight set. Reactor makes it available on the GPU
+node before the container starts, so a new instance does not download the
+checkpoint:
+
+```sh
+reactor deploy production --weights hf://acvlab/ABot-World-0-5B-LF@d26a3003701e70d38cd17e2af2faf63bd4ff7632
+```
+
+Nothing downloads at runtime (`HF_HUB_OFFLINE=1`). A missing file stops `load()`
+with an error that names the fix.
 
 ## Controls
 

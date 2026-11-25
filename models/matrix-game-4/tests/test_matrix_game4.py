@@ -1168,7 +1168,6 @@ def test_asset_setup_does_not_create_logs_under_read_only_weights(
     weights.mkdir()
     weights.chmod(0o555)
     monkeypatch.setenv("MATRIX_GAME4_SOURCE_DIR", str(source))
-    monkeypatch.delenv("MATRIX_GAME4_RESOURCES", raising=False)
     prepare = Mock(side_effect=lambda source, root, values, scene: scene)
     monkeypatch.setattr(matrix_game4_assets, "_prepare_scene", prepare)
     try:

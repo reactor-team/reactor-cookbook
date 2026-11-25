@@ -1,4 +1,4 @@
-"""Resolve native source, release assets and inference arguments in the application."""
+"""Check native source and release assets, and resolve inference arguments. Nothing here downloads."""
 
 from __future__ import annotations
 
@@ -12,7 +12,13 @@ import yaml
 
 from matrix_game4_backend import NativeSettings
 
+RESOURCE_REPO = "Skywork/Matrix-Game-4.0"
 RESOURCE_REVISION = "4419accdb7bb7881234c5914de8cd915266e0325"
+SOURCE_URL = "https://github.com/SkyworkAI/Matrix-Game.git"
+SOURCE_REVISION = "5446525c80da2a4a2f87801addbbc7faa8d2486e"
+MANIFESTS = ("game-assets", "models")
+SCENES = ("ancient-egypt", "castle", "racing")
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
 
 
 @dataclass(frozen=True)
@@ -48,37 +54,38 @@ def prepare(config_path: Path | None, weights_root: Path) -> dict[str, AppSettin
             "Matrix-Game-4 source is missing; build the Reactor image first"
         )
     sys.path.insert(0, str(source))
-    root = Path(
-        os.environ.get("MATRIX_GAME4_RESOURCES", weights_root / "resources")
-    ).resolve()
-    return {
-        scene: _prepare_scene(source, root, values, scene)
-        for scene in ("ancient-egypt", "castle", "racing")
-    }
+    root = (weights_root / "resources").resolve()
+    return {scene: _prepare_scene(source, root, values, scene) for scene in SCENES}
+
+
+def check_resources(source: Path, root: Path, scene: str) -> None:
+    """Verify one scene's files against the release manifests. Never downloads."""
+    from matrix_game.resources import main as resources
+
+    for manifest in MANIFESTS:
+        try:
+            resources(
+                [
+                    "verify",
+                    "--manifest",
+                    str(source / "releases" / f"{manifest}.json"),
+                    "--scene",
+                    scene,
+                    "--resources",
+                    str(root),
+                ]
+            )
+        except ValueError as error:
+            raise FileNotFoundError(
+                f"Matrix-Game-4 weights are incomplete for scene {scene}: {error}. "
+                f"Run `{PREPARE_COMMAND}` and deploy with `--weights ./weights`."
+            ) from error
 
 
 def _prepare_scene(source, root, values, scene) -> AppSettings:
-    from matrix_game.resources import main as resources
     from matrix_game.scenes import add_model_arguments, resolve_model_arguments
 
-    for manifest in ("game-assets", "models"):
-        resources(
-            [
-                "download",
-                "--manifest",
-                str(source / "releases" / f"{manifest}.json"),
-                "--repo-id",
-                "Skywork/Matrix-Game-4.0",
-                "--repo-type",
-                "model",
-                "--revision",
-                RESOURCE_REVISION,
-                "--scene",
-                scene,
-                "--resources",
-                str(root),
-            ]
-        )
+    check_resources(source, root, scene)
     parser = argparse.ArgumentParser()
     add_model_arguments(parser)
     args = parser.parse_args(

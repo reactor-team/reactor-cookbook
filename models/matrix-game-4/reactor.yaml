@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: matrix-game-4
-  version: v0.4.0
+  version: v0.5.0
   description: Native game controls with frame-paired Matrix-Game 4.0 neural rendering.
   resources:
     gpu:
@@ -18,7 +18,8 @@ model:
 runtime:
   import: matrix_game4:MatrixGame4
   config: matrix_game4.yaml
-  weights_path: ~/.cache/reactor_registry/matrix-game-4
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     video_track: main_video
@@ -45,6 +46,7 @@ build:
     - zlib1g-dev
     - ffmpeg
   runtime_env:
+    HF_HUB_OFFLINE: "1"
     NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics
     OMP_NUM_THREADS: "8"
     OPENBLAS_NUM_THREADS: "1"

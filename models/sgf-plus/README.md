@@ -32,7 +32,7 @@ See the [deployment guide](https://docs.reactor.inc/deploy/overview) when you ar
   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
   The tested configuration uses about 27 GiB of GPU memory.
 - About 28 GiB of disk for the inference weights, plus space for the Docker image and build cache.
-- Internet access for the initial build and weight downloads.
+- Internet access for the image build and for `prepare_weights.py`.
 - On the machine with your browser: this checkout, Node.js 22.12 or later and npm.
 
 In the SGF+ repository, enter `reactor/`. In the Reactor Cookbook, enter
@@ -57,31 +57,37 @@ Open a new terminal if the installer updated your PATH. See the
 
 ## 2. Get the weights
 
-The first model startup downloads the required files automatically:
+Build the weights folder once. Nothing downloads at startup:
+
+```sh
+pip install huggingface-hub pyyaml reactor-runtime
+python prepare_weights.py --output ./weights
+```
+
+It downloads these pinned files:
 
 - The base model, text encoder, tokenizer and VAE from
   [Wan2.1-T2V-1.3B](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B).
 - The released `chunkwise/model.pt` checkpoint from
   [Self Gradient Forcing Plus](https://huggingface.co/ZihanSu/Self_Gradient_Forcing_Plus).
 
-The cache is persistent across container restarts. Its default location is declared by
-`runtime.weights_path` in [reactor.yaml](reactor.yaml). To use another disk, add
-`--weights /path/to/weights` to the run command below. Only inference assets are downloaded;
-the upstream training assets and framewise checkpoint are not needed for this recipe.
+The upstream training assets and the framewise checkpoint are not needed. A missing
+file stops startup with an error that names this command. Deploy the same folder with
+`reactor deploy production --weights ./weights`.
 
-**Check:** after the first successful startup, the selected weights directory contains
-`wan_models/Wan2.1-T2V-1.3B/` and `hf_weights/chunkwise/model.pt`.
+**Check:** `./weights` contains `wan_models/Wan2.1-T2V-1.3B/` and
+`hf_weights/chunkwise/model.pt`.
 
 ## 3. Start the model
 
 ```sh
 reactor build
-reactor run --gpus device=0 --port 8080
+reactor run --gpus device=0 --weights ./weights --port 8080
 ```
 
 Select an available GPU on a shared machine. The build installs the pinned upstream source and
 Reactor Runtime 3.8.1 inside the container; the host does not need the upstream Python environment.
-The initial image build and downloads can take time. Leave the service running in this terminal;
+The initial image build can take time. Leave the service running in this terminal;
 `Ctrl+C` stops it.
 
 **Check:** in another terminal:
@@ -192,7 +198,7 @@ settings are retained; this integration adds no quantization or reduced-step sam
 - **Deploy:** [Reactor deployment documentation](https://docs.reactor.inc/deploy/overview).
 - **Code map:** `sgf_plus.py` (application commands and hooks), `sgf_plus_model.py`
   (runtime-independent model and step contracts), `sgf_plus_backend.py` (incremental inference),
-  `sgf_plus_types.py` (client schema), `sgf_plus_assets.py` (source and weights),
+  `sgf_plus_types.py` (client schema), `sgf_plus_assets.py` (source and weights check),
   `sgf_plus_images.py` (upload preprocessing), `sgf_plus.yaml` (settings), and `demo/` (client).
 - **Source pin:** the image fetches the upstream commit declared in `reactor.yaml` and checked by
   `sgf_plus_assets.py`. It uses that checkout with the local adapter; edits to sibling upstream
@@ -209,7 +215,7 @@ python -m reactor_runtime.schema --path . --out /tmp/sgf-plus-schema.json
 PYTHONPATH=. python -m pytest tests/ -q
 ```
 
-The 18 CPU tests exercise application hooks and model-side behavior without Torch, weights
+The CPU tests exercise application hooks and model-side behavior without Torch, weights
 or an upstream checkout.
 
 </details>

@@ -74,42 +74,22 @@ curl -s localhost:18085/schema
 Stop `reactor run` with Ctrl-C to remove the container and release its GPU
 memory.
 
-## Keep large data off the system disk
-
-First startup downloads the 21 GB DreamX checkpoint and the required Wan2.2
-text encoder, tokenizer, and VAE.
-
-`runtime.weights_path` controls the host directory that `reactor run` mounts for
-source and model assets. Its checked-in value is portable. On a
-space-constrained host, change it to an absolute path on a larger volume before
-the first run:
-
-```yaml
-runtime:
-  weights_path: /mnt/fast/reactor/dreamx-world
-```
-
-The container engine stores image layers and build caches separately from the
-workspace. Configure that storage on the same large volume when the system disk
-is small.
-
 ## Public source and model assets
 
-On first load the adapter clones DreamX-World at the immutable revision in
-`dreamx_world.yaml` and downloads the pinned `GD-ML/DreamX-World-5B` checkpoint
-plus the required public files from `Wan-AI/Wan2.2-TI2V-5B`. Neither repository
-is gated. Interrupted Hugging Face downloads resume on the next start, and
-completion markers let later runs verify and reuse the assets.
-
-The source checkout lives under `runtime.weights_path`, outside both the image
-and cookbook checkout. Startup verifies its exact revision and rejects tracked
-modifications. To reuse an existing clean checkout, place it inside the mounted
-weights directory and pass its absolute mounted path:
+The image holds DreamX-World at the immutable revision in `reactor.yaml`
+(`build.run`). Nothing downloads at startup. Build the weights folder once,
+on a machine with about 25 GB free:
 
 ```sh
-reactor run --gpus device=0 --port 18085 \
-  -e DREAMX_WORLD_PATH=/mnt/fast/reactor/dreamx-world/DreamX-World
+pip install huggingface-hub pyyaml reactor-runtime
+python prepare_weights.py --output ./weights
+reactor deploy production --weights ./weights
 ```
+
+The folder holds the pinned `GD-ML/DreamX-World-5B` checkpoint and the
+required public files from `Wan-AI/Wan2.2-TI2V-5B`. Neither repository is
+gated. A missing file stops startup with this command in the error. For a
+local run, pass the same folder with `reactor run --weights ./weights`.
 
 The adapter and upstream DreamX source are Apache-2.0. Downloaded checkpoints
 retain the terms published by their source repositories.

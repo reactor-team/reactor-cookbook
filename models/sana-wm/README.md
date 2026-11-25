@@ -8,8 +8,9 @@ model as an image-, prompt-, and camera-controlled Reactor backend. The recipe
 targets the distilled `Efficient-Large-Model/SANA-WM_streaming` release and
 emits one 24-frame autoregressive video chunk per model turn.
 
-The adapter loads an exact tested SANA revision from Reactor's persistent
-weights cache and calls its streaming inference components directly.
+The image holds an exact tested SANA revision. `prepare_weights.py` builds the
+weights folder. The adapter calls SANA's streaming inference components directly
+and downloads nothing at startup.
 
 ## Prerequisites
 
@@ -17,8 +18,22 @@ weights cache and calls its streaming inference components directly.
   Docker.
 - An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
   intentionally unsupported; the manifest declares one NVIDIA B200.
-- About 110 GB in Reactor's weights cache for the pinned SANA-WM, Gemma, and
-  Pi3X assets, plus Docker image space for CUDA and the inference dependencies.
+- About 115 GB of disk for the weights folder (pinned SANA-WM, Gemma, and Pi3X
+  files), plus Docker image space for CUDA and the inference dependencies.
+
+## Prepare the weights
+
+Build the weights folder once. It reads the revisions pinned in `sana_wm.yaml`:
+
+```sh
+pip install huggingface-hub pyyaml
+python prepare_weights.py --output ./weights
+```
+
+The folder holds `SANA-WM_streaming`, `gemma-2-2b-it` and `Pi3X`. A second run
+downloads only missing or changed files. The `reactor.yaml` manifest sets
+`runtime.weights_path: ./weights` and `HF_HUB_OFFLINE`, so a missing file stops
+`load()` with an error that names this command.
 
 ## Run
 
@@ -34,19 +49,18 @@ Validate the workspace, build the image, and expose one GPU to the container:
 cd models/sana-wm
 reactor validate
 reactor build
-reactor run --gpus device=0
+reactor run --gpus device=0 --weights ./weights
 ```
 
 `reactor run` reuses the image produced by `reactor build` and builds it
-automatically when the local image is absent. The first run clones the pinned
-SANA source and downloads the pinned model snapshots beneath the CLI-mounted
-weights cache. Interrupted Hugging Face downloads resume, and later runs reuse
-the completed resources.
+automatically when the local image is absent. The build pins the SANA and Pi3
+sources under `/opt`. Deploy the same folder with
+`reactor deploy production --weights ./weights`.
 
 Rebuild after changing code, dependencies, or the manifest build definition:
 
 ```sh
-reactor build && reactor run --gpus device=0
+reactor build && reactor run --gpus device=0 --weights ./weights
 ```
 
 The Runtime reports ready only after the Stage-1 DiT, causal VAE, refiner,
@@ -54,27 +68,10 @@ Gemma encoders, and their CUDA tensors are loaded. It serves on port 8080 by
 default; pass `--port` to change both the host mapping and Runtime port:
 
 ```sh
-reactor run --gpus device=0 --port 18080
+reactor run --gpus device=0 --weights ./weights --port 18080
 curl -s localhost:18080/health
 curl -s localhost:18080/schema
 ```
-
-## Large local storage
-
-`runtime.weights_path` defaults to
-`~/.cache/reactor_registry/sana-wm-streaming-reactor`. Point that path at a
-large volume before the first run when the system disk is small:
-
-```sh
-export SANA_WORK=/path/to/large-volume/sana-wm
-mkdir -p "$SANA_WORK" "$HOME/.cache/reactor_registry"
-ln -s "$SANA_WORK" "$HOME/.cache/reactor_registry/sana-wm-streaming-reactor"
-```
-
-Skip the `ln` command when the destination already exists. Reactor's weights
-mount retains the upstream source and model assets across image rebuilds.
-The container engine stores image layers and build cache separately, so
-configure that storage on the large volume when the system disk is small.
 
 ## Controls
 
@@ -177,10 +174,6 @@ once per acknowledged world; a finite trajectory stops at its final full chunk.
 - `sana_wm.yaml` pins the public SANA source, SANA-WM checkpoint, Gemma text
   encoder, Pi3X source and checkpoint, inference memory lengths, camera motion,
   and five built-in scenes.
-- Set `SANA_WM_SOURCE_PATH` with
-  `reactor run -e SANA_WM_SOURCE_PATH=/path/in/container` to reuse a clean
-  checkout already visible inside the weights mount. The adapter imports that
-  checkout directly.
 - Diffusers 0.38 is intentional because the released refiner accesses LTX-2.3
   attention-gating fields introduced after 0.37. Inference uses the released
   checkpoint precision.

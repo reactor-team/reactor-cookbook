@@ -32,8 +32,8 @@ from reactor_runtime import (
 from reactor_runtime.log import get_logger
 from sana_wm_assets import (
     SanaWMConfig,
+    check_runtime,
     configure_runtime_caches,
-    prepare_source,
     read_config,
 )
 from sana_wm_backend import (
@@ -178,19 +178,19 @@ class SanaWM(ReactorApp):
         self._chunk_in_flight = False
 
     def load(self, config_path: Path | None) -> None:
-        """Prepare pinned public assets and load SANA-WM weights once.
+        """Check the pinned source and weights, then load SANA-WM once.
 
         Args:
             config_path: Path to `sana_wm.yaml` supplied by the Runtime launcher.
         """
         weights_root = get_weights_path()
-        configure_runtime_caches(weights_root)
+        configure_runtime_caches()
         os.environ.setdefault("DISABLE_XFORMERS", "1")
         os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
         os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
         os.environ.setdefault("DPM_TQDM", "True")
         config = read_config(config_path, weights_root)
-        prepare_source(config)
+        check_runtime(config)
         self._config = config
         self._seed = config.seed
         self._camera = SanaCameraPlanner(config)

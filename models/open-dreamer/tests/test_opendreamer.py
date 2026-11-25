@@ -273,3 +273,62 @@ def test_invalid_model_frame_does_not_count(monkeypatch, shape):
     with pytest.raises(ValueError, match="Expected an RGB frame"):
         app.generate(asyncio.run(app.process_input()))
     assert app._model._generated_frames == 0
+
+
+def _config():
+    from pathlib import Path
+
+    from opendreamer_utils import read_config
+
+    return read_config(Path(__file__).parents[1] / "opendreamer.yaml")
+
+
+def test_manifest_weight_set_matches_the_pinned_checkpoint():
+    from pathlib import Path
+
+    import yaml
+    from opendreamer_utils import weights_ref
+
+    manifest = yaml.safe_load((Path(__file__).parents[1] / "reactor.yaml").read_text())
+    assert manifest["runtime"]["weights_path"] == weights_ref(_config())
+    assert manifest["build"]["runtime_env"]["HF_HUB_OFFLINE"] == "1"
+
+
+def test_checkpoint_resolves_in_the_weight_set(tmp_path):
+    from opendreamer_utils import resolve_checkpoint
+
+    step = tmp_path / "250000"
+    step.mkdir()
+    (step / "_CHECKPOINT_METADATA").write_text("{}")
+    assert resolve_checkpoint(_config(), tmp_path) == tmp_path
+
+
+def test_missing_checkpoint_names_the_weights_value_and_downloads_nothing(
+    tmp_path, monkeypatch
+):
+    import sys
+
+    from opendreamer_utils import resolve_checkpoint, weights_ref
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+    config = _config()
+    with pytest.raises(FileNotFoundError) as raised:
+        resolve_checkpoint(config, tmp_path)
+    assert f"--weights {weights_ref(config)}" in str(raised.value)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_missing_demo_files_ask_for_a_rebuild_and_download_nothing(
+    tmp_path, monkeypatch
+):
+    import urllib.request
+
+    from opendreamer_utils import check_demo_assets
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("network call")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    with pytest.raises(FileNotFoundError, match="reactor build"):
+        check_demo_assets(tmp_path, _config().demos)
+    assert list(tmp_path.iterdir()) == []

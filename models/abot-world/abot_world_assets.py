@@ -1,27 +1,20 @@
-"""Prepare ABot-World's pinned public source and checkpoint."""
+"""Check ABot-World's pinned source and checkpoint, and read its configuration."""
 
 from __future__ import annotations
 
 import importlib
-import json
-import logging
 import os
 import re
 import subprocess
 import sys
-import tempfile
 from collections.abc import Mapping
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 import yaml
 
-logger = logging.getLogger(__name__)
-
 SOURCE_ENV = "ABOT_WORLD_PATH"
-SNAPSHOT_MARKER = ".reactor-snapshot.json"
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 _CHECKPOINT_FILES = (
     "Wan2.2_VAE.pth",
@@ -134,10 +127,18 @@ def read_config(
     )
 
 
-def prepare_assets(config: ABotWorldConfig, weights_root: Path) -> None:
-    """Prepare the pinned upstream checkout, model snapshot, and built-in images."""
-    _ensure_source_checkout(config)
-    _ensure_checkpoint(config.checkpoint, weights_root)
+def weights_ref(config: ABotWorldConfig) -> str:
+    """Return the pinned weight set: ``hf://<repo>@<revision>``."""
+    return f"hf://{config.checkpoint.repo_id}@{config.checkpoint.revision}"
+
+
+def check_assets(config: ABotWorldConfig) -> None:
+    """Check the image's upstream checkout, the weight set and the built-in images.
+
+    Nothing downloads. A missing part raises an error that names the fix.
+    """
+    _check_source_checkout(config)
+    _check_checkpoint(config)
     missing_examples = [
         str(scene.image) for scene in config.examples if not scene.image.is_file()
     ]
@@ -198,37 +199,14 @@ def build_upstream_config(config: ABotWorldConfig, modules: Mapping[str, Any]) -
     return upstream
 
 
-def _ensure_source_checkout(config: ABotWorldConfig) -> None:
-    """Clone the exact upstream revision when its checkout is absent."""
+def _check_source_checkout(config: ABotWorldConfig) -> None:
+    """Require the image's upstream checkout at the pinned revision."""
     source_path = config.source_path
-    if not source_path.exists():
-        logger.info(
-            "downloading ABot-World source checkout %s revision=%s to %s",
-            config.source_url,
-            config.source_revision,
-            source_path,
-        )
-        source_path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix=".reactor-abot-source-", dir=source_path.parent
-        ) as tmp:
-            checkout = Path(tmp) / "checkout"
-            _run_git(
-                [
-                    "clone",
-                    "--filter=blob:none",
-                    "--no-checkout",
-                    config.source_url,
-                    str(checkout),
-                ]
-            )
-            _run_git(
-                ["-C", str(checkout), "checkout", "--detach", config.source_revision]
-            )
-            with suppress(FileExistsError):
-                checkout.rename(source_path)
     if not (source_path / ".git").is_dir():
-        raise RuntimeError(f"ABot-World source at {source_path} must be a Git checkout")
+        raise FileNotFoundError(
+            f"ABot-World source not found at {source_path}; "
+            "rebuild the image with `reactor build`"
+        )
     actual = _run_git(["-C", str(source_path), "rev-parse", "HEAD"]).stdout.strip()
     if actual != config.source_revision:
         raise RuntimeError(
@@ -236,37 +214,17 @@ def _ensure_source_checkout(config: ABotWorldConfig) -> None:
         )
 
 
-def _ensure_checkpoint(asset: ModelAsset, weights_root: Path) -> None:
-    """Download the pinned public checkpoint when files or identity are incomplete."""
-    marker = asset.path / SNAPSHOT_MARKER
-    expected = {"repo_id": asset.repo_id, "revision": asset.revision}
-    required = tuple(asset.path / path for path in _CHECKPOINT_FILES)
-    if _json_matches(marker, expected) and all(
-        _is_nonempty_file(path) for path in required
-    ):
-        return
-    logger.info(
-        "downloading ABot-World checkpoint %s revision=%s to %s",
-        asset.repo_id,
-        asset.revision,
-        asset.path,
-    )
-    snapshot_download = importlib.import_module("huggingface_hub").snapshot_download
-    asset.path.mkdir(parents=True, exist_ok=True)
-    snapshot_download(
-        repo_id=asset.repo_id,
-        revision=asset.revision,
-        local_dir=asset.path,
-        cache_dir=weights_root / "huggingface",
-    )
-    unresolved = [str(path) for path in required if not _is_nonempty_file(path)]
-    if unresolved:
-        raise RuntimeError(
-            f"ABot-World checkpoint download is incomplete: {unresolved}"
+def _check_checkpoint(config: ABotWorldConfig) -> None:
+    """Require every checkpoint file in the weight set."""
+    asset = config.checkpoint
+    missing = [
+        path for path in _CHECKPOINT_FILES if not _is_nonempty_file(asset.path / path)
+    ]
+    if missing:
+        raise FileNotFoundError(
+            f"ABot-World checkpoint files missing under {asset.path}: {missing}; "
+            f"deploy with `--weights {weights_ref(config)}`"
         )
-    temporary = marker.with_suffix(".tmp")
-    temporary.write_text(json.dumps(expected, sort_keys=True), encoding="utf-8")
-    os.replace(temporary, marker)
 
 
 def _mapping(value: object, name: str) -> dict[str, Any]:
@@ -319,15 +277,6 @@ def _weights_path(value: object, name: str, weights_root: Path) -> Path:
     path = Path(raw).expanduser()
     candidate = path if path.is_absolute() else weights_root / path
     return Path(os.path.abspath(candidate))
-
-
-def _json_matches(path: Path, expected: Mapping[str, object]) -> bool:
-    """Return whether a JSON completion marker matches an asset identity."""
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return False
-    return document == expected
 
 
 def _is_nonempty_file(path: Path) -> bool:

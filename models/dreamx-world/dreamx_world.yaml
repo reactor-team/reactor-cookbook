@@ -1,5 +1,6 @@
 source:
-  path: DreamX-World
+  # The image holds this checkout at the pinned revision (build.run in reactor.yaml).
+  path: /opt/DreamX-World
   url: https://github.com/AMAP-ML/DreamX-World.git
   revision: a1f4c6e5e45600718e5236955f2e0702e53fc275
 

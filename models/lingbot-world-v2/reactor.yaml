@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: lingbot-world-v2-14b-causal-fast
-  version: v0.3.1
+  version: v0.4.0
   description: |
     Explore a causal LingBot world from an image, a prompt, and six-axis camera motion.
   resources:
@@ -19,7 +19,8 @@ model:
 runtime:
   import: lingbot_world_v2:LingBotWorldV2
   config: lingbot_world_v2.yaml
-  weights_path: ~/.cache/reactor_registry/lingbot-world-v2
+  # Built by prepare_weights.py; reactor run mounts it, reactor deploy --weights pushes it.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 4
@@ -39,3 +40,13 @@ build:
     - git
   runtime_env:
     TOKENIZERS_PARALLELISM: "false"
+    # The checkpoint comes from the weights folder; nothing downloads at runtime.
+    HF_HUB_OFFLINE: "1"
+  # Pin the upstream source that lingbot_world_v2.yaml's source.path names.
+  run:
+    - >-
+      git init /opt/lingbot-world-v2
+      && git -C /opt/lingbot-world-v2 fetch --depth 1
+      https://github.com/Robbyant/lingbot-world-v2.git
+      2648877f763a06cc743bcd919936da4d25f12e7b
+      && git -C /opt/lingbot-world-v2 checkout --detach FETCH_HEAD

@@ -7,7 +7,7 @@ import io
 import os
 import subprocess
 import sys
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -48,15 +48,12 @@ def test_session_waits_for_explicit_conditioning():
 
 
 CACHE_ENVIRONMENT = {
-    "UV_CACHE_DIR": ".cache/uv",
-    "UV_PYTHON_INSTALL_DIR": ".cache/python",
-    "XDG_CACHE_HOME": ".cache/xdg",
-    "HF_HOME": ".cache/huggingface",
-    "TORCH_HOME": ".cache/torch",
-    "TORCHINDUCTOR_CACHE_DIR": ".cache/torchinductor",
-    "TRITON_CACHE_DIR": ".cache/triton",
-    "CUTE_DSL_CACHE_DIR": ".cache/cute-dsl",
-    "TMPDIR": ".cache/tmp",
+    "XDG_CACHE_HOME": "xdg",
+    "TORCH_HOME": "torch",
+    "TORCHINDUCTOR_CACHE_DIR": "torchinductor",
+    "TRITON_CACHE_DIR": "triton",
+    "CUTE_DSL_CACHE_DIR": "cute-dsl",
+    "TMPDIR": "tmp",
 }
 
 
@@ -172,37 +169,32 @@ def test_reactor_manifest_declares_generated_gpu_build() -> None:
 
     assert document["$schema"] == "reactor/v2"
     assert document["model"]["resources"]["gpu"]["count"] == 1
-    assert document["runtime"]["weights_path"] == "~/.cache/reactor_registry/evoke"
+    assert document["runtime"]["weights_path"] == "./weights"
     assert document["build"]["runtime_version"] == "3.10.0"
     assert document["build"]["python_requirements"] == "requirements.txt"
     assert "git" in document["build"]["system_packages"]
     assert not (EXAMPLE_DIR / "Dockerfile").exists()
 
 
-def test_prepare_runtime_defaults_caches_to_weights_volume(
+def test_check_runtime_keeps_caches_out_of_the_weights_folder(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
-    """Keep every large download and generated kernel cache on persistent storage."""
-    weights_root = tmp_path / "weights"
-    base = evoke_config.read_config(EXAMPLE_DIR / "evoke.yaml")
-    config = replace(
-        base,
-        source_path=weights_root / "Evoke",
-        worker_python=weights_root / "Evoke" / evoke_config.WORKER_PYTHON,
-    )
+    """Put compiler and temporary caches in the home folder, not the weights folder."""
+    monkeypatch.setenv("HOME", str(tmp_path))
     for variable in CACHE_ENVIRONMENT:
         monkeypatch.delenv(variable, raising=False)
-    monkeypatch.setattr(evoke_config, "ensure_source_checkout", lambda _: None)
-    monkeypatch.setattr(evoke_config, "ensure_worker_environment", lambda _: None)
-    monkeypatch.setattr(evoke_config, "_ensure_model_assets", lambda _: None)
+    config = evoke_config.read_config(EXAMPLE_DIR / "evoke.yaml", tmp_path / "weights")
+    monkeypatch.setattr(evoke_config, "check_source", lambda _: None)
+    monkeypatch.setattr(evoke_config, "check_weights", lambda _: None)
     monkeypatch.setattr(evoke_config, "_validate_runtime_paths", lambda _: None)
 
-    evoke_config.prepare_runtime(config)
+    evoke_config.check_runtime(config)
 
     for variable, relative in CACHE_ENVIRONMENT.items():
-        expected = weights_root / relative
+        expected = tmp_path / ".cache/evoke" / relative
         assert os.environ[variable] == str(expected)
         assert expected.is_dir()
+    assert not (tmp_path / "weights").exists()
 
 
 def test_camera_chunks_are_absolute_and_continuous() -> None:

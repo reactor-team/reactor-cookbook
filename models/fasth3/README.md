@@ -74,32 +74,32 @@ The deployment manifest is defined in [`reactor.yaml`](./reactor.yaml). See
 the Reactor [build configuration](https://docs.reactor.inc/deploy/platform/build)
 for supported manifest fields.
 
-## Download the model
+## Weights
 
-Install the Hugging Face CLI and place the snapshot under Reactor's weights
-root:
+The weights are the pinned Hugging Face snapshot
+`hf://FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree@5ea076f35b84da4c3c82217112fa733d8eea2ae1`,
+about 148 GB (`runtime.weights_path` in `reactor.yaml`). `reactor run`
+downloads it on the host and mounts it. To deploy, select the same weight set;
+Reactor fetches it onto the GPU nodes before the container starts:
 
 ```sh
-FASTH3_WEIGHTS="$HOME/.cache/reactor_registry/fasth3"
-
-hf download FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree \
-  --local-dir "$FASTH3_WEIGHTS/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree"
+reactor deploy production \
+  --weights hf://FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree@5ea076f35b84da4c3c82217112fa733d8eea2ae1
 ```
 
-The resulting layout is:
+The snapshot sits at the weights root:
 
 ```text
-~/.cache/reactor_registry/fasth3/
-└── FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree/
-    ├── modular_model_index.json
-    ├── transformer/
-    ├── text_encoder/
-    ├── tokenizer/
-    ├── processor/
-    ├── vae/
-    ├── audio_vae/
-    ├── scheduler/
-    └── audio_scheduler/
+<weights root>/
+├── modular_model_index.json
+├── transformer/
+├── text_encoder/
+├── tokenizer/
+├── processor/
+├── vae/
+├── audio_vae/
+├── scheduler/
+└── audio_scheduler/
 ```
 
 `load()` validates the complete bundle before loading it and warms the clip

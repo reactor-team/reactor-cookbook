@@ -14,7 +14,7 @@ calls its public inference components directly.
   Docker.
 - An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
   intentionally unsupported.
-- About 8 GB in Reactor's weights cache for the checkpoint, plus Docker image
+- About 8 GB for the checkpoint weight set, plus Docker image
   space for CUDA dependencies and the 184 MB public VPT sample.
 
 ## Run
@@ -42,10 +42,24 @@ cd models/open-dreamer
 reactor run --gpus device=0
 ```
 
-The first run builds the image and downloads the model weights, so it takes a
-while. Once the model is ready it serves at `http://localhost:8080`, and later
-runs start faster because they reuse the built image and the downloaded
-weights.
+The weights are the pinned Hugging Face weight set
+`hf://reactor-team/open-dreamer@844af1b3bf13900e2d7fa4c4003cd071db69e87c`
+(`runtime.weights_path`), about 8 GB. The image build fetches the pinned
+upstream source and the VPT demo. `reactor run` downloads the weight set on the
+host and mounts it, so the first run takes a while. Once the model is ready it
+serves at `http://localhost:8080`, and later runs start faster because they
+reuse the built image and the downloaded weights.
+
+To deploy, select the same weight set. Reactor makes it available on the GPU
+node before the container starts, so a new instance does not download the
+checkpoint:
+
+```sh
+reactor deploy production --weights hf://reactor-team/open-dreamer@844af1b3bf13900e2d7fa4c4003cd071db69e87c
+```
+
+Nothing downloads at runtime (`HF_HUB_OFFLINE=1`). A missing checkpoint or demo
+file stops `load()` with an error that names the fix.
 
 Use `reactor build` when you want to build without starting the service, or to
 rebuild after editing anything baked into the image:

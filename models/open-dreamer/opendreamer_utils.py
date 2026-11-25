@@ -211,30 +211,51 @@ def upstream_asset(upstream_root: Path, relative_path: Path) -> Path:
     return (upstream_root / relative_path).resolve()
 
 
-def ensure_demo_assets(upstream_root: Path, demos: tuple[DemoConfig, ...]) -> None:
-    """Download the public default demo when its configured files are missing."""
-    missing = {
-        path
-        for demo in demos
-        for path in (
-            upstream_asset(upstream_root, demo.video),
-            upstream_asset(upstream_root, demo.actions),
-        )
-        if not path.is_file()
-    }
-    if not missing:
-        return
+def check_demo_assets(upstream_root: Path, demos: tuple[DemoConfig, ...]) -> None:
+    """Require the demo files that the image build placed in the upstream checkout.
 
-    module_name = (
-        f"{__package__}.opendreamer_assets" if __package__ else "opendreamer_assets"
+    Raises:
+        FileNotFoundError: If a configured demo file is absent. Nothing downloads.
+    """
+    missing = sorted(
+        {
+            str(path)
+            for demo in demos
+            for path in (
+                upstream_asset(upstream_root, demo.video),
+                upstream_asset(upstream_root, demo.actions),
+            )
+            if not path.is_file()
+        }
     )
-    assets = importlib.import_module(module_name)
-    output_dir = upstream_root / "samples" / "vpt"
-    default_paths = set(assets.demo_paths(output_dir))
-    if not missing.issubset(default_paths):
-        return
-    logger.info("downloading missing OpenDreamer demo assets: %s", output_dir)
-    assets.ensure_demo_assets(output_dir)
+    if missing:
+        raise FileNotFoundError(
+            "OpenDreamer demo files not found: "
+            + ", ".join(missing)
+            + "; rebuild the image with `reactor build`"
+        )
+
+
+def weights_ref(config: OpenDreamerConfig) -> str:
+    """Return the pinned weight set: ``hf://<repo>@<revision>``."""
+    return f"hf://{config.checkpoint_repo_id}@{config.checkpoint_revision}"
+
+
+def resolve_checkpoint(config: OpenDreamerConfig, weights_root: Path) -> Path:
+    """Return the checkpoint folder in the weight set; never download.
+
+    The weight set is the pinned repository, so its step folders sit at the
+    weights root.
+
+    Raises:
+        FileNotFoundError: If the root holds no checkpoint step.
+    """
+    if not any(weights_root.glob("*/_CHECKPOINT_METADATA")):
+        raise FileNotFoundError(
+            f"OpenDreamer checkpoint not found under {weights_root}; "
+            f"deploy with `--weights {weights_ref(config)}`"
+        )
+    return weights_root
 
 
 def verify_source_revision(source_path: Path, expected: str) -> None:
@@ -279,9 +300,6 @@ def load_dependencies(source_path: Path) -> dict[str, Any]:
         "jax": jax,
         "jnp": importlib.import_module("jax.numpy"),
         "nnx": importlib.import_module("flax.nnx"),
-        "snapshot_download": importlib.import_module(
-            "huggingface_hub"
-        ).snapshot_download,
         "action_type": actions.Actions,
         "binary_actions": actions.NUM_BINARY_ACTIONS,
         "camera_classes": actions.NUM_CAMERA_CLASSES,

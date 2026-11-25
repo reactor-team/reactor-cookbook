@@ -154,11 +154,10 @@ def test_config_keeps_source_and_weights_under_runtime_root(
 ) -> None:
     """Resolve source and checkpoints under the runtime-managed weights root."""
     monkeypatch.setenv("REACTOR_WEIGHTS_PATH", str(tmp_path))
-    monkeypatch.delenv("DREAMX_WORLD_PATH", raising=False)
 
     config = dreamx_assets.read_config(MODEL_DIR / "dreamx_world.yaml")
 
-    assert config.source_path == tmp_path / "DreamX-World"
+    assert config.source_path == Path("/opt/DreamX-World")
     assert (
         config.dreamx.path == tmp_path / "checkpoints/DreamX-World-5B/model.safetensors"
     )

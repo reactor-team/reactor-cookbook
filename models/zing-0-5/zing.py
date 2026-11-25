@@ -24,8 +24,8 @@ from reactor_runtime.log import get_logger
 from zing_assets import (
     ZingAdapterConfig,
     read_config,
+    check_assets,
     configure_environment,
-    prepare_assets,
 )
 from zing_images import prepare_image
 from zing_model import ZingModel, ZingInput, ZingResult
@@ -61,7 +61,7 @@ class Zing(ReactorApp):
         config = read_config(config_path, get_weights_path())
         self._config = config
         configure_environment(config)
-        prepare_assets(config)
+        check_assets(config)
         self.engine = ZingModel()
         self.engine.load(config)
         logger.info(

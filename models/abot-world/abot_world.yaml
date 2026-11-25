@@ -1,10 +1,12 @@
 source:
-  path: source/ABot-World
+  # The image build clones the pinned revision here (reactor.yaml, build.run).
+  path: /opt/ABot-World
   url: https://github.com/amap-cvlab/ABot-World.git
   revision: 604a09c4b135c08af684cadbba0a53efeb119e6d
 
 checkpoint:
-  path: checkpoints/ABot-World-0-5B-LF
+  # The weight set is this repository, so its files sit at the weights root.
+  path: .
   repo_id: acvlab/ABot-World-0-5B-LF
   revision: d26a3003701e70d38cd17e2af2faf63bd4ff7632
 

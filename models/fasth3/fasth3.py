@@ -108,8 +108,11 @@ WORKER_POLL_SECONDS = 0.1
 # and its only job is to be a syntactically ordinary prompt.
 WARMUP_PROMPT = "A slow cinematic shot of sunlight moving across a quiet room."
 
-# The HF snapshot directory inside the weights bundle.
-DEFAULT_CHECKPOINT_DIR = "FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree"
+# The weight set: the pinned Hugging Face snapshot, at the weights root.
+# reactor.yaml's runtime.weights_path names the same reference.
+WEIGHTS_REF = "hf://FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree@5ea076f35b84da4c3c82217112fa733d8eea2ae1"
+# The snapshot directory, relative to the weights root.
+DEFAULT_CHECKPOINT_DIR = "."
 
 # Regional fullgraph compile specializes on MiniMax-H3's Python
 # ``original_seq_len`` argument. Giving every prompt the same token width keeps
@@ -404,6 +407,7 @@ def _require_weights(root: Path, model_path: Path) -> None:
         raise FileNotFoundError(
             f"FastH3 weights bundle under {root} is incomplete:\n  "
             + "\n  ".join(problems)
+            + f"\nDeploy with `--weights {WEIGHTS_REF}`."
         )
 
 
