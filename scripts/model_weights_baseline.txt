@@ -22,7 +22,6 @@ open-dreamer
 open-oasis
 rldx-1
 sana-wm
-sgf-plus
 solarwm-stage2
 streamrender-h3
 worldcrafter-fast
