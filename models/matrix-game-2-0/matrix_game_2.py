@@ -6,7 +6,7 @@ import secrets
 from pathlib import Path
 
 from matrix_game_2_assets import (
-    prepare_runtime_assets,
+    check_runtime_assets,
     read_config,
     validate_uploaded_image,
 )
@@ -70,7 +70,7 @@ class MatrixGame2(ReactorApp):
             config_path: Path to ``matrix_game_2.yaml`` from ``reactor.yaml``.
         """
         config = read_config(config_path)
-        model_path = prepare_runtime_assets(config)
+        model_path = check_runtime_assets(config)
         self._engine.load(
             source_path=config.source_path,
             model_path=model_path,

@@ -14,7 +14,6 @@ joy-video-edit
 lingbot-world-v1-fast
 lingbot-world-v2
 lyra-2
-matrix-game-2-0
 matrix-game-3-0
 matrix-game-3-5
 matrix-game-4
