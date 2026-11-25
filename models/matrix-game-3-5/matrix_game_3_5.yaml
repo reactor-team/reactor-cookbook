@@ -1,5 +1,6 @@
 source:
-  path: Matrix-Game-3.5
+  # The image holds this checkout, patched, at the pinned revision (build.run).
+  path: /opt/Matrix-Game-3.5
   url: https://github.com/Riemann-Dynamics/Matrix-Game-3.5.git
   revision: fa6d2b628ac9b0f1657dc24689536d74bfeb51da
 

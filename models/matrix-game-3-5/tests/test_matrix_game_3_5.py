@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from matrix_game_3_5 import MatrixGame35
 from matrix_game_3_5_camera import CameraMotionPlanner, MotionConfig
-from matrix_game_3_5_config import _ensure_stateful_patch, read_config
+from matrix_game_3_5_config import read_config
 from matrix_game_3_5_model import (
     MatrixGame35Anchor,
     MatrixGame35Input,
@@ -367,10 +367,9 @@ import matrix_game_3_5_config
     )
 
 
-def test_config_uses_explicit_weights_root(tmp_path, monkeypatch):
-    monkeypatch.delenv("MATRIX_GAME_3_5_PATH", raising=False)
+def test_config_uses_explicit_weights_root(tmp_path):
     config = read_config(MODEL_DIR / "matrix_game_3_5.yaml", tmp_path)
-    assert tmp_path in config.source_path.parents
+    assert tmp_path in config.checkpoint.path.parents
     assert config.max_chunks == 512
 
 
@@ -389,32 +388,3 @@ def test_invalid_native_output_does_not_count_as_completed(shape):
     assert engine._chunk_index == 0
     assert model._chunk_index == 0 and model.state._applied_world_id is None
     model.send.assert_not_called()
-
-
-def _git(*args, cwd):
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
-
-
-def test_earlier_stateful_patch_is_replaced_but_other_edits_are_kept(tmp_path, monkeypatch):
-    target = tmp_path / "rollout.py"
-    target.write_text("a\nb\nc\n")
-    _git("init", "-q", cwd=tmp_path)
-    _git("-c", "user.email=t@t", "-c", "user.name=t", "add", ".", cwd=tmp_path)
-    _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base", cwd=tmp_path)
-    target.write_text("a\nB\nc\n")
-    patch = tmp_path.parent / "stateful_rollout.patch"
-    patch.write_text(
-        subprocess.run(["git", "diff"], cwd=tmp_path, capture_output=True, text=True).stdout
-    )
-    target.write_text("a\nold\nc\n")  # an earlier version of the patch
-    monkeypatch.setattr(Path, "with_name", lambda self, name: patch)
-    _ensure_stateful_patch(tmp_path)
-    assert target.read_text() == "a\nB\nc\n"
-    _ensure_stateful_patch(tmp_path)
-    _git("checkout", "-q", "--", ".", cwd=tmp_path)
-    target.write_text("a\nold\nc\n")
-    (tmp_path / "other.txt").write_text("local edit")
-    _git("add", "other.txt", cwd=tmp_path)
-    with pytest.raises(RuntimeError, match="incompatible"):
-        _ensure_stateful_patch(tmp_path)
-    assert target.read_text() == "a\nold\nc\n"

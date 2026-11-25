@@ -70,8 +70,9 @@ Build the Python 3.12 serving image, expose one GPU, and start Runtime:
 
 ```sh
 cd models/matrix-game-3-5
+python prepare_weights.py --output ./weights
 reactor build
-reactor run --gpus device=0
+reactor run --gpus device=0 --weights ./weights
 ```
 
 `--gpus device=3` selects host GPU 3 and presents it as device 0 inside the
@@ -82,18 +83,10 @@ one on the first run when no local image exists. It serves WebRTC signaling on
 To use a different port:
 
 ```sh
-reactor build && reactor run --gpus device=0 --port 18011
+reactor build && reactor run --gpus device=0 --weights ./weights --port 18011
 ```
 
-The model repositories are public. If Hugging Face requests authentication,
-forward a host token while keeping its value out of the container command line:
-
-```sh
-export HF_TOKEN=hf_your_read_token
-reactor run --gpus device=0 -e HF_TOKEN
-```
-
-Startup waits for the Matrix worker to prepare its assets and load the weights.
+Startup waits for the Matrix worker to load the weights.
 Check readiness using the port passed to `reactor run`:
 
 ```sh
@@ -106,19 +99,25 @@ for that video track.
 
 ## Public source and model assets
 
-The CLI bind-mounts `runtime.weights_path` from `reactor.yaml` and exports that
-directory as `REACTOR_WEIGHTS_PATH`. The checked-in default stores all large
-resources under `~/.cache/reactor_registry/matrix-game-3-5`, outside both the
-image and this Git checkout, so container rebuilds retain them.
+Nothing downloads at startup. The image build does the source:
 
-On first load the adapter performs the complete public setup:
-
-- clone the pinned Matrix-Game-3.5 source revision;
+- clone the pinned Matrix-Game-3.5 source revision to `/opt/Matrix-Game-3.5`;
 - apply the included resumable-rollout patch;
-- install a managed Python 3.10 worker environment with the CUDA 12.8 PyTorch
-  wheels and upstream dependencies;
-- download the pinned distilled checkpoint, Wan2.2 TI2V 5B model and UMT5
-  tokenizer, and Depth-Anything-3 model.
+- install a Python 3.10 worker environment with the CUDA 12.8 PyTorch wheels
+  and upstream dependencies.
+
+Build the weights folder once, on a machine with about 60 GB free:
+
+```sh
+pip install huggingface-hub pyyaml numpy
+python prepare_weights.py --output ./weights
+reactor run --gpus device=0 --weights ./weights
+reactor deploy production --weights ./weights
+```
+
+It downloads the pinned distilled checkpoint, the Wan2.2 TI2V 5B model and
+UMT5 tokenizer, and the Depth-Anything-3 model. A missing file stops startup
+with this command in the error.
 
 The patch adds the resumable chunk boundary used by the worker. Each chunk is
 decoded by continuing one causal VAE decode of the whole rollout, so streamed
@@ -126,16 +125,12 @@ frames match the official single decode of the finished video. Every session
 also restores the global random state the official runner has after building
 the model; Depth-Anything-3 registration draws from it. The upstream
 model forward pass, scheduler, cache policy, memory queries, and registration
-logic remain in Matrix. Later starts verify and reuse the checkout, environment,
-and completed snapshots, and replace an earlier version of the patch when it is
-the checkout's only change. Interrupted Hugging Face downloads resume on the next
-start. Startup reports a clear revision mismatch for any other checkout.
+logic remain in Matrix. Startup verifies the checkout revision and the patch,
+and reports a clear mismatch for any other checkout. Interrupted Hugging Face
+downloads resume when you run `prepare_weights.py` again.
 
-Allow roughly 48 GB for checkpoints, plus the worker environment and download
-cache. `source.path` in `matrix_game_3_5.yaml` is relative to the CLI weights
-mount; every worker, model, tokenizer, inference, and sample path is derived from
-that one root. To relocate everything, change only `runtime.weights_path` in
-`reactor.yaml`.
+Allow roughly 48 GB for the weights folder. Every model, tokenizer and
+checkpoint path is derived from that one root.
 
 The adapter provides a scene-neutral generic default prompt, so users can leave
 the prompt empty. The default intrinsics and camera pose arrive in the pinned
