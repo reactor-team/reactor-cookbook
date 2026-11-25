@@ -57,38 +57,29 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ## 2. Get the weights
 
-The base files come from the public [Wan2.2-I2V-A14B](https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B)
-repository (about 12 GB; only the files below, not its expert shards):
+Build the weights folder once. It downloads pinned revisions of two public repositories:
+the Wan2.2 base files (text encoder, VAE, tokenizer and the two expert configs, about 12 GB;
+not its expert shards) from
+[Wan2.2-I2V-A14B](https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B), and the two few-step
+(autoregressive, 4-step) expert files (34.9 GB each) from
+[WorldPlay2-Fast](https://huggingface.co/aejion/WorldPlay2-Fast).
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-pip install -U "huggingface_hub[cli]"
-hf download Wan-AI/Wan2.2-I2V-A14B \
-  --include "models_t5_umt5-xxl-enc-bf16.pth" \
-  --include "Wan2.1_VAE.pth" \
-  --include "google/umt5-xxl/*" \
-  --include "high_noise_model/config.json" \
-  --include "low_noise_model/config.json" \
-  --local-dir ./weights/base
+pip install -U huggingface_hub
+python prepare_weights.py --output ./weights
 ```
 
-The two expert files (34.9 GB each) are the few-step (autoregressive, 4-step) WorldPlay2 model,
-published by the WorldPlay2 team as
-[WorldPlay2-Fast](https://huggingface.co/aejion/WorldPlay2-Fast) on Hugging Face:
-
-```sh
-hf download aejion/WorldPlay2-Fast \
-  --include "high_noise_model/diffusion_pytorch_model.safetensors" \
-  --include "low_noise_model/diffusion_pytorch_model.safetensors" \
-  --local-dir ./weights/fast
-```
-
-The two files must end up at exactly these paths:
+The files end up at these paths, and a missing one stops startup with an error that names
+this command:
 
 ```text
+weights/base/models_t5_umt5-xxl-enc-bf16.pth
 weights/fast/high_noise_model/diffusion_pytorch_model.safetensors
 weights/fast/low_noise_model/diffusion_pytorch_model.safetensors
 ```
+
+Deploy the same folder with `reactor deploy production --weights ./weights`.
 
 **Check:** `find weights -type f -not -path '*/.cache/*' | wc -l` prints `10`, and
 `du -sh --si weights` prints about `82G`.
