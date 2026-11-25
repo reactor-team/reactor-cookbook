@@ -29,9 +29,9 @@ motion, stream generated video, and record the session.
 
 The adapter and upstream implementation remain separate. This directory owns
 the Reactor integration and a narrow patch that exposes EVOKE's native chunk
-boundary. On first load, the adapter clones the exact tested upstream revision
-into Reactor's mounted weights cache, applies that patch once, and downloads
-the required post-distillation inference assets.
+boundary. The image build clones the exact tested upstream revision, applies
+that patch, and creates the Python 3.10 worker. A separate step builds the
+weights folder. Nothing downloads at startup.
 
 ## Prerequisites
 
@@ -40,9 +40,9 @@ the required post-distillation inference assets.
 - An NVIDIA Hopper or Blackwell GPU, NVIDIA driver, and NVIDIA Container
   Toolkit. The recipe uses FlashAttention 4 and declares one B200 for deployed
   instances; CPU inference is unsupported.
-- About 90 GB of persistent storage for the source checkout, Python 3.10
-  worker, post-distillation checkpoint, ViGeo weights, and download caches.
-- Access to the public GitHub and Hugging Face repositories on first load.
+- About 70 GB of disk for the weights folder.
+- Access to the public GitHub and Hugging Face repositories at image build and
+  when you build the weights folder.
 
 EVOKE's source and weights are Apache-2.0. ViGeo is CC-BY-NC-4.0; review that
 license before commercial use.
@@ -57,16 +57,18 @@ supported fields.
 
 ```sh
 cd models/evoke
+pip install huggingface-hub pyyaml
+python prepare_weights.py --output ./weights
 reactor build
-reactor run --gpus device=0
+reactor run --gpus device=0 --weights ./weights
 ```
 
-`reactor run` reuses the image produced by `reactor build`, or builds it
-automatically when no local image exists. It bind-mounts
-`runtime.weights_path`, clones the pinned EVOKE source, creates one persistent
-Python 3.10 inference worker, and downloads the pinned model snapshots on first
-load. Later containers reuse all of those files. The model reports ready on
-`http://localhost:8080` after its weights have loaded.
+`prepare_weights.py` downloads the pinned post-distillation checkpoint and ViGeo
+weights once. `reactor run` reuses the image from `reactor build`, or builds it
+automatically, and reads the weights folder read-only. A missing file stops
+startup with the command above in the error. The model reports ready on
+`http://localhost:8080` after its weights have loaded. To deploy, run
+`reactor deploy production --weights ./weights`.
 
 Rebuild after editing anything included in the model image:
 
@@ -83,26 +85,13 @@ with `local: true`. A quick liveness check:
 curl -s localhost:8080/health
 ```
 
-## Keep large files off the system disk
+## Storage
 
-`runtime.weights_path` is the persistent root for the source checkout, worker,
-checkpoints, uploads, and uv, Hugging Face, Torch, Triton, and CuTe DSL caches.
-It defaults to `~/.cache/reactor_registry/evoke`. Point that path at a large
-disk before the first run when the home filesystem is space constrained:
-
-```sh
-export EVOKE_STORAGE_ROOT=/path/to/large-disk/reactor-evoke
-mkdir -p "$EVOKE_STORAGE_ROOT" "$HOME/.cache/reactor_registry"
-ln -s "$EVOKE_STORAGE_ROOT" "$HOME/.cache/reactor_registry/evoke"
-```
-
-Alternatively, edit `runtime.weights_path` to an absolute large-disk path.
-`reactor run` mounts it at the same path inside the container and exports
-`REACTOR_WEIGHTS_PATH`, so the adapter's default caches remain on the
-persistent volume.
-
-Model storage and container image storage are independent. Configure both on a
-large disk when the system disk is space constrained.
+The weights folder holds `evoke-base/`, `evoke/stage3_post_distillation/` and
+`ViGeo1.1/vigeo.pt`. Put it on a large disk. Compiler caches go to
+`~/.cache/evoke` inside the container. Model storage and container image
+storage are independent. Configure both on a large disk when the system disk
+is space constrained.
 
 ## Runtime boundary
 
@@ -194,25 +183,15 @@ or select new conditioning to start another rollout with the loaded checkpoints.
 ## Public source and model assets
 
 `evoke.yaml` pins the source and both Hugging Face snapshots by full immutable
-revision. The adapter can prepare them automatically. To create the source
-checkout explicitly before first startup, clone it beneath the configured
-weights path:
-
-```sh
-git clone https://github.com/AlayaLab/Evoke.git \
-  "$HOME/.cache/reactor_registry/evoke/Evoke"
-git -C "$HOME/.cache/reactor_registry/evoke/Evoke" checkout \
-  74d268516d95c8fceadd2378f91a73f9f187042b
-```
-
-Startup verifies the checkout revision and applies `stateful_rollout.patch`
-once. The required snapshots are:
+revision. `build.run` clones the source to `/opt/Evoke` and `prepare_worker.sh`
+applies `stateful_rollout.patch`. Startup verifies the revision and the patch.
+`prepare_weights.py` downloads:
 
 - `AlayaLab/Evoke/evoke-base`;
 - `AlayaLab/Evoke/evoke/stage3_post_distillation`;
 - `pkqbajng/ViGeo/vigeo.pt`.
 
-Interrupted Hugging Face downloads resume.
+Interrupted Hugging Face downloads resume when you run it again.
 
 ## Recording
 

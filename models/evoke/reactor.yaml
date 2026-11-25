@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: evoke-post-distillation
-  version: v0.2.1
+  version: v0.3.0
   description: |
     Explore an autoregressive world through text, media, and six-axis camera motion.
   resources:
@@ -20,8 +20,8 @@ model:
 runtime:
   import: evoke:Evoke
   config: evoke.yaml
-  # Source, the Python 3.10 worker, model snapshots, and compiler caches stay here.
-  weights_path: ~/.cache/reactor_registry/evoke
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 6
@@ -45,3 +45,16 @@ build:
     - libxcb1
     - libxdmcp6
     - libxext6
+    - ca-certificates
+  runtime_env:
+    HF_HUB_OFFLINE: "1"
+  run:
+    - pip install --no-cache-dir uv==0.11.19
+    - >-
+      git init /opt/Evoke
+      && git -C /opt/Evoke fetch --depth 1
+      https://github.com/AlayaLab/Evoke.git
+      74d268516d95c8fceadd2378f91a73f9f187042b
+      && git -C /opt/Evoke checkout --detach FETCH_HEAD
+    # Reactor's run steps precede COPY; mount this folder read-only.
+    - --mount=type=bind,source=.,target=/build UV_CACHE_DIR=/tmp/evoke-uv UV_PYTHON_INSTALL_DIR=/opt/evoke-python bash /build/prepare_worker.sh && rm -rf /tmp/evoke-uv

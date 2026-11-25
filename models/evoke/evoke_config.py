@@ -1,34 +1,19 @@
-"""Prepare and validate public EVOKE source, environments, and model assets."""
+"""Read the EVOKE adapter config and check its source, worker, and weights."""
 
 from __future__ import annotations
 
-import hashlib
-import json
-import logging
 import os
 import re
-import shutil
 import subprocess
-import tempfile
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 import yaml
 
-logger = logging.getLogger(__name__)
-
-SOURCE_ENV = "EVOKE_PATH"
 WORKER_PYTHON = Path(".reactor-venv/bin/python")
-WORKER_ENV_MARKER = ".reactor-worker-environment.json"
-SNAPSHOT_MARKER = ".reactor-snapshot.json"
-WORKER_ENV_VERSION = 4
-WORKER_PYTHON_VERSION = "3.10"
-WORKER_TORCH = "torch==2.9.1"
-WORKER_TORCHVISION = "torchvision==0.24.1"
-WORKER_INDEX_URL = "https://download.pytorch.org/whl/cu128"
-ATTENTION_RUNTIME = "flash-attn-4==4.0.0b26"
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
+CACHE_ROOT = Path("~/.cache/evoke")
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 _EVOKE_REQUIRED = (
@@ -53,6 +38,7 @@ class EvokeConfig:
     """Hold validated EVOKE adapter settings."""
 
     source_path: Path
+    weights_root: Path
     source_url: str
     source_revision: str
     worker_python: Path
@@ -68,17 +54,17 @@ class EvokeConfig:
     @property
     def base_model(self) -> Path:
         """Return the EVOKE base-component directory."""
-        return self.source_path / "models/evoke-base"
+        return self.weights_root / "evoke-base"
 
     @property
     def transformer(self) -> Path:
         """Return the post-distillation transformer directory."""
-        return self.source_path / "models/evoke/stage3_post_distillation"
+        return self.weights_root / "evoke/stage3_post_distillation"
 
     @property
     def vigeo_path(self) -> Path:
         """Return the required ViGeo weight directory."""
-        return self.source_path / "models/ViGeo1.1"
+        return self.weights_root / "ViGeo1.1"
 
     @property
     def default_image(self) -> Path:
@@ -89,7 +75,11 @@ class EvokeConfig:
 def read_config(
     config_path: Path | None, weights_root: Path | None = None
 ) -> EvokeConfig:
-    """Read and validate the EVOKE adapter YAML."""
+    """Read and validate the EVOKE adapter YAML.
+
+    ``weights_root`` is the prepared weights folder. It defaults to ``weights/``
+    beside the config.
+    """
     if config_path is None:
         raise ValueError("EVOKE requires runtime.config in reactor.yaml")
     document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -100,10 +90,12 @@ def read_config(
     inference = _mapping(document.get("inference"), "inference")
     motion = _mapping(document.get("motion"), "motion")
     stream = _mapping(document.get("stream"), "stream")
-    source_path = _source_path(
-        source.get("path"),
-        weights_root if weights_root is not None else config_path.resolve().parent,
-    )
+    root = Path(
+        weights_root
+        if weights_root is not None
+        else config_path.resolve().parent / "weights"
+    ).resolve()
+    source_path = _source_path(source.get("path"), config_path.resolve().parent)
     max_chunks = int(stream.get("max_chunks", 2048))
     if max_chunks < 12:
         raise ValueError("stream.max_chunks must be at least 12")
@@ -121,6 +113,7 @@ def read_config(
         )
     return EvokeConfig(
         source_path=source_path,
+        weights_root=root,
         source_url=_repository_url(source.get("url"), "source.url"),
         source_revision=_revision(source.get("revision"), "source.revision"),
         worker_python=source_path / WORKER_PYTHON,
@@ -135,127 +128,57 @@ def read_config(
     )
 
 
-def prepare_runtime(config: EvokeConfig) -> None:
-    """Prepare the pinned source, Python worker, and inference assets."""
-    _configure_download_caches(config.source_path.parent)
-    ensure_source_checkout(config)
-    ensure_worker_environment(config)
-    _ensure_model_assets(config)
+def check_runtime(config: EvokeConfig) -> None:
+    """Point caches at the home folder, then check the source, worker, and weights.
+
+    This function never downloads. The image holds the patched source and the
+    worker environment, and ``prepare_weights.py`` builds the weights folder.
+    """
+    _configure_caches()
+    check_source(config)
+    check_weights(config)
     _validate_runtime_paths(config)
 
 
-def ensure_source_checkout(config: EvokeConfig) -> None:
-    """Clone the pinned EVOKE source and apply the resumable-chunk patch."""
+def check_source(config: EvokeConfig) -> None:
+    """Require the pinned source checkout with the stateful patch applied."""
     source_path = config.source_path
-    if not source_path.exists():
-        logger.info(
-            "downloading EVOKE source checkout %s revision=%s to %s",
-            config.source_url,
-            config.source_revision,
-            source_path,
-        )
-        source_path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix=".reactor-evoke-source-", dir=source_path.parent
-        ) as temp:
-            checkout = Path(temp) / "checkout"
-            _run_git(
-                [
-                    "clone",
-                    "--filter=blob:none",
-                    "--no-checkout",
-                    config.source_url,
-                    str(checkout),
-                ]
-            )
-            _run_git(
-                ["-C", str(checkout), "checkout", "--detach", config.source_revision]
-            )
-            with suppress(FileExistsError):
-                checkout.rename(source_path)
     if not (source_path / ".git").exists():
-        raise RuntimeError(f"EVOKE source at {source_path} must be a Git checkout")
+        raise FileNotFoundError(
+            f"EVOKE source is missing at {source_path}; rebuild the image with `reactor build`"
+        )
     actual = _run_git(["-C", str(source_path), "rev-parse", "HEAD"]).stdout.strip()
     if actual != config.source_revision:
         raise RuntimeError(
             f"EVOKE source revision is {actual}; expected {config.source_revision}"
         )
-    _ensure_stateful_patch(source_path)
-
-
-def ensure_worker_environment(config: EvokeConfig) -> None:
-    """Create the isolated Python 3.10 inference environment on the weights volume."""
-    marker = config.worker_python.parents[1] / WORKER_ENV_MARKER
-    requirements = Path(__file__).with_name("worker-requirements.txt")
-    expected = {
-        "version": WORKER_ENV_VERSION,
-        "source_revision": config.source_revision,
-        "python": WORKER_PYTHON_VERSION,
-        "torch": WORKER_TORCH,
-        "torchvision": WORKER_TORCHVISION,
-        "attention_runtime": ATTENTION_RUNTIME,
-        "requirements_sha256": hashlib.sha256(requirements.read_bytes()).hexdigest(),
-    }
-    if config.worker_python.is_file() and _json_matches(marker, expected):
-        return
-    uv = shutil.which("uv")
-    if uv is None:
-        raise RuntimeError("uv is required to prepare the EVOKE worker environment")
-    environment_dir = config.worker_python.parents[1]
-    environment = os.environ.copy()
-    logger.info("preparing EVOKE worker environment: %s", environment_dir)
-    _run_uv(
-        [
-            uv,
-            "venv",
-            "--python",
-            WORKER_PYTHON_VERSION,
-            "--clear",
-            str(environment_dir),
-        ],
-        environment,
+    patch = Path(__file__).with_name("stateful_rollout.patch")
+    reverse = _check_git(
+        ["-C", str(source_path), "apply", "--reverse", "--check", str(patch)]
     )
-    _run_uv(
-        [
-            uv,
-            "pip",
-            "install",
-            "--python",
-            str(config.worker_python),
-            WORKER_TORCH,
-            WORKER_TORCHVISION,
-            "--index-url",
-            WORKER_INDEX_URL,
-            "--extra-index-url",
-            "https://pypi.org/simple",
-        ],
-        environment,
-    )
-    _run_uv(
-        [
-            uv,
-            "pip",
-            "install",
-            "--python",
-            str(config.worker_python),
-            "-r",
-            str(requirements),
-        ],
-        environment,
-    )
-    pending = marker.with_suffix(".tmp")
-    pending.write_text(json.dumps(expected, sort_keys=True), encoding="utf-8")
-    os.replace(pending, marker)
+    if reverse.returncode != 0:
+        raise RuntimeError(
+            "EVOKE source lacks the stateful rollout patch; rebuild the image with `reactor build`"
+        )
 
 
-def _configure_download_caches(weights_root: Path) -> None:
-    """Place package, model, compiler, and temporary caches on the weights volume."""
-    cache_root = weights_root / ".cache"
+def check_weights(config: EvokeConfig) -> None:
+    """Raise when the weights folder lacks a file that the model reads."""
+    required = [config.weights_root / path for path in _EVOKE_REQUIRED]
+    required.append(config.vigeo_path / "vigeo.pt")
+    missing = [str(path) for path in required if not _nonempty(path)]
+    if missing:
+        raise FileNotFoundError(
+            f"EVOKE weights lack: {', '.join(missing)}. "
+            f"Run `{PREPARE_COMMAND}` and deploy with `--weights ./weights`."
+        )
+
+
+def _configure_caches() -> None:
+    """Place compiler and temporary caches in the home folder, never the weights folder."""
+    cache_root = CACHE_ROOT.expanduser()
     defaults = {
-        "UV_CACHE_DIR": cache_root / "uv",
-        "UV_PYTHON_INSTALL_DIR": cache_root / "python",
         "XDG_CACHE_HOME": cache_root / "xdg",
-        "HF_HOME": cache_root / "huggingface",
         "TORCH_HOME": cache_root / "torch",
         "TORCHINDUCTOR_CACHE_DIR": cache_root / "torchinductor",
         "TRITON_CACHE_DIR": cache_root / "triton",
@@ -265,96 +188,6 @@ def _configure_download_caches(weights_root: Path) -> None:
     for variable, default in defaults.items():
         directory = Path(os.environ.setdefault(variable, str(default))).expanduser()
         directory.mkdir(parents=True, exist_ok=True)
-
-
-def _ensure_stateful_patch(source_path: Path) -> None:
-    """Apply the adapter's stateful chunk-boundary patch exactly once."""
-    patch = Path(__file__).with_name("stateful_rollout.patch")
-    reverse = _check_git(
-        ["-C", str(source_path), "apply", "--reverse", "--check", str(patch)]
-    )
-    if reverse.returncode == 0:
-        return
-    forward = _check_git(["-C", str(source_path), "apply", "--check", str(patch)])
-    if forward.returncode != 0:
-        detail = (
-            forward.stderr.strip() or reverse.stderr.strip() or "patch check failed"
-        )
-        raise RuntimeError(
-            f"EVOKE source is incompatible with the stateful patch: {detail}"
-        )
-    logger.info("applying EVOKE stateful rollout patch: %s", source_path)
-    _run_git(["-C", str(source_path), "apply", str(patch)])
-
-
-def _ensure_model_assets(config: EvokeConfig) -> None:
-    """Download the minimal post-distillation and ViGeo snapshots."""
-    _ensure_snapshot(
-        config,
-        asset=config.weights,
-        name="EVOKE post-distillation weights",
-        local_dir=config.source_path / "models",
-        required=tuple(
-            config.source_path / "models" / path for path in _EVOKE_REQUIRED
-        ),
-        allow_patterns=("evoke-base/**", "evoke/stage3_post_distillation/**"),
-    )
-    _ensure_snapshot(
-        config,
-        asset=config.vigeo,
-        name="ViGeo 1.1 weights",
-        local_dir=config.vigeo_path,
-        required=(config.vigeo_path / "vigeo.pt",),
-        allow_patterns=("vigeo.pt",),
-    )
-
-
-def _ensure_snapshot(
-    config: EvokeConfig,
-    *,
-    asset: HubAsset,
-    name: str,
-    local_dir: Path,
-    required: tuple[Path, ...],
-    allow_patterns: tuple[str, ...],
-) -> None:
-    """Download one missing immutable Hub snapshot through the worker environment."""
-    marker = local_dir / SNAPSHOT_MARKER
-    identity = {
-        "repo_id": asset.repo_id,
-        "revision": asset.revision,
-        "allow": list(allow_patterns),
-    }
-    if _json_matches(marker, identity) and all(_nonempty(path) for path in required):
-        return
-    logger.info(
-        "downloading EVOKE model asset %s repo=%s to %s",
-        name,
-        asset.repo_id,
-        local_dir,
-    )
-    downloader = Path(__file__).with_name("download_snapshot.py")
-    command = [
-        str(config.worker_python),
-        str(downloader),
-        "--repo-id",
-        asset.repo_id,
-        "--revision",
-        asset.revision,
-        "--local-dir",
-        str(local_dir),
-    ]
-    for pattern in allow_patterns:
-        command.extend(("--allow-pattern", pattern))
-    try:
-        subprocess.run(command, check=True)
-    except subprocess.CalledProcessError as error:
-        raise RuntimeError(f"Unable to download {name} from {asset.repo_id}") from error
-    unresolved = [str(path) for path in required if not _nonempty(path)]
-    if unresolved:
-        raise RuntimeError(
-            f"{name} download is incomplete; missing files: {unresolved}"
-        )
 
 
 def _validate_runtime_paths(config: EvokeConfig) -> None:
@@ -400,18 +233,10 @@ def _repository_url(value: object, name: str) -> str:
     return url
 
 
-def _source_path(value: object, weights_root: Path) -> Path:
-    override = os.environ.get(SOURCE_ENV)
-    configured = Path(override if override else str(value)).expanduser()
-    candidate = configured if configured.is_absolute() else weights_root / configured
+def _source_path(value: object, base: Path) -> Path:
+    configured = Path(str(value)).expanduser()
+    candidate = configured if configured.is_absolute() else base / configured
     return Path(os.path.abspath(candidate))
-
-
-def _json_matches(path: Path, expected: object) -> bool:
-    try:
-        return json.loads(path.read_text(encoding="utf-8")) == expected
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return False
 
 
 def _nonempty(path: Path) -> bool:
@@ -424,10 +249,10 @@ def _run_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
             _git_command(arguments), check=True, capture_output=True, text=True
         )
     except FileNotFoundError as error:
-        raise RuntimeError("Git is required to prepare the EVOKE source") from error
+        raise RuntimeError("Git is required to check the EVOKE source") from error
     except subprocess.CalledProcessError as error:
         detail = error.stderr.strip() or error.stdout.strip() or "Git command failed"
-        raise RuntimeError(f"Unable to prepare the EVOKE source: {detail}") from error
+        raise RuntimeError(f"Unable to check the EVOKE source: {detail}") from error
 
 
 def _check_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
@@ -436,19 +261,10 @@ def _check_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
             _git_command(arguments), check=False, capture_output=True, text=True
         )
     except FileNotFoundError as error:
-        raise RuntimeError("Git is required to prepare the EVOKE source") from error
+        raise RuntimeError("Git is required to check the EVOKE source") from error
 
 
 def _git_command(arguments: list[str]) -> list[str]:
     if len(arguments) >= 2 and arguments[0] == "-C":
         return ["git", "-c", f"safe.directory={arguments[1]}", *arguments]
     return ["git", *arguments]
-
-
-def _run_uv(command: list[str], environment: dict[str, str]) -> None:
-    try:
-        subprocess.run(command, check=True, env=environment)
-    except subprocess.CalledProcessError as error:
-        raise RuntimeError(
-            "Unable to prepare the EVOKE Python 3.10 worker environment"
-        ) from error
