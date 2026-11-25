@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: fasth3
-  version: v0.5.0
+  version: v0.6.0
   description: |
     Stream an endless, prompt-driven channel of 768p video with synchronized
     audio. MiniMax-H3 (35B), distilled by FastVideo to four transformer
@@ -34,8 +34,9 @@ model:
 runtime:
   import: fasth3:FastH3
   config: fasth3.yaml
-  # The weights bundle lives here; nothing is downloaded at load.
-  weights_path: ~/.cache/reactor_registry/fasth3
+  # The pinned Hugging Face snapshot, about 148 GB; nothing is downloaded at
+  # load. fasth3.py's WEIGHTS_REF names the same reference.
+  weights_path: hf://FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree@5ea076f35b84da4c3c82217112fa733d8eea2ae1
   # Left off deliberately. Every clip is generated independently, so a recording
   # carries a hard cut in picture and sound at each clip boundary; enable it once
   # that seam has been looked at.

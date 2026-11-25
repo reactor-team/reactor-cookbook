@@ -8,7 +8,6 @@ diamond-csgo-world-model
 dreamx-world
 echo-wm
 evoke
-fasth3
 hy-world-1-5
 joy-video-edit
 lingbot-world-v1-fast

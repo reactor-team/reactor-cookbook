@@ -99,10 +99,11 @@ live_chat:
   max_pending: 10
 
 runtime:
-  # Weight bundle layout, relative to the mounted weights root. One HF snapshot
-  # directory carries every component: transformer, text encoder, both VAEs,
-  # both schedulers, tokenizer and processor.
-  checkpoint_dir: FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree
+  # The snapshot directory, relative to the mounted weights root. The weight set
+  # (reactor.yaml's runtime.weights_path) is one HF snapshot at the root, and it
+  # carries every component: transformer, text encoder, both VAEs, both
+  # schedulers, tokenizer and processor.
+  checkpoint_dir: .
 
   # Sequence parallelism spans every GPU (sp_size == num_gpus, tp_size 1).
   # Eight is what makes the channel work: the published build time for a 15 s
