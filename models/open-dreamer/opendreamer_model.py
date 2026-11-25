@@ -12,10 +12,11 @@ import numpy as np
 from opendreamer_utils import (
     OpenDreamerConfig,
     RolloutConditioning,
-    ensure_demo_assets,
+    check_demo_assets,
     load_dependencies,
     mesh_context,
     read_conditioning_sequence,
+    resolve_checkpoint,
     upstream_asset,
     verify_source_revision,
 )
@@ -126,28 +127,21 @@ class OpenDreamerModel:
 
         Args:
             config: Validated native inference settings.
-            weights_root: Checkpoint cache directory provided by the caller.
+            weights_root: Weight set folder provided by the caller.
             source_root: Pinned upstream checkout provided by the caller.
         """
         verify_source_revision(source_root, config.source_revision)
-        ensure_demo_assets(source_root, config.demos)
+        check_demo_assets(source_root, config.demos)
         dependencies = load_dependencies(source_root)
         self._config = config
         self._deps = dependencies
 
         jax = dependencies["jax"]
         nnx = dependencies["nnx"]
-        snapshot_download = dependencies["snapshot_download"]
         bundle_type = dependencies["bundle_type"]
         build_parallel = dependencies["build_parallel"]
 
-        checkpoint_cache = weights_root / "open-dreamer" / "huggingface"
-        checkpoint_cache.mkdir(parents=True, exist_ok=True)
-        checkpoint_path = snapshot_download(
-            repo_id=config.checkpoint_repo_id,
-            revision=config.checkpoint_revision,
-            cache_dir=checkpoint_cache,
-        )
+        checkpoint_path = resolve_checkpoint(config, weights_root)
         if jax.default_backend() == "cpu":
             raise RuntimeError("OpenDreamer requires a CUDA accelerator")
 
