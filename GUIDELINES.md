@@ -76,7 +76,7 @@ modules use the model name as a prefix and split along fixed seams:
 | `<model>_model.py` | The model half: `load()` / `generate()` / `reset()`, `<Model>Input`, `<Model>Result`, its own errors; no runtime import |
 | `<model>_types.py` | `InputState`, `Output` tracks, and every `ModelMessage` |
 | `<model>_assets.py` | Config parsing plus checkpoint path resolution and validation; no download |
-| `prepare_weights.py` | Builds the weights folder; the only file that downloads (see [Weights and startup](#weights-and-startup)) |
+| `prepare_weights.py` | Builds the weights folder before a deploy; with `build.run` scripts named `prepare_*.py`, the only files that download (see [Weights and startup](#weights-and-startup)) |
 | `<model>_backend.py` | The in-process upstream model wrapper (GPU code) the model half calls |
 | `<model>_camera.py`, `<model>_images.py` | Optional camera-planning and image helpers, used by the application half |
 
@@ -95,14 +95,14 @@ exist, and **no** `__init__.py` — model modules are imported flat by
 ## Weights and startup
 
 A model starts from two inputs: its image and its weights folder. `load()`
-reads nothing from the network. Reactor copies the selected weight set to the
-GPU node before the model container starts, and mounts it read-only. A model
-that downloads in `load()` downloads again on every new instance, and a model
+reads nothing from the network. Reactor makes the selected weight set
+available, read-only, before the model container starts. A model that
+downloads in `load()` downloads again on every new instance, and a model
 deployed with a weight set cannot write into it.
 
 - **Upstream source is in the image.** `build.run` (or the Dockerfile)
-  fetches the upstream repository at its pinned commit. `load()` never runs
-  `git`.
+  fetches the upstream repository at its pinned commit, directly or through a
+  `prepare_*.py` script. `load()` never runs `git`.
 - **Checkpoints come from `get_weights_path()`.** The application passes the
   folder to the model half's `load()`, which resolves every checkpoint under
   it.
@@ -141,9 +141,11 @@ deployed with a weight set cannot write into it.
   compile caches are examples.
 
 CI runs `scripts/check_model_weights.py` on every model. It fails on a
-download or a `git` network call in the model's own modules, on a manifest
-without `HF_HUB_OFFLINE`, and on a `runtime.weights_path` that is not
-`./weights` or a pinned `hf://` reference. A model in
+download or a `git` network call in the model's top-level modules, except
+`prepare_*.py`. It also fails on a manifest without `HF_HUB_OFFLINE`, and on a
+`runtime.weights_path` that is not `./weights` or a pinned `hf://` reference.
+The check reads source, so code in a subfolder and calls such as `urlopen`
+pass it. Review still holds them to the rules. A model in
 `scripts/model_weights_baseline.txt` predates the rule. The PR that brings a
 model under the rule removes it from that list, and the check fails when a
 listed model already passes.

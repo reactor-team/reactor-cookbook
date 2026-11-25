@@ -72,6 +72,7 @@ def test_clean_model_passes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
         "import importlib\nimportlib.import_module('huggingface_hub').snapshot_download('acme/world')\n",
         "hub = object()\ngetattr(hub, 'hf_hub_download')\n",
         "import torch\ntorch.hub.load('acme/world', 'model')\n",
+        "from torch import hub\nhub.load('acme/world', 'model')\n",
         "from urllib.request import urlretrieve\nurlretrieve('https://example.com/w.pth', 'w.pth')\n",
     ],
 )
@@ -91,6 +92,10 @@ def test_download_in_own_module_fails(
         "import subprocess\nsubprocess.run(['git', 'clone', 'https://github.com/acme/world.git', '/src'])\n",
         "import subprocess\n\ndef git(*args):\n    subprocess.run(['git', *args])\n\ngit('fetch', '--depth', '1')\n",
         "import os\nos.system('git clone https://github.com/acme/world.git /src')\n",
+        "import shutil, subprocess\nGIT = shutil.which('git')\nsubprocess.run([GIT, 'clone', 'https://github.com/acme/world.git', '/src'])\n",
+        "import subprocess\nsubprocess.run(['bash', '-c', 'cd /src && git fetch origin'])\n",
+        "import subprocess\np = '/src'\nsubprocess.run(f'git -C {p} pull', shell=True)\n",
+        "import git\ngit.Repo.clone_from('https://github.com/acme/world.git', '/src')\n",
     ],
 )
 def test_git_network_command_fails(
@@ -99,27 +104,86 @@ def test_git_network_command_fails(
     make_model(tmp_path, world_assets_py=source)
     status, out = run(tmp_path, capsys)
     assert status == 1
-    assert "git" in out
+    assert "models/world/world_assets.py:" in out
 
 
-def test_git_read_of_image_checkout_passes(
+def test_git_helper_in_another_module_fails(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     make_model(
         tmp_path,
-        world_assets_py="import subprocess\nsubprocess.check_output(['git', '-C', '/opt/world', 'rev-parse', 'HEAD'])\n",
+        world_utils_py="import subprocess\n\ndef run_git(args):\n    subprocess.run(['git', *args])\n",
+        world_assets_py="from world_utils import run_git\nrun_git(['clone', 'https://github.com/acme/world.git'])\n",
+    )
+    status, out = run(tmp_path, capsys)
+    assert status == 1
+    assert "models/world/world_utils.py:4: runs `git` with clone" in out
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import subprocess\nsubprocess.check_output(['git', '-C', '/opt/world', 'rev-parse', 'HEAD'])\n",
+        "import subprocess\nACTIONS = ('push', 'pull')\nsubprocess.check_output(['git', '-C', '/opt/world', 'rev-parse', 'HEAD'])\n",
+        '"""The build runs git clone, so load() never does."""\n',
+        "digits = [1, 2]\nACTIONS = ('fetch', 'pull')\nprint(digits, ACTIONS)\n",
+    ],
+)
+def test_git_without_network_passes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], source: str
+) -> None:
+    make_model(tmp_path, world_assets_py=source)
+    status, out = run(tmp_path, capsys)
+    assert status == 0, out
+
+
+def test_prepare_scripts_and_tests_may_download(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    download = "from huggingface_hub import snapshot_download\nsnapshot_download('acme/world')\n"
+    clone = "import subprocess\nsubprocess.run(['git', 'clone', 'https://github.com/acme/world.git'])\n"
+    make_model(
+        tmp_path,
+        prepare_weights_py=download,
+        prepare_source_py=clone,
+        tests__test_world_py=download,
     )
     status, out = run(tmp_path, capsys)
     assert status == 0, out
 
 
-def test_prepare_script_and_tests_may_download(
+@pytest.mark.parametrize(
+    ("files", "manifest", "message"),
+    [
+        (
+            {"world_assets_py": "def broken(:\n"},
+            CLEAN_MANIFEST,
+            "world_assets.py:1: does not parse",
+        ),
+        ({}, "- a list\n", "reactor.yaml: is not a mapping"),
+        ({}, "runtime: [\n", "reactor.yaml: does not parse"),
+    ],
+)
+def test_malformed_file_is_a_violation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    files: dict[str, str],
+    manifest: str,
+    message: str,
+) -> None:
+    make_model(tmp_path, manifest=manifest, **files)
+    status, out = run(tmp_path, capsys)
+    assert status == 1
+    assert message in out
+
+
+def test_folder_without_manifest_is_a_violation(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    download = "from huggingface_hub import snapshot_download\nsnapshot_download('acme/world')\n"
-    make_model(tmp_path, prepare_weights_py=download, tests__test_world_py=download)
+    (tmp_path / "models" / "stray").mkdir(parents=True)
     status, out = run(tmp_path, capsys)
-    assert status == 0, out
+    assert status == 1
+    assert "models/stray: has no reactor.yaml" in out
 
 
 def test_missing_offline_setting_fails(
@@ -133,16 +197,48 @@ def test_missing_offline_setting_fails(
     assert "HF_HUB_OFFLINE" in out
 
 
-def test_dockerfile_env_sets_offline(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    ("dockerfile", "passes"),
+    [
+        ("ENV HF_HUB_OFFLINE=1 \\\n    TRANSFORMERS_OFFLINE=1\n", True),
+        ("ENV PYTHONUNBUFFERED=1 \\\n    HF_HUB_OFFLINE=1\n", True),
+        ("ENV HF_HUB_OFFLINE 1\n", True),
+        ("ENV HF_HUB_OFFLINE=true\n", True),
+        ("# ENV HF_HUB_OFFLINE=1\n", False),
+        ("ENV HF_HUB_OFFLINE=0\n", False),
+        ("RUN echo HF_HUB_OFFLINE=1\n", False),
+    ],
+)
+def test_dockerfile_env(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], dockerfile: str, passes: bool
 ) -> None:
     make_model(
         tmp_path,
         manifest="$schema: reactor/v2\nruntime:\n  weights_path: ./weights\n",
-        Dockerfile="FROM python:3.12\nENV HF_HUB_OFFLINE=1 \\\n    TRANSFORMERS_OFFLINE=1\n",
+        Dockerfile="FROM python:3.12\n" + dockerfile,
     )
     status, out = run(tmp_path, capsys)
-    assert status == 0, out
+    assert (status == 0) is passes, out
+
+
+@pytest.mark.parametrize(
+    ("value", "passes"),
+    [
+        ('"1"', True),
+        ("1", True),
+        ('"true"', True),
+        ("true", True),
+        ('"ON"', True),
+        ('"0"', False),
+        ("false", False),
+    ],
+)
+def test_runtime_env_offline_values(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], value: str, passes: bool
+) -> None:
+    make_model(tmp_path, manifest=CLEAN_MANIFEST.replace('"1"', value))
+    status, out = run(tmp_path, capsys)
+    assert (status == 0) is passes, out
 
 
 @pytest.mark.parametrize(
