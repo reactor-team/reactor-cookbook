@@ -1,7 +1,7 @@
 $schema: reactor/v2
 model:
   name: worldcrafter-fast
-  version: v0.2.0
+  version: v0.2.1
   description: Explore an image with camera-controlled video and persistent scene memory.
   resources:
     gpu:
@@ -50,6 +50,8 @@ build:
     OMP_NUM_THREADS: "8"
     TORCHINDUCTOR_COMPILE_THREADS: "2"
     TOKENIZERS_PARALLELISM: "false"
+    # The weight set and the image hold every file; nothing downloads at runtime.
+    HF_HUB_OFFLINE: "1"
     WORLDCRAFTER_ROOT: /opt/worldcrafter
     WORLDCRAFTER_SCRATCH: /local-ssd/wc-reactor
     UV_CACHE_DIR: /local-ssd/cache/uv
