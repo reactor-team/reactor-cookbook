@@ -140,15 +140,19 @@ deployed with a weight set cannot write into it.
   `~/.cache`, and never under the weights folder. TorchInductor and Triton
   compile caches are examples.
 
-CI runs `scripts/check_model_weights.py` on every model. It fails on a
-download or a `git` network call in the model's top-level modules, except
-`prepare_*.py`. It also fails on a manifest without `HF_HUB_OFFLINE`, and on a
-`runtime.weights_path` that is not `./weights` or a pinned `hf://` reference.
-The check reads source, so code in a subfolder and calls such as `urlopen`
-pass it. Review still holds them to the rules. A model in
-`scripts/model_weights_baseline.txt` predates the rule. The PR that brings a
-model under the rule removes it from that list, and the check fails when a
-listed model already passes.
+The rules cover everything the container runs: the model's modules, upstream
+code in a subfolder, and a worker process. A `snapshot_download`,
+`hf_hub_download`, `from_pretrained` with a repository id, URL fetch, or `git`
+call belongs only in `prepare_weights.py` or a `build.run` `prepare_*.py`
+script. Every source is pinned by full commit, and `reactor.yaml`, the config,
+and the README name the same commits. Review holds each model to these rules,
+and the model's weights tests prove them (see
+[Verifying a change](#verifying-a-change)).
+
+A folder whose `load()` still downloads or runs `git` predates this rule. Do
+not copy that code into another model. A change to how such a folder gets its
+weights moves it onto the rule, in its own PR. That PR bumps `model.version`
+at least one minor version, because a deploy without `--weights` then fails.
 
 ## Typed contracts
 
@@ -287,3 +291,25 @@ reaches the model; a refused command raises `CommandError` with its code and
 sends nothing; `generate()` reads only its input; a fresh world carries its
 anchor once; a model error out of `generate()` reaches `process_output()` and
 does not count as a completed step.
+
+Tests also prove the [weights rules](#weights-and-startup), without the
+network:
+
+- `reactor.yaml` sets `runtime.weights_path` to `./weights` or to the pinned
+  `hf://` reference the README deploys, `build.runtime_env` sets
+  `HF_HUB_OFFLINE`, and `build.run` clones the commit the config names.
+- The model's path check passes on a folder that holds the files `load()`
+  resolves. For a prepared folder, that folder is the one `prepare_weights.py`
+  writes into `tmp_path` against a fake `huggingface_hub`, which also asserts
+  the pinned revisions.
+- With `huggingface_hub` blocked
+  (`monkeypatch.setitem(sys.modules, "huggingface_hub", None)`), a missing
+  checkpoint raises the error that names it and the command that supplies it,
+  and nothing is written to the weights folder.
+- A missing upstream checkout raises an error that asks for a rebuild, and
+  runs no `git`.
+
+Putting a download back into `load()` turns at least one of these tests red.
+They do not start the upstream loaders. Before the first deploy from a
+new weights layout, start the model once with `reactor run` from the weights
+folder, with the hub off. The PR says whether that run was done.

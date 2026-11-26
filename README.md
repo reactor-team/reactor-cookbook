@@ -46,7 +46,8 @@ Adding a complete application or demo? Put it directly under
 and robotics integrations under [`robotics/`](./robotics). Keep each project
 self-contained, give the folder a name describing what it does rather than the
 API it happens to call, and lead its README with the problem it solves.
-Model deployments follow the rules in [GUIDELINES.md](./GUIDELINES.md).
+Model deployments follow the rules in [GUIDELINES.md](./GUIDELINES.md); among
+them, a model reads its weights only from the weight set it is deployed with.
 
 ## License
 
