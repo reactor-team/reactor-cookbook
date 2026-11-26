@@ -52,7 +52,9 @@ reactor build
 reactor run --gpus device=0 --weights ./weights
 ```
 
-To deploy, run `reactor deploy production --weights ./weights`.
+To deploy, run `reactor deploy production --build-local --weights ./weights`.
+The image build applies a patch from this folder through a bind mount, which only
+a local build allows, so the deploy builds with the local Docker daemon.
 
 `--gpus device=3` selects host GPU 3 and presents it as device 0 inside the
 container. `reactor run` reuses the image from `reactor build` and builds it

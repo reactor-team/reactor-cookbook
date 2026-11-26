@@ -78,7 +78,7 @@ memory.
 
 The image holds DreamX-World at the immutable revision in `reactor.yaml`
 (`build.run`). Nothing downloads at startup. Build the weights folder once,
-on a machine with about 25 GB free:
+on a machine with about 35 GB free:
 
 ```sh
 pip install huggingface-hub pyyaml reactor-runtime

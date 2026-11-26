@@ -16,5 +16,5 @@ __pycache__/
 .dockerignore
 Dockerfile
 
-# Local runtime state belongs on runtime.weights_path, never in the image.
-Evoke/
+# prepare_weights.py builds this folder; the deploy uploads it as the weight set.
+weights/

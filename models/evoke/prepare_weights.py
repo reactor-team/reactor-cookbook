@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
 """Build the EVOKE weights folder from the pinned Hugging Face revisions.
 
-Run it once, on any machine with about 70 GB free, before ``reactor run`` or
+Run it once, on any machine with about 86 GB free, before ``reactor run`` or
 ``reactor deploy``::
 
     pip install huggingface-hub pyyaml

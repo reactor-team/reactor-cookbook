@@ -70,6 +70,7 @@ Build the Python 3.12 serving image, expose one GPU, and start Runtime:
 
 ```sh
 cd models/matrix-game-3-5
+pip install huggingface-hub pyyaml numpy
 python prepare_weights.py --output ./weights
 reactor build
 reactor run --gpus device=0 --weights ./weights
@@ -112,8 +113,11 @@ Build the weights folder once, on a machine with about 60 GB free:
 pip install huggingface-hub pyyaml numpy
 python prepare_weights.py --output ./weights
 reactor run --gpus device=0 --weights ./weights
-reactor deploy production --weights ./weights
+reactor deploy production --build-local --weights ./weights
 ```
+
+The image build applies a patch from this folder through a bind mount, which only
+a local build allows, so the deploy builds with the local Docker daemon.
 
 It downloads the pinned distilled checkpoint, the Wan2.2 TI2V 5B model and
 UMT5 tokenizer, and the Depth-Anything-3 model. A missing file stops startup
@@ -129,7 +133,7 @@ logic remain in Matrix. Startup verifies the checkout revision and the patch,
 and reports a clear mismatch for any other checkout. Interrupted Hugging Face
 downloads resume when you run `prepare_weights.py` again.
 
-Allow roughly 48 GB for the weights folder. Every model, tokenizer and
+Allow about 51 GB for the weights folder. Every model, tokenizer and
 checkpoint path is derived from that one root.
 
 The adapter provides a scene-neutral generic default prompt, so users can leave

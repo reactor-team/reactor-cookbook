@@ -40,7 +40,7 @@ weights folder. Nothing downloads at startup.
 - An NVIDIA Hopper or Blackwell GPU, NVIDIA driver, and NVIDIA Container
   Toolkit. The recipe uses FlashAttention 4 and declares one B200 for deployed
   instances; CPU inference is unsupported.
-- About 70 GB of disk for the weights folder.
+- About 86 GB of disk for the weights folder.
 - Access to the public GitHub and Hugging Face repositories at image build and
   when you build the weights folder.
 
@@ -68,7 +68,8 @@ weights once. `reactor run` reuses the image from `reactor build`, or builds it
 automatically, and reads the weights folder read-only. A missing file stops
 startup with the command above in the error. The model reports ready on
 `http://localhost:8080` after its weights have loaded. To deploy, run
-`reactor deploy production --weights ./weights`.
+`reactor deploy production --build-local --weights ./weights`. The image build applies a patch from this folder through a bind mount, which only
+a local build allows, so the deploy builds with the local Docker daemon.
 
 Rebuild after editing anything included in the model image:
 
