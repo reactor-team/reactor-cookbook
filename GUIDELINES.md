@@ -102,7 +102,8 @@ deployed with a weight set cannot write into it.
 
 - **Upstream source is in the image.** `build.run` (or the Dockerfile)
   fetches the upstream repository at its pinned commit, directly or through a
-  `prepare_*.py` script. `load()` never runs `git`.
+  `prepare_*.py` script. `load()` may read the checkout's revision, but runs
+  no `git` command that fetches.
 - **Checkpoints come from `get_weights_path()`.** The application passes the
   folder to the model half's `load()`, which resolves every checkpoint under
   it.
@@ -124,8 +125,9 @@ deployed with a weight set cannot write into it.
   converted file. Reactor fetches an `hf://` weight set without a token, so a
   gated repository is read by the script with the reader's Hugging Face
   token. The script pins every source by commit, writes the folder `load()`
-  reads, and is safe to run again. `runtime.weights_path: ./weights` makes `reactor run`
-  use the same folder.
+  reads, and is safe to run again. `runtime.weights_path: ./weights` makes
+  `reactor run` use the same folder, and `.dockerignore` lists `weights/` so
+  the folder stays out of the image.
 
   ```sh
   python prepare_weights.py --output ./weights
@@ -144,15 +146,21 @@ deployed with a weight set cannot write into it.
 
 The rules cover everything the container runs: the model's modules, upstream
 code in a subfolder, and a worker process. A `snapshot_download`,
-`hf_hub_download`, `from_pretrained` with a repository id, URL fetch, or `git`
-call belongs only in `prepare_weights.py` or a `build.run` `prepare_*.py`
-script. Every source is pinned by full commit, and `reactor.yaml`, the config,
-and the README name the same commits. Review holds each model to these rules,
+`hf_hub_download`, `from_pretrained` with a repository id, URL fetch, or
+`git clone`, `fetch` or `pull` belongs only in `prepare_weights.py` or a
+`build.run` step. Every source is pinned by full commit, and `reactor.yaml`,
+the config, and the README name the same commits. Review holds each model to these rules,
 and the model's weights tests prove them (see
 [Verifying a change](#verifying-a-change)).
 
-A folder whose `load()` still downloads or runs `git` predates this rule. Do
-not copy that code into another model. A change to how such a folder gets its
+`build.run` steps run before the model code is copied into the image. A step
+that reads a file from the model folder, such as a patch, bind-mounts it with
+`--mount=type=bind,source=.,target=/build`. The remote builder that
+`reactor deploy` uses by default refuses that flag, so the README deploys that
+model with `reactor deploy production --build-local --weights …`.
+
+A folder whose `load()` still downloads or clones its source predates this
+rule. Do not copy that code into another model. A change to how such a folder gets its
 weights moves it onto the rule, in its own PR. That PR bumps `model.version`
 at least one minor version, because a deploy without `--weights` then fails.
 

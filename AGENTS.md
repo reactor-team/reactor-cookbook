@@ -83,9 +83,9 @@ mounted read-only. GUIDELINES.md,
 [Weights and startup](./GUIDELINES.md#weights-and-startup), has the rules, and
 review enforces them. Writing or reviewing a model, check that:
 
-- Nothing the container runs downloads or runs `git`: not `load()`, not a
-  helper, not upstream code in a subfolder, and not a worker process. Downloads
-  live in `prepare_weights.py` and in `build.run` `prepare_*.py` scripts.
+- Nothing the container runs downloads or fetches with `git`: not `load()`,
+  not a helper, not upstream code in a subfolder, and not a worker process.
+  Downloads live in `prepare_weights.py` and in `build.run` steps.
 - `runtime.weights_path` is `./weights` or a pinned `hf://<org>/<repo>@<commit>`
   of a public, ungated repository, and the README shows prepare (where needed), `reactor run`, then
   `reactor deploy production --weights …` with the same value.
@@ -93,6 +93,10 @@ review enforces them. Writing or reviewing a model, check that:
   the README agree on each one.
 - `build.runtime_env` sets `HF_HUB_OFFLINE: "1"`, and caches go to `~/.cache`
   or `/tmp`, never under the weights folder.
+- `.dockerignore` lists `weights/`. The CLI copies the whole model folder into
+  the image, so an unlisted weights folder ends up in it.
+- A `build.run` step that bind-mounts the model folder only builds locally, so
+  the README deploys with `--build-local`.
 - The weights tests in GUIDELINES.md,
   [Verifying a change](./GUIDELINES.md#verifying-a-change), exist and pass.
 - The PR says whether the model was started once with `reactor run` from the
