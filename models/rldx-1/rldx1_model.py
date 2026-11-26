@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from rldx1_assets import check_weights, resolve_weights
 from rldx1_rtc import RTCTiming, resolve_rtc_timing
 
 VIEWS = ("left_view", "right_view", "wrist_view")
@@ -63,13 +64,12 @@ class RLDXModel:
         self._completed_predictions = 0
 
     def load(self, config: dict[str, Any], weights_root: Path) -> RLDXSetup:
+        weights = resolve_weights(config, weights_root)
+        check_weights(weights)
+
         from rldx.data.embodiment_tags import EmbodimentTag
         from rldx.policy.rldx_policy import RLDXPolicy, RLDXSimPolicyWrapper
 
-        checkpoint = Path(config.get("checkpoint_dir", ""))
-        model_path = str(
-            checkpoint if checkpoint.is_absolute() else weights_root / checkpoint
-        )
         embodiment = getattr(
             EmbodimentTag, config.get("embodiment_tag", "GENERAL_EMBODIMENT")
         )
@@ -77,7 +77,8 @@ class RLDXModel:
 
         policy = RLDXPolicy(
             embodiment_tag=embodiment,
-            model_path=model_path,
+            model_path=str(weights.checkpoint.path),
+            base_model_path=str(weights.base_model.path),
             device=device,
             strict=False,
             rtc_inference_mode=config.get("rtc_inference_mode"),
