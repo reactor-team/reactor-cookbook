@@ -99,33 +99,52 @@ step>, ...}`, keep publishing the tracks, receive the next chunk.
 - One NVIDIA GPU with at least 24 GB of memory for Edge (80 GB for Nano),
   Hopper or Blackwell class for the prebuilt attention kernels.
 - Docker with the NVIDIA container toolkit and the `reactor` CLI.
-- Network access to GitHub and Hugging Face on first load. The upstream
-  [`cosmos-framework`](https://github.com/NVIDIA/cosmos-framework) serving code
-  (OpenMDW-1.1) is cloned at the commit pinned in `cosmos3_policy_droid.yaml`,
-  and the checkpoint and the `Wan-AI/Wan2.2-TI2V-5B` video tokenizer it depends
-  on download beside it, all under `runtime.weights_path`
-  (`~/.cache/reactor_registry/cosmos3-policy-droid`) and reused after that.
-  No token is needed; the repositories are public. `COSMOS_FRAMEWORK_PATH`
-  points the model at an existing checkout instead.
+- About 12 GB of disk for the Edge weights folder (36 GB for Nano).
+
+The image build fetches the upstream
+[`cosmos-framework`](https://github.com/NVIDIA/cosmos-framework) serving code
+(OpenMDW-1.1) at commit `cf5d68c00d97ccd2480a2320ed652b92dec63102`, the one
+`cosmos3_policy_droid.yaml` pins. The model reads its weights from a folder
+that `prepare_weights.py` builds once, and downloads nothing when it starts.
 
 ## Run it
 
+Build the weights folder. It holds the checkpoint at the revision
+`cosmos3_policy_droid.yaml` pins
+([`nvidia/Cosmos3-Edge-Policy-DROID@a74e848`](https://huggingface.co/nvidia/Cosmos3-Edge-Policy-DROID/tree/a74e848cdfd222ec1ff80bd82d4b07eeb3c78d14),
+9.2 GB) and the video tokenizer it loads
+([`Wan-AI/Wan2.2-TI2V-5B@921dbaf`](https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B/tree/921dbaf3f1674a56f47e83fb80a34bac8a8f203e),
+`Wan2.2_VAE.pth`, 2.8 GB): 12.0 GB in all. Both repositories are public, so no
+token is needed:
+
 ```sh
 cd models/cosmos3-policy-droid
-reactor build
-reactor run --gpus device=0
+pip install huggingface-hub pyyaml
+python prepare_weights.py --output ./weights
 ```
 
-The first load clones the source, downloads the weights, and runs two warmup predictions so
-`torch.compile`'s first call (about 20 s) happens before the first session.
+Then build, run and deploy. `runtime.weights_path` points `reactor run` at the
+same folder, and the deploy uploads it, so a new instance downloads nothing:
+
+```sh
+reactor build
+reactor run --gpus device=0
+reactor deploy production --weights ./weights
+```
+
+Each load runs two warmup predictions so `torch.compile`'s first call (about
+20 s) happens before the first session.
 Drive it with `reactor-sdk`: publish the three tracks, then loop on
 `set_proprio_json` / `set_executed_step_json` and read `action_prediction`
 from `on_message`.
 
-To serve Nano, edit `cosmos3_policy_droid.yaml`:
+To serve Nano, edit `cosmos3_policy_droid.yaml`, then run `prepare_weights.py`
+again (35.7 GB with the tokenizer) and rebuild:
 
 ```yaml
-checkpoint: nvidia/Cosmos3-Nano-Policy-DROID
+checkpoint:
+  repo_id: nvidia/Cosmos3-Nano-Policy-DROID
+  revision: 5e9dd43c3c99d813c512960594bfd7b40678b180
 format_prompt_as_json: null
 guidance_interval: null
 ```
@@ -137,19 +156,21 @@ guidance_interval: null
 | `cosmos3_policy_droid.py` | The application half: tracks, the two gates, the `reset` command, the `action_prediction` message |
 | `cosmos3_policy_droid_model.py` | The model half: the policy service behind `load()` / `generate()` / `reset()`, `PolicyInput`, `PolicyResult` |
 | `cosmos3_policy_droid_types.py` | `PolicyMedia`, `PolicyState`, `ActionPrediction` |
-| `cosmos3_policy_droid_assets.py` | Config parsing, the pinned source checkout, and Hugging Face checkpoint routing |
-| `cosmos3_policy_droid.yaml` | The pinned source revision, which checkpoint to serve, and how to sample it |
+| `cosmos3_policy_droid_assets.py` | Config parsing, the source checkout check, and the weights folder check |
+| `cosmos3_policy_droid.yaml` | The pinned source revision, which checkpoint to serve at which revision, and how to sample it |
+| `prepare_weights.py` | Builds the weights folder from the pinned Hugging Face revisions |
 | `PORTING.md` | The decisions behind the two-halves shape |
-| `tests/` | The contract, every refusal, the gates, frame freshness, and the model half's bookkeeping, without a GPU |
+| `tests/` | The contract, every refusal, the gates, frame freshness, the model half's bookkeeping, and the weights folder, without a GPU |
 
 ## Notes
 
-- Upstream's content guardrail is switched off at load: its checkpoint is
-  approval-gated and its downloader shells out to a tool the image does not
-  carry. Moderation is the deployment's concern.
-- Upstream's own downloader shells out to a `uv` project; this model routes
-  every checkpoint lookup through `huggingface_hub` into the weights path
-  instead, so nothing but `git` and Python runs at load.
+- Upstream's content guardrail stays off: its models are separate,
+  approval-gated checkpoints that the weights folder does not hold, and
+  RoboLab serving never runs them. Moderation is the deployment's concern.
+- The model hands upstream the checkpoint folder and the tokenizer file by
+  path, and the image sets `HF_HUB_OFFLINE=1` and `UV_OFFLINE=1`, so a
+  Hugging Face lookup the model does not resolve fails at load instead of
+  downloading.
 - `COSMOS_TRAINING=0` in the image keeps the upstream framework's
   training-only imports off the serving path; `requirements.txt` was derived
   from the imports observed with it set.

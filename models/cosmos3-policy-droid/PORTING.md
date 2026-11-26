@@ -82,34 +82,55 @@ message. It differs in the title and the description, and in the `reset` and
    (`checkpoint_path`, `format_prompt_as_json`, `guidance_interval`). They
    are config keys read by the model half; the default is Edge.
 
-8. **Weights come from Hugging Face through `huggingface_hub`.** Upstream's
-   `checkpoint_db` downloads by shelling out to a separate `uv` project and
-   the `hf` CLI. `route_checkpoint_downloads` replaces both of its
-   resolvers with `snapshot_download` / `hf_hub_download` into the weights
-   directory the application resolves once with `get_weights_path()` and
-   hands to `load()`. The fleet model instead read a curator-staged
-   directory with Hugging Face offline; the cookbook has no curator.
+8. **Weights come from a prepared folder, by path.** `prepare_weights.py`
+   writes the checkpoint at its pinned revision and the Wan 2.2 video
+   tokenizer (`Wan-AI/Wan2.2-TI2V-5B@921dbaf`, `Wan2.2_VAE.pth`) into
+   `./weights`, and `load()` checks every file before importing upstream.
+   Upstream resolves a repository id or a registry path through its own
+   downloader (a `uv`-run `hf` CLI), so `load()` hands it paths instead:
+   - the policy checkpoint: `checkpoint_path` is the local folder, so
+     `_resolve_checkpoint_path` returns it as is;
+   - the VLM processor: the checkpoint bundles it, and upstream's
+     local-first rule reads it from that folder (`Cosmos3EdgeProcessor` for
+     Edge, `Qwen3VLProcessor` for Nano);
+   - the video tokenizer: both checkpoints name it by a registry path that
+     resolves to a download, so two experiment overrides set an empty
+     bucket and the absolute `vae_path` of the file in the weights folder;
+   - the Edge reasoner's vision tower: upstream reads the checkpoint's
+     `vision_encoder/` when the checkpoint is a local folder. The policy
+     path does not build it.
 
-9. **The guardrail wrapper passes its arguments through.** Upstream's
-   `_build_setup_args` gained a `parallelism_overrides` argument at the
-   pinned commit; the wrapper takes `*args, **kwargs` so the next upstream
-   signature change does not break it either.
+   The guardrail models stay off (decision 9). `HF_HUB_OFFLINE=1` and
+   `UV_OFFLINE=1` make any other lookup fail at load. The fleet model read
+   a curator-staged directory with Hugging Face offline; the cookbook
+   deploys the prepared folder as its weight set.
+
+9. **The guardrails stay off, and the wrapper passes its arguments
+   through.** The guardrail models are separate checkpoints, among them the
+   approval-gated `nvidia/Cosmos-Guardrail1`, that the weights folder does
+   not hold. Upstream's RoboLab setup turns them off at the pinned commit;
+   the wrapper pins `guardrails=False` so a later upstream revision cannot
+   build them at load. Upstream's `_build_setup_args` gained a
+   `parallelism_overrides` argument at the pinned commit; the wrapper takes
+   `*args, **kwargs` so the next upstream signature change does not break
+   it either.
 
 10. **Warmup is model code.** Two throwaway predictions at load pay
     `torch.compile`'s first call (about 20 s on a B200) before the first
     session, and the second confirms the compiled path (about 210 ms for
     Edge). `warmup: false` in the config skips it.
 
-11. **The upstream source is cloned, not vendored.** The fleet model checks a
-    pruned 232-file copy of `cosmos_framework` into its repository. Here,
-    as for the other cookbook models, `cosmos3_policy_droid.yaml` pins the
-    public repository and a full commit hash (`cf5d68c`, upstream's
-    2026-09-23 release), and the model half clones it blobless into the
-    weights root on first load, checks it out detached at that commit,
-    refuses a checkout at another revision or with local changes, and puts
-    it first on `sys.path` before importing. Nothing under the checkout is
-    edited; the two behaviours the port changes (guardrails, downloads) are
-    applied by wrapping at load. Bumping upstream is one hash in the config.
+11. **The upstream source is fetched by the image build, not vendored.** The
+    fleet model checks a pruned 232-file copy of `cosmos_framework` into its
+    repository. Here, as for the other cookbook models,
+    `cosmos3_policy_droid.yaml` pins the public repository and a full commit
+    hash (`cf5d68c`, upstream's 2026-09-23 release), and `build.run` fetches
+    that commit into `/opt/cosmos-framework`. The model half refuses a
+    missing checkout (rebuild the image) or one at another revision, and
+    puts it first on `sys.path` before importing. Nothing under the checkout
+    is edited; the guardrails are kept off by wrapping at load, and every
+    checkpoint is handed over by path (decision 8). Bumping upstream is the
+    hash in the config and in `build.run`.
 
 12. **`requirements.txt` is measured, not copied.** The full upstream
     package declares training and serving dependencies together. The pins
@@ -166,9 +187,11 @@ message. It differs in the title and the description, and in the `reset` and
   arrival and by capture time,
   the message and its `step`, the error branch, `reset` and the echo it
   clears, session end, the parsers including overflow and deep nesting, the
-  config, the pinned checkout against a local Git repository (clone at the
-  pin, drift and local edits refused), and the model half with the
-  framework stubbed.
+  config, the pinned checkout against a local Git repository (a missing
+  checkout asks for a rebuild, drift is refused), the model half with the
+  framework stubbed, and the weights folder (`tests/test_cosmos3_policy_droid_weights.py`:
+  the manifest, `prepare_weights.py` against a fake hub, and a missing file
+  with the hub blocked).
 - `python -m reactor_runtime.schema --path .` diffed against the fleet
   model's: title, description, and the `reset` and `executed_step_json`
   descriptions.
@@ -179,6 +202,8 @@ message. It differs in the title and the description, and in the `reset` and
   views are wired to the right inputs. Over the same client, both overflow
   payloads are refused with the session and the runtime still serving, and
   `reset` holds chunk 1 until the client echoes chunk 0.
-- The image built by `reactor build` cloned the source and served the Edge
-  checkpoint on one B200: load 6 s, warmup 20 s, 254 ms per chunk; a
-  `reactor-sdk` client saw both gates hold and a 277 ms round trip.
+- An image built by `reactor build` served the Edge checkpoint on one B200:
+  load 6 s, warmup 20 s, 254 ms per chunk; a `reactor-sdk` client saw both
+  gates hold and a 277 ms round trip. That run fetched the source and the
+  weights at load. The prepared weights folder and the source fetched at
+  build have not yet been started with `reactor run`.

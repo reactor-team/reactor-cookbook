@@ -14,6 +14,7 @@ between steps, so ``reset`` has nothing to forget.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -25,10 +26,10 @@ import numpy as np
 from cosmos3_policy_droid_assets import (
     PolicyConfig,
     activate_source,
-    ensure_source_checkout,
+    check_source,
+    check_weights,
     read_config,
     resolve_source_path,
-    route_checkpoint_downloads,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,8 +80,9 @@ class Cosmos3PolicyModel:
     """Hold the DROID policy and predict one action chunk per step.
 
     The weights and the sampler live in upstream's ``cosmos_framework`` policy
-    service, cloned at a pinned revision on first load. This class owns that
-    service, its load-time wrapping, and the shape check on every prediction.
+    service, from the checkout the image build made at a pinned revision. This
+    class owns that service, its load-time wrapping, and the shape check on
+    every prediction.
     """
 
     def __init__(self) -> None:
@@ -89,18 +91,21 @@ class Cosmos3PolicyModel:
         self.dof = 0
 
     def load(self, config_path: Path | None, weights_root: Path) -> None:
-        """Fetch the pinned source and checkpoint if absent and build the policy service once per process.
+        """Check the source and the weights folder, then build the policy service once per process.
 
         Args:
             config_path: Path to ``cosmos3_policy_droid.yaml`` from ``reactor.yaml``.
-            weights_root: Directory the source checkout, the checkpoint, and its
-                tokenizer live under.
+            weights_root: The weights folder ``prepare_weights.py`` builds, read-only.
+
+        Raises:
+            FileNotFoundError: The image has no source checkout, or the weights
+                folder lacks a file; the message names the fix.
         """
         config = read_config(config_path)
-        source_path = resolve_source_path(config.source, weights_root)
-        ensure_source_checkout(config.source, source_path)
+        source_path = resolve_source_path(config.source)
+        check_source(config.source, source_path)
+        checkpoint, vae = check_weights(config, weights_root)
         activate_source(source_path)
-        route_checkpoint_downloads(weights_root)
 
         import torch
 
@@ -110,8 +115,9 @@ class Cosmos3PolicyModel:
 
         _disable_guardrails(srv.RobolabPolicyService)
         args = srv.RobolabServerArgs(
-            checkpoint_path=config.checkpoint,
-            hf_revision=config.hf_revision,
+            # A local folder: upstream reads it in place instead of resolving a repository id.
+            checkpoint_path=str(checkpoint),
+            experiment_overrides=_vae_overrides(vae),
             format_prompt_as_json=config.format_prompt_as_json,
             guidance_interval=config.guidance_interval,
             guidance=config.guidance,
@@ -125,7 +131,7 @@ class Cosmos3PolicyModel:
         self.dof = int(self._service.cfg.action_dim)
         logger.info(
             "policy loaded: checkpoint=%s horizon=%d dof=%d in %.1fs",
-            config.checkpoint,
+            config.checkpoint.repo_id,
             self.horizon,
             self.dof,
             time.perf_counter() - t0,
@@ -174,7 +180,7 @@ class Cosmos3PolicyModel:
             "warmup: first=%.1fs steady=%.3fs (%s, %d steps, guidance %.1f)",
             t1 - t0,
             t2 - t1,
-            config.checkpoint,
+            config.checkpoint.repo_id,
             config.num_steps,
             config.guidance,
         )
@@ -185,13 +191,28 @@ class Cosmos3PolicyModel:
         return self._service
 
 
+def _vae_overrides(vae: Path) -> list[str]:
+    """Point the checkpoint's video tokenizer at the file in the weights folder.
+
+    Both checkpoints name the tokenizer by a registry path that upstream
+    resolves through a Hugging Face download; an empty bucket and an absolute
+    ``vae_path`` make it load the local file. The path is a JSON string so the
+    override parser reads it verbatim.
+    """
+    return [
+        'model.config.tokenizer.bucket_name=""',
+        f"model.config.tokenizer.vae_path={json.dumps(str(vae))}",
+    ]
+
+
 def _disable_guardrails(service_cls: type) -> None:
     """Force ``guardrails=False`` on the setup the service builds.
 
-    The upstream guardrail checkpoint is approval-gated on Hugging Face and
-    its downloader shells out to a tool the image does not carry. Content
-    moderation is the deployment's job, so the pass is switched off by
-    wrapping the setup builder. Idempotent.
+    The guardrail models are separate Hugging Face checkpoints, one of them
+    approval-gated, that the weights folder does not hold; building them would
+    download. RoboLab serving never runs them and content moderation is the
+    deployment's job, so the setup builder is wrapped to keep them off.
+    Idempotent.
     """
     original = service_cls._build_setup_args
     if getattr(original, "_guardrails_disabled", False):
