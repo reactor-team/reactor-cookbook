@@ -27,7 +27,7 @@ def test_manifest_uses_prepared_folder_offline() -> None:
     assert manifest["runtime"]["weights_path"] == "./weights"
     assert manifest["build"]["runtime_env"]["HF_HUB_OFFLINE"] == "1"
     run = " ".join(manifest["build"]["run"])
-    assert "robbyant/lingbot-world.git" in run and "stateful_rollout.patch" in run
+    assert "robbyant/lingbot-world.git" in run and "--mount" not in run
 
 
 def test_layout_follows_weights_root(tmp_path: Path) -> None:

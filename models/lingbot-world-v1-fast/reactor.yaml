@@ -44,8 +44,6 @@ build:
       https://github.com/robbyant/lingbot-world.git
       a43bec7f8091c83e9b30b16b912f6fc906236fa6
       && git -C /opt/lingbot-world checkout --detach FETCH_HEAD
-    # Reactor's run steps precede COPY; mount this folder read-only.
-    - --mount=type=bind,source=.,target=/build git -C /opt/lingbot-world apply /build/stateful_rollout.patch
   system_packages:
     - build-essential
     - git

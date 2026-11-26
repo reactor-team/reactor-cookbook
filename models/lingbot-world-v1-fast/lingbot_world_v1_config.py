@@ -151,7 +151,7 @@ def read_config(
 def check_runtime(config: LingBotConfig) -> None:
     """Point caches at the home folder, then check the source and weights.
 
-    This function never downloads. The image holds the patched source, and
+    This function never downloads. The image holds the pinned source, and
     ``prepare_weights.py`` builds the weights folder.
     """
     os.environ.update(_cache_environment())
@@ -161,7 +161,7 @@ def check_runtime(config: LingBotConfig) -> None:
 
 
 def check_source(config: LingBotConfig) -> None:
-    """Require the pinned source checkout with the stateful patch applied."""
+    """Require the pinned source checkout."""
     source_path = config.source_path
     if not (source_path / ".git").is_dir():
         raise FileNotFoundError(
@@ -171,14 +171,6 @@ def check_source(config: LingBotConfig) -> None:
     if actual != config.source_revision:
         raise RuntimeError(
             f"LingBot source revision is {actual}; expected {config.source_revision}"
-        )
-    patch = Path(__file__).with_name("stateful_rollout.patch")
-    reverse = _check_git(
-        ["-C", str(source_path), "apply", "--reverse", "--check", str(patch)]
-    )
-    if reverse.returncode != 0:
-        raise RuntimeError(
-            "LingBot source lacks the stateful rollout patch; rebuild the image with `reactor build`"
         )
 
 
@@ -197,7 +189,7 @@ def check_weights(config: LingBotConfig) -> None:
 def _validate_runtime_paths(config: LingBotConfig) -> None:
     """Fail startup with precise paths when source or assets are incomplete."""
     required = [
-        config.source_path / "wan" / "interactive_fast.py",
+        config.source_path / "wan" / "utils" / "cam_utils.py",
         config.checkpoint.path / "Wan2.1_VAE.pth",
         config.fast_checkpoint.path / "config.json",
     ]
@@ -293,18 +285,8 @@ def _run_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _check_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
-    """Run a non-mutating git check and return its status."""
-    return subprocess.run(
-        _git_command(arguments),
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-
 def _git_command(arguments: list[str]) -> list[str]:
-    """Allow Git to inspect the explicit checkout mounted by Runtime."""
+    """Allow Git to inspect the image's checkout, which another user can own."""
     try:
         checkout_index = arguments.index("-C") + 1
         checkout = Path(arguments[checkout_index]).resolve()

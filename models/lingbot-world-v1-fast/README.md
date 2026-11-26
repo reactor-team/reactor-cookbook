@@ -18,9 +18,10 @@ camera model as an interactive Reactor backend. A client can start from a
 built-in scene or uploaded image, change the prompt, apply six-axis camera
 motion, stream generated video, and record the session.
 
-The image build clones an exact tested LingBot-World revision and applies a
-stateful source extension that exposes its native chunk boundary. A separate
-step builds the weights folder. Nothing downloads at startup.
+The image build clones an exact tested LingBot-World revision.
+`lingbot_world_v1_rollout.py` drives its native causal loop one chunk at a time,
+on top of that source, without changing it. A separate step builds the weights
+folder. Nothing downloads at startup.
 
 ## Prerequisites
 
@@ -52,9 +53,7 @@ reactor build
 reactor run --gpus device=0 --weights ./weights
 ```
 
-To deploy, run `reactor deploy production --build-local --weights ./weights`.
-The image build applies a patch from this folder through a bind mount, which only
-a local build allows, so the deploy builds with the local Docker daemon.
+To deploy, run `reactor deploy production --weights ./weights`.
 
 `--gpus device=3` selects host GPU 3 and presents it as device 0 inside the
 container. `reactor run` reuses the image from `reactor build` and builds it
