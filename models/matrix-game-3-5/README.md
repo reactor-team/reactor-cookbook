@@ -103,7 +103,6 @@ for that video track.
 Nothing downloads at startup. The image build does the source:
 
 - clone the pinned Matrix-Game-3.5 source revision to `/opt/Matrix-Game-3.5`;
-- apply the included resumable-rollout patch;
 - install a Python 3.10 worker environment with the CUDA 12.8 PyTorch wheels
   and upstream dependencies.
 
@@ -113,24 +112,24 @@ Build the weights folder once, on a machine with about 60 GB free:
 pip install huggingface-hub pyyaml numpy
 python prepare_weights.py --output ./weights
 reactor run --gpus device=0 --weights ./weights
-reactor deploy production --build-local --weights ./weights
+reactor deploy production --weights ./weights
 ```
-
-The image build applies a patch from this folder through a bind mount, which only
-a local build allows, so the deploy builds with the local Docker daemon.
 
 It downloads the pinned distilled checkpoint, the Wan2.2 TI2V 5B model and
 UMT5 tokenizer, and the Depth-Anything-3 model. A missing file stops startup
 with this command in the error.
 
-The patch adds the resumable chunk boundary used by the worker. Each chunk is
+`upstream_patched/` holds the two Matrix modules that this model changes,
+`causal_inference.py` and `causal_rollout.py`, each copied from the pinned
+revision with the change applied. The worker imports them in place of the
+clone's. The change adds the resumable chunk boundary used by the worker. Each chunk is
 decoded by continuing one causal VAE decode of the whole rollout, so streamed
 frames match the official single decode of the finished video. Every session
 also restores the global random state the official runner has after building
 the model; Depth-Anything-3 registration draws from it. The upstream
 model forward pass, scheduler, cache policy, memory queries, and registration
-logic remain in Matrix. Startup verifies the checkout revision and the patch,
-and reports a clear mismatch for any other checkout. Interrupted Hugging Face
+logic remain in Matrix. Startup verifies the checkout revision, and that each
+copied module names it, and reports a clear mismatch for any other checkout. Interrupted Hugging Face
 downloads resume when you run `prepare_weights.py` again.
 
 Allow about 51 GB for the weights folder. Every model, tokenizer and

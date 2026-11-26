@@ -57,5 +57,14 @@ build:
       https://github.com/Riemann-Dynamics/Matrix-Game-3.5.git
       fa6d2b628ac9b0f1657dc24689536d74bfeb51da
       && git -C /opt/Matrix-Game-3.5 checkout --detach FETCH_HEAD
-    # Reactor's run steps precede COPY; mount this folder read-only.
-    - --mount=type=bind,source=.,target=/build UV_CACHE_DIR=/tmp/matrix-uv UV_PYTHON_INSTALL_DIR=/opt/matrix-python bash /build/prepare_worker.sh && rm -rf /tmp/matrix-uv
+    # The worker runs Matrix-Game-3.5 in its own Python 3.10 environment:
+    # torch 2.10.0 on CUDA 12.8, then the upstream requirements.
+    - >-
+      export UV_CACHE_DIR=/tmp/matrix-uv UV_PYTHON_INSTALL_DIR=/opt/matrix-python
+      && uv venv --python 3.10 /opt/Matrix-Game-3.5/.venv
+      && uv pip install --python /opt/Matrix-Game-3.5/.venv/bin/python
+      torch==2.10.0 torchvision==0.25.0
+      --index-url https://download.pytorch.org/whl/cu128
+      && uv pip install --python /opt/Matrix-Game-3.5/.venv/bin/python
+      --requirement /opt/Matrix-Game-3.5/requirements.txt ftfy==6.3.1
+      && rm -rf /tmp/matrix-uv

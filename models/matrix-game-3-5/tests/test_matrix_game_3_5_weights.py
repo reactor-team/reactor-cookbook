@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,7 +28,8 @@ def test_manifest_uses_prepared_folder_offline() -> None:
     assert manifest["runtime"]["weights_path"] == "./weights"
     assert manifest["build"]["runtime_env"]["HF_HUB_OFFLINE"] == "1"
     run = " ".join(manifest["build"]["run"])
-    assert "Matrix-Game-3.5.git" in run and "prepare_worker.sh" in run
+    assert "Matrix-Game-3.5.git" in run and "/opt/Matrix-Game-3.5/.venv" in run
+    assert not any(step.lstrip().startswith("--") for step in manifest["build"]["run"])
 
 
 def test_layout_follows_weights_root(tmp_path: Path) -> None:
@@ -86,3 +88,34 @@ def test_prepare_builds_the_folder_that_the_check_accepts(
     config_module.check_weights(_config(out))
     assert len(calls) == 3
     assert all(len(c[1]) == 40 for c in calls)
+
+
+def test_patched_copies_come_from_the_pinned_revision(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    copies = sorted(config_module.PATCHED_UPSTREAM.rglob("*.py"))
+    assert copies
+    for copy in copies:
+        assert f" at {config.source_revision}," in copy.read_text().splitlines()[0]
+
+
+def test_worker_imports_the_patched_copy_under_its_upstream_name(tmp_path: Path) -> None:
+    source = tmp_path / "source" / "pkg"
+    source.mkdir(parents=True)
+    (source / "__init__.py").write_text("from . import mod\n")
+    (source / "mod.py").write_text("VALUE = 'upstream'\n")
+    patched = tmp_path / "patched" / "pkg"
+    patched.mkdir(parents=True)
+    (patched / "mod.py").write_text("from . import helper\nVALUE = 'patched'\n")
+    (source / "helper.py").write_text("")
+    code = f"""
+import sys
+from pathlib import Path
+sys.path.insert(0, {str(MODEL_DIR)!r})
+import worker
+worker._PATCHED_UPSTREAM = Path({str(tmp_path / "patched")!r})
+sys.path.insert(0, {str(tmp_path / "source")!r})
+worker._load_patched_upstream()
+import pkg
+assert pkg.mod.VALUE == "patched", pkg.mod.VALUE
+"""
+    subprocess.run([sys.executable, "-c", code], check=True)

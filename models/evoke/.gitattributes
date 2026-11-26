@@ -1,2 +1,0 @@
-# Unified-diff context markers are significant, including markers for blank lines.
-stateful_rollout.patch -whitespace

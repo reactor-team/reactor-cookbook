@@ -13,6 +13,7 @@ import yaml
 
 WORKER_PYTHON = Path(".reactor-venv/bin/python")
 PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
+PATCHED_UPSTREAM = Path(__file__).with_name("upstream_patched")
 CACHE_ROOT = Path("~/.cache/evoke")
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 
@@ -141,7 +142,7 @@ def check_runtime(config: EvokeConfig) -> None:
 
 
 def check_source(config: EvokeConfig) -> None:
-    """Require the pinned source checkout with the stateful patch applied."""
+    """Require the pinned source checkout, and patched copies taken from that revision."""
     source_path = config.source_path
     if not (source_path / ".git").exists():
         raise FileNotFoundError(
@@ -152,14 +153,12 @@ def check_source(config: EvokeConfig) -> None:
         raise RuntimeError(
             f"EVOKE source revision is {actual}; expected {config.source_revision}"
         )
-    patch = Path(__file__).with_name("stateful_rollout.patch")
-    reverse = _check_git(
-        ["-C", str(source_path), "apply", "--reverse", "--check", str(patch)]
-    )
-    if reverse.returncode != 0:
-        raise RuntimeError(
-            "EVOKE source lacks the stateful rollout patch; rebuild the image with `reactor build`"
-        )
+    for copy in sorted(PATCHED_UPSTREAM.rglob("*.py")):
+        if f" at {config.source_revision}," not in copy.read_text().splitlines()[0]:
+            raise RuntimeError(
+                f"{copy} was not copied from EVOKE revision {config.source_revision}; "
+                "copy it again from that revision and reapply the change"
+            )
 
 
 def check_weights(config: EvokeConfig) -> None:
@@ -253,15 +252,6 @@ def _run_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     except subprocess.CalledProcessError as error:
         detail = error.stderr.strip() or error.stdout.strip() or "Git command failed"
         raise RuntimeError(f"Unable to check the EVOKE source: {detail}") from error
-
-
-def _check_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            _git_command(arguments), check=False, capture_output=True, text=True
-        )
-    except FileNotFoundError as error:
-        raise RuntimeError("Git is required to check the EVOKE source") from error
 
 
 def _git_command(arguments: list[str]) -> list[str]:

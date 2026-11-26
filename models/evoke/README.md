@@ -28,10 +28,11 @@ world from an image, reference video, or text prompt, apply six-axis camera
 motion, stream generated video, and record the session.
 
 The adapter and upstream implementation remain separate. This directory owns
-the Reactor integration and a narrow patch that exposes EVOKE's native chunk
-boundary. The image build clones the exact tested upstream revision, applies
-that patch, and creates the Python 3.10 worker. A separate step builds the
-weights folder. Nothing downloads at startup.
+the Reactor integration and, in `upstream_patched/`, the two upstream modules
+it changes to expose EVOKE's native chunk boundary. The image build clones the
+exact tested upstream revision and creates the Python 3.10 worker, which
+imports those two modules from this folder in place of the clone's. A separate
+step builds the weights folder. Nothing downloads at startup.
 
 ## Prerequisites
 
@@ -68,8 +69,7 @@ weights once. `reactor run` reuses the image from `reactor build`, or builds it
 automatically, and reads the weights folder read-only. A missing file stops
 startup with the command above in the error. The model reports ready on
 `http://localhost:8080` after its weights have loaded. To deploy, run
-`reactor deploy production --build-local --weights ./weights`. The image build applies a patch from this folder through a bind mount, which only
-a local build allows, so the deploy builds with the local Docker daemon.
+`reactor deploy production --weights ./weights`.
 
 Rebuild after editing anything included in the model image:
 
@@ -96,8 +96,8 @@ is space constrained.
 
 ## Runtime boundary
 
-The original `EvokePipeline` call remains alive between requests. A narrow
-patch supplies each native chunk boundary with the next prompt and camera poses
+The original `EvokePipeline` call remains alive between requests. The patched
+copy of `pipeline_evoke.py` supplies each native chunk boundary with the next prompt and camera poses
 and publishes the decoded chunk while preserving the released inference state:
 
 - rolling latent history with `history_sizes: [16, 2, 1]`;
@@ -184,8 +184,9 @@ or select new conditioning to start another rollout with the loaded checkpoints.
 ## Public source and model assets
 
 `evoke.yaml` pins the source and both Hugging Face snapshots by full immutable
-revision. `build.run` clones the source to `/opt/Evoke` and `prepare_worker.sh`
-applies `stateful_rollout.patch`. Startup verifies the revision and the patch.
+revision. `build.run` clones the source to `/opt/Evoke` and builds the worker
+environment. Startup verifies the revision, and that each file in
+`upstream_patched/` names it as the revision the file was copied from.
 `prepare_weights.py` downloads:
 
 - `AlayaLab/Evoke/evoke-base`;

@@ -13,6 +13,7 @@ import numpy as np
 import yaml
 
 PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
+PATCHED_UPSTREAM = Path(__file__).with_name("upstream_patched")
 WORKER_PYTHON = Path(".venv/bin/python")
 INFERENCE_CONFIG = Path("configs/infer_distilled.yaml")
 CHECKPOINT_PATH = Path("checkpoints/Matrix-Game-3.5-Distilled/first-person.safetensors")
@@ -149,7 +150,7 @@ def check_runtime(config: MatrixConfig) -> tuple[np.ndarray, np.ndarray]:
 
 
 def check_source(config: MatrixConfig) -> None:
-    """Require the pinned source checkout with the stateful patch applied."""
+    """Require the pinned source checkout, and patched copies taken from that revision."""
     source_path = config.source_path
     if not (source_path / ".git").exists():
         raise FileNotFoundError(
@@ -160,14 +161,12 @@ def check_source(config: MatrixConfig) -> None:
         raise RuntimeError(
             f"Matrix source revision is {actual}; expected {config.source_revision}"
         )
-    patch = Path(__file__).with_name("stateful_rollout.patch")
-    reverse = _check_git(
-        ["-C", str(source_path), "apply", "--reverse", "--check", str(patch)]
-    )
-    if reverse.returncode != 0:
-        raise RuntimeError(
-            "Matrix source lacks the stateful rollout patch; rebuild the image with `reactor build`"
-        )
+    for copy in sorted(PATCHED_UPSTREAM.rglob("*.py")):
+        if f" at {config.source_revision}," not in copy.read_text().splitlines()[0]:
+            raise RuntimeError(
+                f"{copy} was not copied from Matrix revision {config.source_revision}; "
+                "copy it again from that revision and reapply the change"
+            )
 
 
 def check_weights(config: MatrixConfig) -> None:
@@ -243,21 +242,8 @@ def _run_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
         raise RuntimeError(f"Unable to check the Matrix source: {detail}") from error
 
 
-def _check_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
-    """Run a non-mutating Git check without raising for an unsuccessful check."""
-    try:
-        return subprocess.run(
-            _git_command(arguments),
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError as error:
-        raise RuntimeError("Git is required to check the Matrix source") from error
-
-
 def _git_command(arguments: list[str]) -> list[str]:
-    """Trust only the configured checkout when a bind mount changes its owner."""
+    """Trust the image's checkout, which another user can own."""
     if len(arguments) >= 2 and arguments[0] == "-C":
         return ["git", "-c", f"safe.directory={arguments[1]}", *arguments]
     return ["git", *arguments]
