@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: echo-wm-flash
-  version: v0.2.1
+  version: v0.3.0
   description: |
     Explore an autoregressive audiovisual world from an image, a prompt, and
     Echo-WM's native pure-camera controls.
@@ -25,8 +25,8 @@ runtime:
   # larger than the default 64 MiB.
   webrtc:
     max_message_size: 256Mi
-  # Source, checkpoints, downloads, uploads, and compiled kernels stay here.
-  weights_path: ~/.cache/reactor_registry/echo-wm-flash
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 4
@@ -55,8 +55,16 @@ build:
     - libsndfile1
   runtime_env:
     PYTORCH_ALLOC_CONF: expandable_segments:True
-  # CuTe declares protobuf<7, while Reactor Runtime requires protobuf>=7.35.1.
-  # Both execute with 7.35.1, so restore Runtime's supported wire dependency.
+    HF_HUB_OFFLINE: "1"
   run:
+    # Pin the upstream source that echo_wm.yaml's source.path names.
+    - >-
+      git init /opt/JoyAI-Echo
+      && git -C /opt/JoyAI-Echo fetch --depth 1
+      https://github.com/jd-opensource/JoyAI-Echo.git
+      c7963031c4425a154a791a46606d3247b2201c2b
+      && git -C /opt/JoyAI-Echo checkout --detach FETCH_HEAD
     - pip install --no-cache-dir "flash-attn-4==4.0.0b26"
+    # CuTe declares protobuf<7, while Reactor Runtime requires protobuf>=7.35.1.
+    # Both execute with 7.35.1, so restore Runtime's supported wire dependency.
     - pip install --no-cache-dir --no-deps "protobuf==7.35.1"

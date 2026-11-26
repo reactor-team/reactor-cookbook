@@ -54,22 +54,31 @@ selected image and prompt; the anchor travels only until that world is confirmed
 
 This directory is a Reactor workspace. Its `reactor.yaml` manifest defines the
 Python 3.12 serving image, Reactor Runtime 3.11.3, CUDA and system dependencies,
-the model entry point, GPU resource, recording tracks, and persistent weights
-directory. See the [Reactor CLI installation
+the pinned upstream source, the model entry point, GPU resource, recording
+tracks, and weights folder. See the [Reactor CLI installation
 guide](https://docs.reactor.inc/deploy/platform/installation) and [build
 configuration guide](https://docs.reactor.inc/deploy/platform/build) for host
 setup and supported manifest fields.
 
-The default configuration targets Linux and one NVIDIA B200. Install the
-NVIDIA Container Toolkit, accept the public Gemma 3 license on Hugging Face,
-and expose a read token before the first asset download:
+The default configuration targets Linux and one NVIDIA B200 with the NVIDIA
+Container Toolkit. Gemma 3 is gated: accept its terms on the
+[model card](https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized)
+with your Hugging Face account. Then build the weights folder once, with a
+token that can read it. It downloads about 72 GB at the pinned revisions:
 
 ```sh
 cd models/echo-wm
-export HF_TOKEN=hf_your_read_token
+pip install huggingface-hub pyyaml
+HF_TOKEN=<your token> python prepare_weights.py --output ./weights
+```
 
+Then build, run, and deploy. `runtime.weights_path` points `reactor run` at the
+same folder, and the deploy uploads it, so a new instance downloads nothing:
+
+```sh
 reactor build
-reactor run --gpus device=0 -e HF_TOKEN
+reactor run --gpus device=0
+reactor deploy production --weights ./weights
 ```
 
 `--gpus device=3` selects host GPU 3 and presents it as device 0 in the serving
@@ -77,11 +86,14 @@ container. `reactor run` serves on `http://localhost:8080` by default. Choose a
 different port when needed:
 
 ```sh
-reactor build && reactor run --gpus device=0 --port 18091 -e HF_TOKEN
+reactor build && reactor run --gpus device=0 --port 18091
 ```
 
-Model startup finishes after the source and model assets are prepared, one
-warmup chunk completes, and the attention backend passes its numerical check.
+Nothing downloads at runtime (`HF_HUB_OFFLINE=1`). A missing checkpoint stops
+`load()` with an error that names the file and the command that builds the
+folder. Model startup finishes after the source revision and weights are
+checked, one warmup chunk completes, and the attention backend passes its
+numerical check.
 Use the selected port to inspect readiness and the generated model contract:
 
 ```sh
@@ -105,25 +117,31 @@ Open [http://localhost:3000](http://localhost:3000), connect, then choose a
 built-in scene or upload an image. See the [demo guide](./demo/README.md) for
 alternate ports, keyboard controls, and hosted connection settings.
 
-The manifest stores persistent model data under
-`~/.cache/reactor_registry/echo-wm-flash`. Change `runtime.weights_path` to use
-another high-capacity host volume; the source, checkpoints, Hugging Face cache,
-uploaded images, and compiled kernel cache are all resolved beneath that mount.
+The weights folder is read-only at runtime. Uploaded images and the compiled
+kernel caches go to `~/.cache/echo-wm` (`assets.runtime_dir` in
+`echo_wm.yaml`). To keep the weights on another high-capacity volume, pass that
+folder to `prepare_weights.py --output` and to `reactor run --weights` and
+`reactor deploy production --weights`.
 
 ## Public source and model assets
 
-Startup prepares missing assets automatically and validates every pinned
-revision:
+Every source is pinned by full commit in `echo_wm.yaml`, and the image build
+and `prepare_weights.py` fetch those commits:
 
-- [JoyAI-Echo](https://github.com/jd-opensource/JoyAI-Echo) supplies the
-  original Echo-WM model, camera conditioning, KV-cache, and codec code.
-- [Echo-Team/Echo-WM](https://huggingface.co/Echo-Team/Echo-WM) supplies the
-  four-step distilled checkpoint.
+- [JoyAI-Echo](https://github.com/jd-opensource/JoyAI-Echo) at
+  `c7963031c4425a154a791a46606d3247b2201c2b` supplies the original Echo-WM
+  model, camera conditioning, KV-cache, and codec code. The image build clones
+  it into `/opt/JoyAI-Echo`, and startup checks its revision.
+- [Echo-Team/Echo-WM](https://huggingface.co/Echo-Team/Echo-WM) at
+  `5f18c27bcc6e9395c120c055c92e294674e7ea91` supplies the four-step distilled
+  checkpoint, `echo-wm/echo-wm-flash.safetensors` in the weights folder
+  (48 GB). The folder skips the repository's base checkpoint.
 - [Gemma 3 12B QAT](https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized)
-  supplies the gated text encoder.
+  at `68f7ee4fbd59087436ada77ed2d62f373fdd4482` supplies the gated text
+  encoder, tokenizer, and processor, `gemma-3-12b-it-qat-q4_0-unquantized/` in
+  the weights folder (24 GB).
 
-`source.revision`, checkpoint revisions, and local paths are declared in
-`echo_wm.yaml`. Existing valid files are reused on later starts.
+`prepare_weights.py` is safe to run again; it downloads only the missing files.
 
 ## Interaction contract
 

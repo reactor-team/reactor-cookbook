@@ -1,20 +1,24 @@
 source:
-  path: source/JoyAI-Echo
+  # The image holds this checkout at the pinned revision (see build.run in
+  # reactor.yaml).
+  path: /opt/JoyAI-Echo
   url: https://github.com/jd-opensource/JoyAI-Echo.git
   revision: c7963031c4425a154a791a46606d3247b2201c2b
 
+# Checkpoint paths are relative to the weights folder that prepare_weights.py
+# builds.
 assets:
-  cache_dir: cache/huggingface
   checkpoint:
-    path: weights/echo-wm/echo-wm-flash.safetensors
+    path: echo-wm/echo-wm-flash.safetensors
     repo_id: Echo-Team/Echo-WM
     revision: 5f18c27bcc6e9395c120c055c92e294674e7ea91
     filename: echo-wm-flash.safetensors
   gemma:
-    path: weights/gemma-3-12b-it-qat-q4_0-unquantized
+    path: gemma-3-12b-it-qat-q4_0-unquantized
     repo_id: google/gemma-3-12b-it-qat-q4_0-unquantized
     revision: 68f7ee4fbd59087436ada77ed2d62f373fdd4482
-  runtime_dir: runtime
+  # Writable folder for uploads and compiled-kernel caches.
+  runtime_dir: ~/.cache/echo-wm
 
 inference:
   width: 1280

@@ -11,12 +11,13 @@ from the environment described in [`.env.example`](./.env.example).
 
 ## Run it
 
-Start the model from the example root:
+Build the weights folder as the [model guide](../README.md#run-with-the-reactor-cli)
+shows, then start the model from the example root:
 
 ```sh
 cd models/echo-wm
 reactor build
-reactor run --gpus device=0 -e HF_TOKEN
+reactor run --gpus device=0
 ```
 
 Then start the app:
