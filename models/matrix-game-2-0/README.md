@@ -13,8 +13,8 @@ model as an interactive Reactor backend. Use this recipe when a client needs to
 start from a public demo or uploaded image, apply native keyboard and
 mouse-camera controls, stream autoregressive video, and record the session.
 
-The adapter loads an exact tested source revision and checkpoint from Reactor's
-mounted weights cache and calls the upstream autoregressive components
+The adapter reads an exact tested source revision from the image and the
+checkpoint from the prepared weights folder. It calls the upstream autoregressive components
 directly. The `build:` block in `reactor.yaml` controls the model image.
 
 ## Prerequisites
@@ -23,12 +23,12 @@ directly. The `build:` block in `reactor.yaml` controls the model image.
   Docker.
 - An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
   intentionally unsupported. The published resource request targets one B200.
-- About 12 GB in Reactor's weights cache, plus approximately 30 GB of Docker
+- About 12 GB for the weights folder, plus approximately 30 GB of Docker
   image and build working space.
 
 When the system disk is small, place Reactor's weights cache and the container
 engine's image storage on a high-capacity volume. `runtime.weights_path`
-controls the host directory mounted for source and checkpoints.
+controls the host directory mounted for the checkpoints.
 
 ## Run
 
@@ -39,10 +39,13 @@ See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
 
-Check the host, build the image, and expose one free GPU to the container:
+Build the weights folder once, then build the image and expose one free GPU to
+the container:
 
 ```sh
 cd models/matrix-game-2-0
+pip install huggingface-hub pyyaml pillow reactor-runtime
+python prepare_weights.py --output ./weights
 reactor doctor
 reactor build
 reactor run --gpus device=0 --port 8080
@@ -52,10 +55,18 @@ The configured image contains Reactor Runtime 3.10.0, Python 3.12, CUDA 12.8,
 the model dependencies, and the required system packages. `reactor run` reuses
 the local image, building it automatically when its tag is absent.
 
-On first load the adapter sparsely clones the pinned `Matrix-Game-2` source and
-downloads the universal distilled checkpoint, Wan 2.1 VAE, image encoder, and
-tokenizer files from the pinned Hugging Face snapshot. Interrupted downloads
-resume from the mounted cache, and later runs reuse the same assets.
+`reactor run` mounts `./weights` (`runtime.weights_path`). The build clones the
+pinned `Matrix-Game-2` source into the image. `prepare_weights.py` downloads the
+universal distilled checkpoint, Wan 2.1 VAE, image encoder, and tokenizer files
+from the pinned Hugging Face snapshot. It skips the repository's other
+checkpoints. To deploy, push the same folder as the weight set:
+
+```sh
+reactor deploy production --weights ./weights
+```
+
+Nothing downloads at runtime (`HF_HUB_OFFLINE=1`). A missing file stops `load()`
+with an error that names `prepare_weights.py`.
 
 Check readiness and inspect the generated command schema with:
 

@@ -22,14 +22,16 @@ The default configuration enables guided Real-Time Chunking (RTC):
 The released RoboCasa checkpoint supports guided RTC. The `trained` RTC mode
 requires a checkpoint trained with RTC.
 
-## Deploy from a new laptop
+## Build, run, and deploy
 
 You need [Git](https://git-scm.com/downloads), a running Docker engine (for
-example, [Docker Desktop](https://docs.docker.com/desktop/)), and a Reactor
-account with deployment capacity in your selected region. The GPU runs on
-Reactor; your laptop does not need a local NVIDIA GPU.
+example, [Docker Desktop](https://docs.docker.com/desktop/)), Python 3 for the
+weights script, about 14 GB of free disk for the weights folder, and a Reactor
+account with deployment capacity in your selected region. Running the model
+locally also needs an NVIDIA Blackwell GPU such as a B200, because the image
+compiles FlashAttention for that architecture only; deploying does not.
 
-The source is Apache-2.0. The checkpoint uses the separate
+The source is Apache-2.0. The checkpoint and its base model use the separate
 [RLWRLD Model License](https://huggingface.co/RLWRLD/RLDX-1-FT-ROBOCASA/blob/main/LICENSE.md),
 which includes use restrictions. Review that license before downloading or
 deploying the weights.
@@ -58,31 +60,43 @@ reactor auth login
 
 Complete the browser sign-in with the account that will own this deployment.
 
-### 3. Pull the public model image
+### 3. Build the weights folder
 
-Start Docker, then download the image:
+`prepare_weights.py` downloads two public Hugging Face repositories at the
+commits that `config.yml` pins, into `./weights`, about 13.8 GB:
 
-```bash
-docker pull reactortechnologies/rldx-1:1.0.1
-```
+- `RLDX-1-FT-ROBOCASA/`: the finetuned policy,
+  [`RLWRLD/RLDX-1-FT-ROBOCASA`](https://huggingface.co/RLWRLD/RLDX-1-FT-ROBOCASA)
+  at `740c41d70731027221815388f8b97a4a6a85553b`.
+- `RLDX-1-VLM/`: the config, tokenizer and processor files of the base model
+  that the policy names,
+  [`RLWRLD/RLDX-1-VLM`](https://huggingface.co/RLWRLD/RLDX-1-VLM) at
+  `2c0960dfa27647c7f211ead942bec947ab10940a`. The policy checkpoint carries the
+  whole backbone, so the base weights are not downloaded.
 
-Use **`1.0.1`** for both pulling and publishing.
-
-### 4. Open the model workspace
+Run it once; `HF_TOKEN` is optional, because both repositories are public. A
+second run downloads only the missing files.
 
 ```bash
 cd models/rldx-1
+pip install huggingface-hub==0.36.2 pyyaml
+python prepare_weights.py --output ./weights
 ```
 
-The checked-in `reactor.yaml` points directly to the checkpoint:
+### 4. Build and run
 
-```yaml
-runtime:
-  weights_path: "hf://RLWRLD/RLDX-1-FT-ROBOCASA"
+```bash
+reactor build
+reactor run --gpus device=0
 ```
 
-The CLI records a pinned Hugging Face reference, and Reactor fetches the
-checkpoint when starting the model.
+`reactor build` builds the image from the `Dockerfile`, with the vendored
+`rldx/` source in it. `reactor run` mounts `./weights`
+(`runtime.weights_path`) into the container. Nothing downloads at runtime
+(`HF_HUB_OFFLINE=1`): a missing file stops `load()` with an error that names
+`prepare_weights.py`.
+
+### 5. Deploy
 
 The example `reactor.yaml` requests one instance in `us-west` by default:
 
@@ -94,28 +108,18 @@ deployment:
 ```
 
 Using the manifest as-is requires capacity in `us-west`. To deploy in another
-region, change the `region` value above to one with available deployment capacity
-before running `reactor model deploy`.
-
-### 5. Publish, deploy, and check status
-
-Run these as separate commands from `models/rldx-1`:
+region, change the `region` value above to one with available deployment
+capacity. Then push the same folder as the deployment's weight set:
 
 ```bash
-reactor model publish --source reactortechnologies/rldx-1:1.0.1
-reactor model deploy
-reactor model status
+reactor deploy production --weights ./weights
 ```
 
-`publish --source` pushes the downloaded image into your account without
-rebuilding it and associates the Hugging Face weights with the release.
-`deploy` activates that release and applies the instance plan. Model name and
-release version come from `reactor.yaml`; the Docker image tag is the source
-image version, not the account's release version.
-
-Wait for the deployment to be ready before starting the client. Initial startup
-includes fetching the checkpoint. Keep the account-qualified model name printed
-by the CLI, such as `your-account/rldx-1`, for the client command below.
+Reactor makes the weight set available on the GPU node before the container
+starts, so a new instance does not download the checkpoint. Wait for the
+deployment to be ready before starting the client. Keep the account-qualified
+model name printed by the CLI, such as `your-account/rldx-1`, for the client
+command below.
 
 ## Run the test client
 
@@ -151,7 +155,7 @@ python main.py --model <account-slug>/rldx-1 --duration 60
 ```
 
 Replace `<account-slug>` with the account slug printed by Reactor when the
-model is published, and use an API key from the same Reactor account. CLI
+model is deployed, and use an API key from the same Reactor account. CLI
 sign-in does not set `REACTOR_API_KEY` for the Python client. In a new terminal,
 return to `models/rldx-1/client` and run `source .venv/bin/activate` again before
 using `python main.py`.
@@ -169,5 +173,5 @@ for metric meanings and `--stats-interval`.
 
 The `rldx/` directory is the inference subset of
 [`RLWRLD/RLDX-1`](https://github.com/RLWRLD/RLDX-1) at commit
-`ecbfaf80cd031dcc892186ed30465de3591047e6`. Reactor-specific RTC changes are
-documented in `rldx/PROVENANCE.md`.
+`ecbfaf80cd031dcc892186ed30465de3591047e6`. Reactor-specific RTC and
+weight-loading changes are documented in `rldx/PROVENANCE.md`.

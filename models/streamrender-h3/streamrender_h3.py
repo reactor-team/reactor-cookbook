@@ -21,6 +21,7 @@ from reactor_runtime import (
 )
 from reactor_runtime.distributed import DistributedRunner
 
+from streamrender_h3_assets import check_weights
 from streamrender_h3_images import decode_reference
 from streamrender_h3_model import (
     StreamRenderInput,
@@ -47,6 +48,7 @@ class StreamRenderH3(ReactorApp):
                 "STREAMRENDER_ASSETS", str(get_weights_path() / "assets.json")
             )
         )
+        check_weights(assets_path)
         self._engine = DistributedRunner(
             StreamRenderModel,
             world_size=world_size,

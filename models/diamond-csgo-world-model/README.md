@@ -24,14 +24,25 @@ selection travels with a world ID and is acknowledged after its initial frame.
 
 - An NVIDIA GPU with the NVIDIA Container Toolkit for real-time local play, or
   a CPU for functional but slow inference.
-- About 1.4 GB of free cache space for the pinned checkpoint and spawn bundle.
+- About 3 GB of free space for the pinned weight set. The model reads the
+  1.5 GB `csgo/` folder; the other folders hold DIAMOND's Atari checkpoints.
 
 The [`build` block](https://docs.reactor.inc/deploy/platform/build) in
 `reactor.yaml` pins DIAMOND source revision
 `851cefb497733d27f1b85c804104638765860fca`, installs it outside the adapter, and
-sets `DIAMOND_PATH` inside the image. On the first run, the adapter downloads the
-pinned checkpoint, configuration, and official spawn data into Reactor's
-mounted weights cache; later containers reuse those files.
+sets `DIAMOND_PATH` inside the image. The checkpoint, configuration and official
+spawn data come from the pinned Hugging Face weight set
+`hf://eloialonso/diamond@5d4abca9af6ab1b3ab1c6fc228cacb7281130f7f`
+(`runtime.weights_path`). `reactor run` downloads it on the host and mounts it.
+To deploy, select the same weight set; Reactor makes it available on the GPU
+node before the container starts:
+
+```sh
+reactor deploy production --weights hf://eloialonso/diamond@5d4abca9af6ab1b3ab1c6fc228cacb7281130f7f
+```
+
+Nothing downloads at runtime (`HF_HUB_OFFLINE=1`). A missing file stops `load()`
+with an error that names the `--weights` value.
 
 ## Run
 

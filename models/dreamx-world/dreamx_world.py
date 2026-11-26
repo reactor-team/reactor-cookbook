@@ -5,7 +5,7 @@ from __future__ import annotations
 import secrets
 from pathlib import Path
 
-from dreamx_assets import prepare_runtime_assets, read_config
+from dreamx_assets import check_runtime_assets, read_config
 from dreamx_camera import (
     FRAMES_PER_CHUNK,
     CameraPath,
@@ -71,13 +71,13 @@ class DreamXWorld(ReactorApp):
         self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
-        """Prepare pinned public assets and load DreamX-World once on the GPU.
+        """Check the source and weights, then load DreamX-World once on the GPU.
 
         Args:
             config_path: Path to ``dreamx_world.yaml`` from ``reactor.yaml``.
         """
         config = read_config(config_path)
-        scene_prompts = prepare_runtime_assets(config)
+        scene_prompts = check_runtime_assets(config)
         self._config = config
         self._scene_prompts = scene_prompts
         self._camera = DreamXCameraController(config.motion_speed)

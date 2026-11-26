@@ -7,7 +7,6 @@ import importlib
 import io
 import subprocess
 import sys
-import tempfile
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,7 +32,6 @@ CameraControl = camera_module.CameraControl
 NativeCameraPlanner = camera_module.NativeCameraPlanner
 HYWorld15Output = types_module.HYWorld15Output
 HYWorld15State = types_module.HYWorld15State
-assemble_base_model = assets_module.assemble_base_model
 
 
 class _Backend:
@@ -133,37 +131,6 @@ def test_native_camera_keeps_anchor_and_dual_action_alignment() -> None:
         CameraControl(forward=0.001, strafe=0.0, pitch=0.01, yaw=0.0)
     )
     np.testing.assert_array_equal(deadzone.actions, [0, 0, 0, 0])
-
-
-def test_model_layout_links_remain_valid_after_weights_root_moves() -> None:
-    """Keep assembled encoder paths portable across container bind mounts."""
-    with tempfile.TemporaryDirectory() as directory:
-        weights = Path(directory) / "weights"
-        base_model = weights / "models/base"
-        qwen = weights / "models/qwen"
-        byt5 = weights / "models/byt5"
-        glyph = weights / "models/glyph"
-        vision = weights / "models/vision"
-        for path in (qwen, byt5, glyph, vision):
-            path.mkdir(parents=True)
-        config = SimpleNamespace(
-            base_model=SimpleNamespace(path=base_model),
-            qwen=SimpleNamespace(path=qwen),
-            byt5=SimpleNamespace(path=byt5),
-            glyph=SimpleNamespace(path=glyph),
-            flux_vision=SimpleNamespace(path=vision),
-        )
-
-        assemble_base_model(config)
-
-        destinations = (
-            base_model / "text_encoder/llm",
-            base_model / "text_encoder/byt5-small",
-            base_model / "text_encoder/Glyph-SDXL-v2",
-            base_model / "vision_encoder/siglip",
-        )
-        assert all(path.is_symlink() for path in destinations)
-        assert all(not Path(path.readlink()).is_absolute() for path in destinations)
 
 
 def test_image_selection_queues_and_generates_first_chunk(

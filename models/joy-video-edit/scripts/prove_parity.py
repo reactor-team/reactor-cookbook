@@ -196,9 +196,10 @@ def run_side(args) -> None:
         with open(os.path.join(HERE, "joy_video_edit.yaml")) as f:
             cfg = yaml.safe_load(f)
         cfg["checkpoints"]["joyai"]["dit"] = args.dit
-        cfg.update({"checkpoint_dir": os.path.abspath(args.weights),
-                    "height": args.height, "width": args.width,
+        cfg.update({"height": args.height, "width": args.width,
                     "warmup_height": args.height, "warmup_width": args.width})
+        # load() reads the checkpoints from the runtime's weights path.
+        os.environ["REACTOR_WEIGHTS_PATH"] = os.path.abspath(args.weights)
         # dit.py reads the FP8 switches at import time. The model half's load() force-sets them from config
         # before its own xvideo import; the VAE control below imports xvideo first, so set the same
         # values here (load() then sets them again, unchanged, and refuses FP8 if the kernel is absent).

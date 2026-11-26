@@ -311,3 +311,88 @@ open_oasis_model.OpenOasisModel()
         cwd=MODEL_DIR,
         check=True,
     )
+
+
+def _config():
+    from open_oasis_assets import read_config
+
+    return read_config(MODEL_DIR / "open_oasis.yaml")
+
+
+def test_manifest_uses_the_prepared_folder_and_clones_the_pinned_source() -> None:
+    import yaml
+
+    config = _config()
+    manifest = yaml.safe_load((MODEL_DIR / "reactor.yaml").read_text())
+    assert manifest["runtime"]["weights_path"] == "./weights"
+    assert manifest["build"]["runtime_env"]["HF_HUB_OFFLINE"] == "1"
+    clone = " ".join(manifest["build"]["run"])
+    assert config.source_revision in clone and config.source_path in clone
+
+
+def test_prepare_downloads_only_the_checkpoints_that_load_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import types
+
+    import prepare_weights
+    from open_oasis_assets import resolve_checkpoints
+
+    calls: list[dict] = []
+
+    def hf_hub_download(**kwargs):
+        calls.append(kwargs)
+        target = Path(kwargs["local_dir"]) / kwargs["filename"]
+        target.write_bytes(b"x")
+        return str(target)
+
+    module = types.ModuleType("huggingface_hub")
+    module.hf_hub_download = hf_hub_download
+    monkeypatch.setitem(sys.modules, "huggingface_hub", module)
+    prepare_weights.main(["--output", str(tmp_path)])
+
+    config = _config()
+    assert [call["filename"] for call in calls] == [
+        config.model_filename,
+        config.vae_filename,
+    ]
+    assert {call["repo_id"] for call in calls} == {config.checkpoint_repo_id}
+    assert {call["revision"] for call in calls} == {config.checkpoint_revision}
+    resolve_checkpoints(config, tmp_path)
+
+
+def test_checkpoints_resolve_in_the_weight_set(tmp_path: Path) -> None:
+    from open_oasis_assets import resolve_checkpoints
+
+    config = _config()
+    for name in (config.model_filename, config.vae_filename):
+        (tmp_path / name).write_bytes(b"x")
+    assert resolve_checkpoints(config, tmp_path) == (
+        tmp_path / "oasis500m.safetensors",
+        tmp_path / "vit-l-20.safetensors",
+    )
+
+
+def test_missing_checkpoint_names_the_fix_and_downloads_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from open_oasis_assets import resolve_checkpoints
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+    config = _config()
+    (tmp_path / config.model_filename).write_bytes(b"x")
+    with pytest.raises(FileNotFoundError, match="vit-l-20.safetensors") as raised:
+        resolve_checkpoints(config, tmp_path)
+    assert "python prepare_weights.py --output ./weights" in str(raised.value)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [config.model_filename]
+
+
+def test_missing_source_asks_for_a_rebuild(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from open_oasis_assets import check_source
+
+    config = replace(_config(), source_path=str(tmp_path / "absent"))
+    with pytest.raises(FileNotFoundError, match="reactor build"):
+        check_source(config)
+    assert not (tmp_path / "absent").exists()

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from evoke_camera import CameraMotionPlanner, CameraPath, MotionConfig, load_camera_path
-from evoke_config import EvokeConfig, prepare_runtime, read_config
+from evoke_config import EvokeConfig, check_runtime, read_config
 from evoke_images import (
     upload_suffix,
     validate_uploaded_image,
@@ -71,9 +71,9 @@ class Evoke(ReactorApp):
         self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
-        """Prepare public assets and load EVOKE weights once in its Python 3.10 worker."""
+        """Check the source and weights, then load EVOKE once in its Python 3.10 worker."""
         config = read_config(config_path, get_weights_path())
-        prepare_runtime(config)
+        check_runtime(config)
         self._config = config
         self._stability_prompt = config.stability_prompt
         self._seed = config.seed

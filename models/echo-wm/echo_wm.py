@@ -10,9 +10,9 @@ from echo_wm_assets import (
     EchoWMConfig,
     ExampleScene,
     activate_source,
+    check_assets,
     configure_cache_environment,
     load_examples,
-    prepare_assets,
     read_config,
 )
 from echo_wm_camera import CameraPath, EchoCameraPlanner, MotionConfig, load_camera_path
@@ -73,14 +73,14 @@ class EchoWM(ReactorApp):
         self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
-        """Prepare public assets and load Echo-WM weights once at startup.
+        """Check the image's source and the weights folder, then load Echo-WM once.
 
         Args:
             config_path: Path to ``echo_wm.yaml`` from ``reactor.yaml``.
         """
         config = read_config(config_path, get_weights_path())
+        check_assets(config)
         configure_cache_environment(config)
-        prepare_assets(config)
         activate_source(config)
         self._config = config
         self._examples = load_examples(config)

@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: evoke-post-distillation
-  version: v0.2.1
+  version: v0.3.0
   description: |
     Explore an autoregressive world through text, media, and six-axis camera motion.
   resources:
@@ -20,8 +20,8 @@ model:
 runtime:
   import: evoke:Evoke
   config: evoke.yaml
-  # Source, the Python 3.10 worker, model snapshots, and compiler caches stay here.
-  weights_path: ~/.cache/reactor_registry/evoke
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 6
@@ -45,3 +45,35 @@ build:
     - libxcb1
     - libxdmcp6
     - libxext6
+    - ca-certificates
+  runtime_env:
+    HF_HUB_OFFLINE: "1"
+  run:
+    - pip install --no-cache-dir uv==0.11.19
+    - >-
+      git init /opt/Evoke
+      && git -C /opt/Evoke fetch --depth 1
+      https://github.com/AlayaLab/Evoke.git
+      74d268516d95c8fceadd2378f91a73f9f187042b
+      && git -C /opt/Evoke checkout --detach FETCH_HEAD
+    # The worker runs EVOKE in its own Python 3.10 environment: torch 2.9.1 on
+    # CUDA 12.8, then EVOKE's stack. diffusers 0.39 is the first stable release
+    # with EVOKE's inference API, OpenCV 4.11 supports NumPy 1.26, and
+    # flash-attn-4 is the varlen attention backend that JIT-compiles per GPU.
+    - >-
+      export UV_CACHE_DIR=/tmp/evoke-uv UV_PYTHON_INSTALL_DIR=/opt/evoke-python
+      && uv venv --python 3.10 /opt/Evoke/.reactor-venv
+      && uv pip install --python /opt/Evoke/.reactor-venv/bin/python
+      torch==2.9.1 torchvision==0.24.1
+      --index-url https://download.pytorch.org/whl/cu128
+      --extra-index-url https://pypi.org/simple
+      && uv pip install --python /opt/Evoke/.reactor-venv/bin/python
+      diffusers==0.39.0 transformers==5.3.0 accelerate==1.12.0 peft==0.19.1
+      safetensors==0.8.0 huggingface-hub==1.15.0 numpy==1.26.4 einops==0.8.1
+      omegaconf==2.3.0 opencv-python-headless==4.11.0.86 pillow==12.1.1
+      imageio==2.37.2 imageio-ffmpeg==0.6.0 video-reader-rs==0.4.1 ftfy==6.3.1
+      flash-attn-4==4.0.0b26 regex==2026.1.15 sentencepiece==0.2.1
+      packaging==25.0 pyyaml==6.0.3 scipy==1.15.3 pandas==2.3.3 tqdm==4.67.1
+      requests==2.32.5 evo==1.36.5 addict==2.4.0 ninja==1.13.0 psutil==7.0.0
+      'setuptools>=77' 'wheel>=0.45'
+      && rm -rf /tmp/evoke-uv

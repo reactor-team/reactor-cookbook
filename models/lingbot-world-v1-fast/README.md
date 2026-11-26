@@ -18,9 +18,10 @@ camera model as an interactive Reactor backend. A client can start from a
 built-in scene or uploaded image, change the prompt, apply six-axis camera
 motion, stream generated video, and record the session.
 
-The adapter loads an exact tested LingBot-World revision from the persistent
-weights cache and applies a stateful source extension that exposes its native
-chunk boundary.
+The image build clones an exact tested LingBot-World revision.
+`lingbot_world_v1_rollout.py` drives its native causal loop one chunk at a time,
+on top of that source, without changing it. A separate step builds the weights
+folder. Nothing downloads at startup.
 
 ## Prerequisites
 
@@ -29,9 +30,8 @@ chunk boundary.
 - An NVIDIA GPU, NVIDIA driver, and NVIDIA Container Toolkit. CPU inference is
   unsupported. The recipe requests one B200; a tested 13-chunk rollout used
   about 48 GB of VRAM, so a GPU with at least 64 GB is recommended.
-- About 90 GB on persistent storage for the Fast checkpoint, VAE, UMT5 assets,
-  source checkout, plus space for the model image and
-  build cache.
+- About 90 GB of disk for the weights folder (Fast checkpoint, VAE and UMT5
+  assets), plus space for the model image and build cache.
 
 ## Run
 
@@ -47,9 +47,13 @@ container:
 ```sh
 cd models/lingbot-world-v1-fast
 reactor validate
+pip install huggingface-hub pyyaml reactor-runtime
+python prepare_weights.py --output ./weights
 reactor build
-reactor run --gpus device=0
+reactor run --gpus device=0 --weights ./weights
 ```
+
+To deploy, run `reactor deploy production --weights ./weights`.
 
 `--gpus device=3` selects host GPU 3 and presents it as device 0 inside the
 container. `reactor run` reuses the image from `reactor build` and builds it
@@ -57,15 +61,10 @@ automatically when the local tag is missing. Rebuild after changing adapter
 code, dependencies, or the manifest.
 
 The serving image installs the model dependencies and FlashAttention 2.
-First startup clones the pinned public source and downloads the selected model
-assets. Later starts reuse them from the CLI-mounted weights cache. Public
-downloads require no token, but a Hugging Face token can be forwarded without
-putting its value on the command line when needed:
-
-```sh
-export HF_TOKEN=hf_your_read_token
-reactor run --gpus device=0 -e HF_TOKEN
-```
+The image build clones the pinned public source. `prepare_weights.py`
+downloads the selected model assets once. Public downloads require no token. A
+missing weight file stops startup with the `prepare_weights.py` command in the
+error.
 
 The default endpoint is `http://localhost:8080`. Pass `--port` to use another
 port:
@@ -191,10 +190,10 @@ Message delivery remains outside the synchronous inference loop.
 
 ## Public source and model assets
 
-`lingbot_world_v1.yaml` pins the source and both Hugging Face snapshots. First
-load downloads the base VAE, UMT5 encoder and tokenizer, and Fast model shards.
-Downloads resume after interruption, and marker files record the immutable
-revisions.
+`lingbot_world_v1.yaml` pins the source and both Hugging Face snapshots.
+`prepare_weights.py` downloads the base VAE, UMT5 encoder and tokenizer, and
+Fast model shards into `checkpoints/lingbot-world-base-cam/`. Downloads resume
+after interruption.
 
 Runtime and the model use one Python 3.12 dependency environment with NumPy 2.
 Each persistent Runner worker owns one copy of the model weights. The source
@@ -202,22 +201,11 @@ extension
 delegates each chunk to the upstream scheduler, four denoising timesteps,
 self-KV eviction, camera Plücker embedding, and VAE decoder.
 
-The CLI bind-mounts `runtime.weights_path` at the same absolute path inside the
-container and exports it as `REACTOR_WEIGHTS_PATH`. The checked-in default is
-`~/.cache/reactor_registry/lingbot-world-v1-fast`. To keep that stable CLI path
-while placing its contents on a larger volume, create a symlink before the
-first launch:
-
-```sh
-export LINGBOT_ROOT=/path/to/large-volume/lingbot-world-v1
-mkdir -p "$LINGBOT_ROOT/weights" "$HOME/.cache/reactor_registry"
-ln -s "$LINGBOT_ROOT/weights" \
-  "$HOME/.cache/reactor_registry/lingbot-world-v1-fast"
-```
-
-The container engine stores image layers and build cache separately from model
-weights. Configure that storage on a large volume before `reactor build` when
-the system disk has limited space.
+The weights folder is read-only at run time. Rollout scratch files and caches
+go to `~/.cache/lingbot-world-v1` inside the container. The container engine
+stores image layers and build cache separately from model weights. Configure
+that storage on a large volume before `reactor build` when the system disk has
+limited space.
 
 ## Recording
 

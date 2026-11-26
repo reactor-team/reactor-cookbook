@@ -6,7 +6,6 @@ torchaudio==2.10.0
 diffusers==0.35.0
 transformers[accelerate,tiktoken]==4.56.0
 huggingface-hub==0.34.0
-modelscope
 peft==0.17.0
 qwen-vl-utils==0.0.8
 safetensors>=0.4.5

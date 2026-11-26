@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: streamrender-h3
-  version: v0.2.2
+  version: v0.3.0
   description: Render recorded semantic videos with an aligned reference and prompt using StreamRender-H3.
   resources:
     gpu:
@@ -17,7 +17,8 @@ model:
 
 runtime:
   import: streamrender_h3:StreamRenderH3
-  weights_path: ~/.cache/reactor_registry/streamrender-h3
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
 
 build:
   runtime_version: "3.8.1"
@@ -29,6 +30,7 @@ build:
     - git clone --branch sol-engine https://github.com/NVlabs/Sana.git /opt/streamrender-sana && git -C /opt/streamrender-sana fetch origin 9f0af774e7be7a82cb429de7428e678e8157c750 && git -C /opt/streamrender-sana checkout --detach FETCH_HEAD
     - pip install -r /opt/streamrender-sana/models/streamrender_h3/requirements.txt
   runtime_env:
+    HF_HUB_OFFLINE: "1"
     STREAMRENDER_SOURCE: /opt/streamrender-sana
     STREAMRENDER_GPUS: "4"
     TOKENIZERS_PARALLELISM: "false"

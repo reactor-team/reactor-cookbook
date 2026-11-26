@@ -10,10 +10,9 @@ from typing import Any, cast
 import numpy as np
 from alayaworld_assets import (
     AlayaWorldConfig,
+    check_runtime_assets,
     load_scene_metadata,
-    prepare_runtime_assets,
     scene_prompt_path,
-    validate_runtime_paths,
 )
 from alayaworld_utils import (
     camera_frames,
@@ -90,17 +89,18 @@ class AlayaWorldModel:
 
     def load(self, config: AlayaWorldConfig) -> None:
         """Load the public engine from resolved configuration and warm its kernels."""
-        prepare_runtime_assets(config)
-        validate_runtime_paths(config)
+        check_runtime_assets(config)
         modules = load_upstream_modules(config.source_path)
         torch = modules["torch"]
 
         upstream_config = modules["load_config"](str(config.upstream_config))
-        upstream_config.paths.model = str(config.model.path)
+        upstream_config.paths.model = str(config.checkpoint_path)
         upstream_config.paths.gemma = str(config.gemma.path)
-        upstream_config.paths.da3_repo = str(config.da3_source_path)
-        upstream_config.paths.da3_model = config.da3_model.repo_id
-        upstream_config.paths.da3_cache = str(config.da3_cache)
+        upstream_config.paths.da3_repo = str(config.da3_source.path)
+        # A local folder makes DA3 load its checkpoint without a hub cache, so
+        # no cache directory is set and nothing is written into the weights.
+        upstream_config.paths.da3_model = str(config.da3_model.path)
+        upstream_config.paths.da3_cache = None
         upstream_config.paths.taehv = (
             str(config.taehv_path) if config.taehv_path else ""
         )

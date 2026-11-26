@@ -12,6 +12,7 @@ from diamond_assets import (
     load_adapter_dependencies,
     load_upstream_modules,
     read_config,
+    resolve_snapshot,
     resolve_upstream_eval,
     select_device,
     to_video_frame,
@@ -109,7 +110,6 @@ class DiamondModel:
         config = read_config(config_path)
         dependencies = load_adapter_dependencies()
         torch = dependencies["torch"]
-        snapshot_download = dependencies["snapshot_download"]
         compose = dependencies["compose"]
         initialize_config_dir = dependencies["initialize_config_dir"]
         instantiate = dependencies["instantiate"]
@@ -130,14 +130,7 @@ class DiamondModel:
                 overrides=[f"world_model_env={config.profile}"],
             )
 
-        snapshot = Path(
-            snapshot_download(
-                repo_id=config.repo_id,
-                revision=config.revision,
-                allow_patterns="csgo/*",
-                cache_dir=weights_root / "diamond-csgo-world-model" / "huggingface",
-            )
-        )
+        snapshot = resolve_snapshot(config, weights_root)
         cfg.agent = omega_conf.load(snapshot / "csgo/config/agent/csgo.yaml")
         cfg.env = omega_conf.load(snapshot / "csgo/config/env/csgo.yaml")
 

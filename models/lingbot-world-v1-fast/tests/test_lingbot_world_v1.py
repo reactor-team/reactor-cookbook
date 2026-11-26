@@ -525,7 +525,7 @@ def test_app_starts_one_runner_with_plain_load_settings(
             calls.append("started")
 
     monkeypatch.setattr(lingbot_world_v1, "DistributedRunner", FakeRunner)
-    monkeypatch.setattr(lingbot_world_v1, "prepare_runtime", lambda config: None)
+    monkeypatch.setattr(lingbot_world_v1, "check_runtime", lambda config: None)
     config_path = Path(__file__).parents[1] / "lingbot_world_v1.yaml"
     config = replace(lingbot_world_v1.read_config(config_path), world_size=world_size)
     monkeypatch.setattr(lingbot_world_v1, "read_config", lambda path: config)

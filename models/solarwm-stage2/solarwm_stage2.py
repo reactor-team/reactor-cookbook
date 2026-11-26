@@ -26,7 +26,7 @@ from solarwm_stage2_camera import (
     MotionConfig,
     load_camera_path,
 )
-from solarwm_stage2_config import SolarWMConfig, prepare_runtime, read_config
+from solarwm_stage2_config import SolarWMConfig, check_runtime, read_config
 from solarwm_stage2_images import normalize_output_frames, prepare_uploaded_image
 from solarwm_stage2_model import (
     SolarWMAnchor,
@@ -60,10 +60,10 @@ class SolarWM(ReactorApp):
         self._camera_path: CameraPath | None = None
 
     def load(self, config_path: Path | None) -> None:
-        """Prepare pinned upstream assets and load SolarWM once."""
+        """Check the pinned source and the weights folder, then load SolarWM once."""
         config = read_config(config_path, get_weights_path())
         self._config = config
-        prepare_runtime(config)
+        check_runtime(config)
         self._engine = SolarWMModel()
         self._engine.load(config)
 

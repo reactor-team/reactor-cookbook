@@ -21,13 +21,12 @@ KEYBOARD_KEYS = ["w", "a", "s", "d"]
 class MatrixGame2Config:
     """Hold validated source, checkpoint, and rollout settings."""
 
-    checkout_path: Path
     source_path: Path
     source_url: str
     source_revision: str
     model_repo_id: str
     model_revision: str
-    model_cache: Path
+    weights_root: Path
     checkpoint_file: str
     seed: int
     max_latent_frames: int

@@ -2,7 +2,7 @@ source:
   path: /opt/zing-world-model
   revision: 8dd446798f2dec160351c17484c53e8deaaf7ef4
 assets:
-  repo_id: seedleap/Zing-0.5
+  repo_id: seedleap/zing-0.5
   revision: b7a6f480d5f36ec6a1e82a489cde8d8305a28438
   path: .
 inference:

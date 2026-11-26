@@ -1,7 +1,7 @@
 $schema: reactor/v2
 model:
   name: open-oasis
-  version: v0.1.2
+  version: v0.2.0
   description: Stream an autoregressive Minecraft world from image or video context using Open-Oasis's native keyboard, mouse-button, and camera actions.
   resources:
     gpu: {type: NVIDIA_B200, count: 1}
@@ -10,7 +10,8 @@ model:
 runtime:
   import: open_oasis:OpenOasis
   config: open_oasis.yaml
-  weights_path: ~/.cache/reactor_registry/open-oasis
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 4
@@ -26,6 +27,9 @@ build:
     - https://download.pytorch.org/whl/cu128
     - https://pypi.org/simple
   system_packages: [ffmpeg, git]
+  runtime_env:
+    # The checkpoints come from the weights folder; nothing downloads at runtime.
+    HF_HUB_OFFLINE: "1"
   run:
     - >-
       git init /opt/open-oasis

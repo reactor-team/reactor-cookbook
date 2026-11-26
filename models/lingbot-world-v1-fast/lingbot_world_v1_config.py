@@ -1,15 +1,10 @@
-"""Prepare pinned public LingBot-World v1 source and model assets."""
+"""Read the LingBot-World v1 config and check its source and weights."""
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
-import sys
-import tempfile
-from collections.abc import Mapping, Sequence
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -20,18 +15,23 @@ from reactor_runtime.log import get_logger
 
 logger = get_logger(__name__)
 
-SOURCE_ENV = "LINGBOT_WORLD_V1_PATH"
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
+CACHE_ROOT = Path("~/.cache/lingbot-world-v1")
 CHECKPOINT_PATH = Path("checkpoints/lingbot-world-base-cam")
 FAST_SUBDIR = Path("lingbot_world_fast")
-SNAPSHOT_MARKER = ".reactor-snapshot.json"
 
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
-_BASE_PATTERNS = (
+BASE_PATTERNS = (
     "Wan2.1_VAE.pth",
     "models_t5_umt5-xxl-enc-bf16.pth",
     "google/umt5-xxl/*",
 )
-_BASE_REQUIRED_FILES = (
+FAST_REQUIRED_FILES = (
+    "config.json",
+    "diffusion_pytorch_model.safetensors.index.json",
+    *(f"model-{index:05d}-of-00016.safetensors" for index in range(1, 17)),
+)
+BASE_REQUIRED_FILES = (
     "Wan2.1_VAE.pth",
     "models_t5_umt5-xxl-enc-bf16.pth",
     "google/umt5-xxl/spiece.model",
@@ -79,8 +79,14 @@ class LingBotConfig:
     runtime_root: Path
 
 
-def read_config(config_path: Path | None) -> LingBotConfig:
-    """Read and validate the LingBot adapter YAML."""
+def read_config(
+    config_path: Path | None, weights_root: Path | None = None
+) -> LingBotConfig:
+    """Read and validate the LingBot adapter YAML.
+
+    ``weights_root`` is the folder that ``prepare_weights.py`` builds. It
+    defaults to Runtime's weights path.
+    """
     if config_path is None:
         raise ValueError("LingBot-World v1 requires runtime.config in reactor.yaml")
     document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -94,9 +100,10 @@ def read_config(config_path: Path | None) -> LingBotConfig:
         raise ValueError("inference.world_size must be 1, 2, or 4")
     stream = _mapping(document.get("stream"), "stream")
     motion = _mapping(document.get("motion"), "motion")
+    root = (weights_root or get_weights_path()).resolve()
     source_path = _source_path(source.get("path"))
     checkpoint = _asset(
-        source_path / CHECKPOINT_PATH,
+        root / CHECKPOINT_PATH,
         assets.get("base"),
         "assets.base",
     )
@@ -121,7 +128,7 @@ def read_config(config_path: Path | None) -> LingBotConfig:
     rotation = float(motion.get("rotation_degrees_per_latent", 8.0))
     if translation <= 0 or rotation <= 0:
         raise ValueError("motion rates must be positive")
-    runtime_root = source_path.parent / ".reactor-lingbot-world-v1"
+    runtime_root = CACHE_ROOT.expanduser()
     return LingBotConfig(
         world_size=world_size,
         source_path=source_path,
@@ -141,149 +148,48 @@ def read_config(config_path: Path | None) -> LingBotConfig:
     )
 
 
-def prepare_runtime(config: LingBotConfig) -> None:
-    """Prepare the pinned source, Fast checkpoints, and worker cache paths."""
-    ensure_source_checkout(config)
-    os.environ.update(_download_environment(config.source_path.parent / ".cache"))
-    ensure_model_assets(config)
+def check_runtime(config: LingBotConfig) -> None:
+    """Point caches at the home folder, then check the source and weights.
+
+    This function never downloads. The image holds the pinned source, and
+    ``prepare_weights.py`` builds the weights folder.
+    """
+    os.environ.update(_cache_environment())
+    check_source(config)
+    check_weights(config)
     _validate_runtime_paths(config)
 
 
-def ensure_source_checkout(config: LingBotConfig) -> None:
-    """Clone the pinned source and apply the resumable Fast rollout extension."""
+def check_source(config: LingBotConfig) -> None:
+    """Require the pinned source checkout."""
     source_path = config.source_path
-    if not source_path.exists():
-        source_path.parent.mkdir(parents=True, exist_ok=True)
-        logger.info(
-            "downloading LingBot-World source",
-            url=config.source_url,
-            revision=config.source_revision,
-            destination=str(source_path),
-        )
-        with tempfile.TemporaryDirectory(
-            prefix=".reactor-lingbot-source-",
-            dir=source_path.parent,
-        ) as temporary:
-            checkout = Path(temporary) / "checkout"
-            _run_git(
-                [
-                    "clone",
-                    "--filter=blob:none",
-                    "--no-checkout",
-                    config.source_url,
-                    str(checkout),
-                ]
-            )
-            _run_git(
-                ["-C", str(checkout), "checkout", "--detach", config.source_revision]
-            )
-            with suppress(FileExistsError):
-                checkout.rename(source_path)
     if not (source_path / ".git").is_dir():
-        raise RuntimeError(f"LingBot source at {source_path} must be a Git checkout")
+        raise FileNotFoundError(
+            f"LingBot source is missing at {source_path}; rebuild the image with `reactor build`"
+        )
     actual = _run_git(["-C", str(source_path), "rev-parse", "HEAD"]).stdout.strip()
     if actual != config.source_revision:
         raise RuntimeError(
             f"LingBot source revision is {actual}; expected {config.source_revision}"
         )
-    _ensure_stateful_patch(source_path)
 
 
-def ensure_model_assets(config: LingBotConfig) -> None:
-    """Download only the base components and Fast weights used by this adapter."""
-    _ensure_snapshot(
-        config,
-        config.checkpoint,
-        allow_patterns=_BASE_PATTERNS,
-        required_files=_BASE_REQUIRED_FILES,
-    )
-    fast_required = (
-        "config.json",
-        "diffusion_pytorch_model.safetensors.index.json",
-        *(f"model-{index:05d}-of-00016.safetensors" for index in range(1, 17)),
-    )
-    _ensure_snapshot(
-        config,
-        config.fast_checkpoint,
-        allow_patterns=(),
-        required_files=fast_required,
-    )
-
-
-def _ensure_snapshot(
-    config: LingBotConfig,
-    asset: ModelAsset,
-    *,
-    allow_patterns: Sequence[str],
-    required_files: Sequence[str],
-) -> None:
-    """Download one resumable pinned snapshot and verify its required files."""
-    marker = asset.path / SNAPSHOT_MARKER
-    expected = {"repo_id": asset.repo_id, "revision": asset.revision}
-    if _json_matches(marker, expected) and all(
-        (asset.path / relative).is_file() for relative in required_files
-    ):
-        return
-    asset.path.mkdir(parents=True, exist_ok=True)
-    logger.info(
-        "downloading LingBot model snapshot",
-        repo_id=asset.repo_id,
-        revision=asset.revision,
-        destination=str(asset.path),
-    )
-    command = [
-        sys.executable,
-        str(Path(__file__).with_name("download_snapshot.py")),
-        "--repo-id",
-        asset.repo_id,
-        "--revision",
-        asset.revision,
-        "--local-dir",
-        str(asset.path),
-    ]
-    for pattern in allow_patterns:
-        command.extend(["--allow-pattern", pattern])
-    subprocess.run(
-        command,
-        check=True,
-        env=_download_environment(config.source_path.parent / ".cache"),
-    )
-    missing = [
-        relative for relative in required_files if not (asset.path / relative).is_file()
-    ]
+def check_weights(config: LingBotConfig) -> None:
+    """Raise when the weights folder lacks a file that the model reads."""
+    required = [config.checkpoint.path / name for name in BASE_REQUIRED_FILES]
+    required += [config.fast_checkpoint.path / name for name in FAST_REQUIRED_FILES]
+    missing = [str(path) for path in required if not path.is_file()]
     if missing:
-        raise RuntimeError(
-            f"snapshot {asset.repo_id}@{asset.revision} is missing required files: {missing}"
+        raise FileNotFoundError(
+            f"LingBot weights lack: {', '.join(missing)}. "
+            f"Run `{PREPARE_COMMAND}` and deploy with `--weights ./weights`."
         )
-    pending = marker.with_suffix(".tmp")
-    pending.write_text(json.dumps(expected, sort_keys=True), encoding="utf-8")
-    os.replace(pending, marker)
-
-
-def _ensure_stateful_patch(source_path: Path) -> None:
-    """Apply the adapter's stateful Fast rollout extension exactly once."""
-    patch = Path(__file__).with_name("stateful_rollout.patch")
-    reverse = _check_git(
-        ["-C", str(source_path), "apply", "--reverse", "--check", str(patch)]
-    )
-    if reverse.returncode == 0:
-        return
-    forward = _check_git(["-C", str(source_path), "apply", "--check", str(patch)])
-    if forward.returncode != 0:
-        detail = (
-            forward.stderr.strip() or reverse.stderr.strip() or "patch check failed"
-        )
-        raise RuntimeError(
-            f"LingBot source is incompatible with the stateful patch: {detail}"
-        )
-    logger.info("applying LingBot stateful rollout extension", source=str(source_path))
-    _run_git(["-C", str(source_path), "apply", str(patch)])
 
 
 def _validate_runtime_paths(config: LingBotConfig) -> None:
     """Fail startup with precise paths when source or assets are incomplete."""
     required = [
-        config.source_path / "wan" / "interactive_fast.py",
+        config.source_path / "wan" / "utils" / "cam_utils.py",
         config.checkpoint.path / "Wan2.1_VAE.pth",
         config.fast_checkpoint.path / "config.json",
     ]
@@ -331,14 +237,8 @@ def _asset(path: Path, value: object, name: str) -> ModelAsset:
 
 
 def _source_path(value: object) -> Path:
-    """Resolve the source checkout under Runtime's mounted weights root."""
-    configured = os.environ.get(SOURCE_ENV)
-    path = Path(
-        configured if configured else str(value or "lingbot-world-v1")
-    ).expanduser()
-    return (
-        path.resolve() if path.is_absolute() else (get_weights_path() / path).resolve()
-    )
+    """Return the source checkout path. The image build places it here."""
+    return Path(str(value or "/opt/lingbot-world")).expanduser().resolve()
 
 
 def _mapping(value: object, name: str) -> dict[str, Any]:
@@ -364,30 +264,13 @@ def _repository_url(value: object, name: str) -> str:
     return url
 
 
-def _json_matches(path: Path, expected: Mapping[str, object]) -> bool:
-    """Return whether a JSON marker exactly matches expected metadata."""
-    try:
-        return json.loads(path.read_text(encoding="utf-8")) == dict(expected)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return False
-
-
-def _download_environment(cache_root: Path) -> dict[str, str]:
-    """Return download and build caches rooted beside the model checkout."""
-    environment = os.environ.copy()
-    cache_root.mkdir(parents=True, exist_ok=True)
-    environment.update(
-        {
-            "UV_CACHE_DIR": str(cache_root / "uv"),
-            "UV_PYTHON_INSTALL_DIR": str(cache_root / "python"),
-            "HF_HOME": str(cache_root / "huggingface"),
-            "HUGGINGFACE_HUB_CACHE": str(cache_root / "huggingface" / "hub"),
-            "TORCH_HOME": str(cache_root / "torch"),
-            "PIP_CACHE_DIR": str(cache_root / "pip"),
-            "TMPDIR": str(cache_root / "tmp"),
-            "MAX_JOBS": os.environ.get("MAX_JOBS", "16"),
-        }
-    )
+def _cache_environment() -> dict[str, str]:
+    """Return cache variables that point into the home folder, never the weights folder."""
+    cache_root = CACHE_ROOT.expanduser()
+    environment = {
+        "TORCH_HOME": str(cache_root / "torch"),
+        "TMPDIR": str(cache_root / "tmp"),
+    }
     Path(environment["TMPDIR"]).mkdir(parents=True, exist_ok=True)
     return environment
 
@@ -402,18 +285,8 @@ def _run_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _check_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
-    """Run a non-mutating git check and return its status."""
-    return subprocess.run(
-        _git_command(arguments),
-        check=False,
-        text=True,
-        capture_output=True,
-    )
-
-
 def _git_command(arguments: list[str]) -> list[str]:
-    """Allow Git to inspect the explicit checkout mounted by Runtime."""
+    """Allow Git to inspect the image's checkout, which another user can own."""
     try:
         checkout_index = arguments.index("-C") + 1
         checkout = Path(arguments[checkout_index]).resolve()

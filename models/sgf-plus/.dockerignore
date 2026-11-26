@@ -8,3 +8,4 @@ demo
 *.mp4
 *.pt
 *.safetensors
+weights/

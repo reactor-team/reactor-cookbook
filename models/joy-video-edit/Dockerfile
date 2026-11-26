@@ -9,6 +9,8 @@ FROM ${CUDA_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+# The checkpoints come from the weights folder; nothing downloads at runtime.
+ENV HF_HUB_OFFLINE=1
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 ENV CUDA_HOME=/usr/local/cuda

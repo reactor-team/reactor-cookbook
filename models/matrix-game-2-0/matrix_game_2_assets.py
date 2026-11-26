@@ -1,4 +1,4 @@
-"""Prepare public Matrix-Game-2.0 source, weights, and image inputs."""
+"""Read the Matrix-Game-2.0 config and check its source, weights, and image inputs."""
 
 from __future__ import annotations
 
@@ -6,9 +6,7 @@ import io
 import os
 import re
 import subprocess
-import tempfile
 from collections.abc import Mapping
-from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -25,7 +23,10 @@ _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 _UPLOAD_MAX_BYTES = 25 * 1024 * 1024
 _UPLOAD_MAX_PIXELS = 100_000_000
 _IMAGE_FORMATS = {"BMP", "JPEG", "PNG", "WEBP"}
-_MODEL_ALLOW_PATTERNS = (
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
+# The files of the pinned repository that the model reads. The repository
+# also holds the base and other distilled checkpoints, which this model skips.
+MODEL_ALLOW_PATTERNS = (
     "Wan2.1_VAE.pth",
     "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth",
     "xlm-roberta-large/*",
@@ -33,8 +34,14 @@ _MODEL_ALLOW_PATTERNS = (
 )
 
 
-def read_config(config_path: Path | None) -> MatrixGame2Config:
-    """Read and validate the Matrix-Game-2.0 adapter YAML."""
+def read_config(
+    config_path: Path | None, weights_root: Path | None = None
+) -> MatrixGame2Config:
+    """Read and validate the Matrix-Game-2.0 adapter YAML.
+
+    ``weights_root`` is the folder that ``prepare_weights.py`` builds. It
+    defaults to Runtime's weights path.
+    """
     if config_path is None:
         raise ValueError("Matrix-Game-2.0 requires runtime.config in reactor.yaml")
     document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -49,11 +56,10 @@ def read_config(config_path: Path | None) -> MatrixGame2Config:
     configured_source = os.environ.get(SOURCE_ENV)
     if configured_source:
         source_path = Path(configured_source).expanduser().resolve()
-        checkout_path = source_path.parent
     else:
-        checkout_value = str(source.get("path", "Matrix-Game"))
-        checkout_path = _weights_relative_path(checkout_value)
-        source_path = checkout_path / "Matrix-Game-2"
+        source_path = (
+            Path(str(source.get("path", "/opt/Matrix-Game"))) / "Matrix-Game-2"
+        )
 
     max_latent_frames = int(inference.get("max_latent_frames", 360))
     if max_latent_frames != 360:
@@ -84,13 +90,12 @@ def read_config(config_path: Path | None) -> MatrixGame2Config:
         )
 
     return MatrixGame2Config(
-        checkout_path=checkout_path,
         source_path=source_path,
         source_url=_public_url(source.get("url"), "source.url"),
         source_revision=_revision(source.get("revision"), "source.revision"),
         model_repo_id=repo_id,
         model_revision=_revision(model.get("revision"), "model.revision"),
-        model_cache=get_weights_path() / "matrix-game-2-0" / "huggingface",
+        weights_root=weights_root if weights_root is not None else get_weights_path(),
         checkpoint_file=checkpoint_file,
         seed=int(inference.get("seed", 0)),
         max_latent_frames=max_latent_frames,
@@ -98,83 +103,53 @@ def read_config(config_path: Path | None) -> MatrixGame2Config:
     )
 
 
-def prepare_runtime_assets(config: MatrixGame2Config) -> Path:
-    """Prepare the pinned upstream checkout and distilled public checkpoint."""
-    ensure_source_checkout(config)
-    _validate_source_files(config)
+def check_runtime_assets(config: MatrixGame2Config) -> Path:
+    """Check the source in the image and the weights folder. Return the weights root.
+
+    This function never downloads. The image holds the source at the pinned
+    revision, and ``prepare_weights.py`` builds the weights folder.
+    """
+    check_source(config)
     for image in config.random_images:
         if not image.is_file():
             raise FileNotFoundError(
                 f"configured Matrix example image does not exist: {image}"
             )
-
-    from huggingface_hub import snapshot_download
-
-    config.model_cache.mkdir(parents=True, exist_ok=True)
-    logger.info(
-        "preparing Matrix-Game-2.0 checkpoint",
-        repo_id=config.model_repo_id,
-        revision=config.model_revision,
-        cache=str(config.model_cache),
-    )
-    snapshot = Path(
-        snapshot_download(
-            repo_id=config.model_repo_id,
-            revision=config.model_revision,
-            cache_dir=config.model_cache,
-            allow_patterns=list(_MODEL_ALLOW_PATTERNS),
-        )
-    )
-    _validate_model_snapshot(config, snapshot)
-    return snapshot
+    check_checkpoint(config)
+    return config.weights_root
 
 
-def ensure_source_checkout(config: MatrixGame2Config) -> None:
-    """Clone the pinned public source when it is absent and verify its revision."""
-    if not config.source_path.exists():
-        if os.environ.get(SOURCE_ENV):
-            raise FileNotFoundError(
-                f"{SOURCE_ENV} does not exist: {config.source_path}"
-            )
-        destination = config.checkout_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        logger.info(
-            "downloading Matrix source checkout",
-            url=config.source_url,
-            revision=config.source_revision,
-            destination=str(destination),
-        )
-        with tempfile.TemporaryDirectory(
-            prefix=".reactor-matrix-game-2-",
-            dir=destination.parent,
-        ) as temporary:
-            checkout = Path(temporary) / "checkout"
-            _run_git(
-                [
-                    "clone",
-                    "--filter=blob:none",
-                    "--no-checkout",
-                    "--sparse",
-                    config.source_url,
-                    str(checkout),
-                ]
-            )
-            _run_git(["-C", str(checkout), "sparse-checkout", "set", "Matrix-Game-2"])
-            _run_git(
-                ["-C", str(checkout), "checkout", "--detach", config.source_revision]
-            )
-            with suppress(FileExistsError):
-                checkout.rename(destination)
+def check_source(config: MatrixGame2Config) -> None:
+    """Check that the source directory exists at the pinned revision."""
     if not config.source_path.is_dir():
         raise FileNotFoundError(
-            f"Matrix-Game-2 source directory does not exist: {config.source_path}"
+            f"Matrix-Game-2 source directory does not exist: {config.source_path}; "
+            "rebuild the image with `reactor build`"
         )
+    _validate_source_files(config)
     actual = _run_git(
         ["-C", str(config.source_path), "rev-parse", "HEAD"]
     ).stdout.strip()
     if actual != config.source_revision:
         raise RuntimeError(
             f"Matrix source revision is {actual}; expected {config.source_revision}"
+        )
+
+
+def check_checkpoint(config: MatrixGame2Config) -> None:
+    """Raise when the weights folder lacks a file that the model reads."""
+    root = config.weights_root
+    required = (
+        config.checkpoint_file,
+        "Wan2.1_VAE.pth",
+        "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth",
+        "xlm-roberta-large/tokenizer.json",
+    )
+    missing = [name for name in required if not (root / name).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"Matrix-Game-2.0 weights in {root} lack: {', '.join(missing)}. "
+            f"Run `{PREPARE_COMMAND}` and deploy with `--weights ./weights`."
         )
 
 
@@ -231,22 +206,6 @@ def _validate_source_files(config: MatrixGame2Config) -> None:
         )
 
 
-def _validate_model_snapshot(config: MatrixGame2Config, snapshot: Path) -> None:
-    """Raise a precise error when the downloaded inference snapshot is incomplete."""
-    required = (
-        config.checkpoint_file,
-        "Wan2.1_VAE.pth",
-        "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth",
-        "xlm-roberta-large/tokenizer.json",
-    )
-    missing = [relative for relative in required if not (snapshot / relative).is_file()]
-    if missing:
-        raise FileNotFoundError(
-            "Matrix checkpoint snapshot is missing required files: "
-            + ", ".join(missing)
-        )
-
-
 def _mapping(value: object, name: str) -> dict[str, Any]:
     """Return a YAML mapping or raise a precise configuration error."""
     if not isinstance(value, Mapping):
@@ -262,12 +221,6 @@ def _relative_path(value: object, name: str) -> Path:
             f"{name} entries must be relative paths inside the source checkout"
         )
     return path
-
-
-def _weights_relative_path(value: str) -> Path:
-    """Resolve a configured checkout directory under Runtime's weights root."""
-    path = Path(value).expanduser()
-    return path if path.is_absolute() else get_weights_path() / path
 
 
 def _revision(value: object, name: str) -> str:
@@ -288,10 +241,11 @@ def _public_url(value: object, name: str) -> str:
 
 def _run_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     """Run Git without an interactive credential prompt."""
+    # The image's checkout can belong to another user than the runtime's.
     environment = os.environ.copy()
     environment["GIT_TERMINAL_PROMPT"] = "0"
     return subprocess.run(
-        ["git", *arguments],
+        ["git", "-c", "safe.directory=*", *arguments],
         check=True,
         capture_output=True,
         text=True,

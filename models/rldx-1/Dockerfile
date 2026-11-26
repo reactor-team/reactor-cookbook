@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv /opt/venv
 
+# The checkpoints come from the weights folder; nothing downloads at runtime.
+ENV HF_HUB_OFFLINE=1
 ENV PATH="/opt/venv/bin:${PATH}" \
     VIRTUAL_ENV=/opt/venv \
     PYTHONUNBUFFERED=1 \

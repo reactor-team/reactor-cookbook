@@ -14,7 +14,7 @@ from pathlib import Path
 
 from abot_world_assets import (
     ABotWorldConfig,
-    prepare_assets,
+    check_assets,
     read_config,
 )
 from abot_world_controls import (
@@ -76,10 +76,10 @@ class ABotWorld(ReactorApp):
         self._chunk_in_flight = False
 
     def load(self, config_path: Path | None) -> None:
-        """Prepare public assets and load the native causal model once."""
+        """Check the image and weight set, then load the native causal model once."""
         weights_root = get_weights_path()
         config = read_config(config_path, weights_root)
-        prepare_assets(config, weights_root)
+        check_assets(config)
         self._config = config
         self._engine.load(config, weights_root)
 

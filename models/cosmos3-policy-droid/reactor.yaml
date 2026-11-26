@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: cosmos3-policy-droid
-  version: v0.1.0
+  version: v0.2.0
   description: |
     NVIDIA Cosmos3 DROID robot policy: three camera views and proprioception in,
     a 32-step joint-position action chunk out. Serves the Edge checkpoint by
@@ -21,7 +21,8 @@ model:
 runtime:
   import: cosmos3_policy_droid:Cosmos3PolicyDroid
   config: cosmos3_policy_droid.yaml
-  weights_path: ~/.cache/reactor_registry/cosmos3-policy-droid
+  # Built by prepare_weights.py; deploy with `--weights ./weights`.
+  weights_path: ./weights
 
 build:
   runtime_version: "3.5.0"
@@ -29,8 +30,8 @@ build:
   cuda_version: "12.8.1"
   # The prebuilt attention kernels below exist for CPython 3.13 only.
   python_version: "3.13"
-  # git clones the pinned upstream source at first load and resolves the
-  # megatron-core git dependency at build (see requirements.txt).
+  # git fetches the pinned upstream source and the megatron-core dependency
+  # (see requirements.txt) at build, and reads the checkout's revision at load.
   system_packages:
     - git
   python_indexes:
@@ -51,3 +52,16 @@ build:
     OMP_NUM_THREADS: "4"
     MKL_NUM_THREADS: "4"
     HF_HUB_DISABLE_TELEMETRY: "1"
+    # Every checkpoint is read from the weights folder. Upstream's own
+    # downloader runs the `hf` CLI through `uv`; with both offline, a stray
+    # lookup fails at once instead of downloading.
+    HF_HUB_OFFLINE: "1"
+    UV_OFFLINE: "1"
+  run:
+    # The upstream serving code, at the revision cosmos3_policy_droid.yaml pins.
+    - >-
+      git init /opt/cosmos-framework
+      && git -C /opt/cosmos-framework fetch --depth 1
+      https://github.com/NVIDIA/cosmos-framework.git
+      cf5d68c00d97ccd2480a2320ed652b92dec63102
+      && git -C /opt/cosmos-framework checkout --detach FETCH_HEAD

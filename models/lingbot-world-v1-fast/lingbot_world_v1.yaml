@@ -1,5 +1,6 @@
 source:
-  path: lingbot-world-v1
+  # The image holds this checkout, patched, at the pinned revision (build.run).
+  path: /opt/lingbot-world
   url: https://github.com/robbyant/lingbot-world.git
   revision: a43bec7f8091c83e9b30b16b912f6fc906236fa6
 

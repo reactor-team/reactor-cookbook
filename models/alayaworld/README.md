@@ -39,19 +39,30 @@ the NVIDIA Container Toolkit, and a compatible NVIDIA GPU. See Reactor's
 [build configuration](https://docs.reactor.inc/deploy/platform/build) for the
 supported fields.
 
-Gemma is gated. Accept its Hugging Face license, export a read token, then build
-the image and expose one GPU to the container:
+The image build fetches the pinned AlayaWorld and Depth-Anything-3 sources.
+Build the weights folder once. It holds the merged AlayaWorld checkpoint, the
+Gemma 3 text encoder and the Depth-Anything-3 checkpoint at their pinned
+revisions, about 65 GB. Gemma is gated: accept its terms on the
+[model card](https://huggingface.co/google/gemma-3-12b-it-qat-q4_0-unquantized)
+with your Hugging Face account, then pass a token that can read it:
 
 ```sh
 cd models/alayaworld
-export HF_TOKEN=hf_your_read_token
-
-reactor build
-reactor run --gpus device=0 -e HF_TOKEN
+pip install huggingface-hub pyyaml
+HF_TOKEN=<your token> python prepare_weights.py --output ./weights
 ```
 
-The bare `-e HF_TOKEN` form forwards the host value without putting the token in
-the Docker command line. `--gpus device=3` selects host GPU 3 and presents it as
+Then build the image and expose one GPU to the container. `runtime.weights_path`
+points `reactor run` at the same folder, and the deploy uploads it, so a new
+instance does not download anything:
+
+```sh
+reactor build
+reactor run --gpus device=0
+reactor deploy production --weights ./weights
+```
+
+`--gpus device=3` selects host GPU 3 and presents it as
 device 0 inside the container; `--gpus all` exposes every GPU. The manifest
 requests one B200 when the same workspace is deployed.
 
@@ -61,7 +72,7 @@ no local image exists. It serves WebRTC signaling on
 dependencies. A different port is applied to both the container and Runtime:
 
 ```sh
-reactor build && reactor run --gpus device=0 -e HF_TOKEN --port 18080
+reactor build && reactor run --gpus device=0 --port 18080
 ```
 
 Check readiness after the model finishes loading. Use the port passed to
@@ -105,30 +116,31 @@ reaches the same container with **Local (Direct)**.
 
 ## Public source and model assets
 
-The CLI bind-mounts `runtime.weights_path` from `reactor.yaml` and exports that
-directory to the model as `REACTOR_WEIGHTS_PATH`. The checked-in default keeps
-AlayaWorld under `~/.cache/reactor_registry/alayaworld`, outside the image and
-the Git checkout, so container rebuilds retain every large download.
+`reactor build` clones AlayaWorld and Depth-Anything-3 into `/opt` at the
+revisions that `alayaworld.yaml` names under `source` and `da3_source`. Startup
+checks that each checkout is at its revision and asks for a rebuild when one is
+missing. The playground cases used by `random_image` arrive in the AlayaWorld
+checkout; no separate sample dataset is required. The adapter imports DA3's
+inference modules directly from its pinned source checkout.
 
-On first load the adapter clones the pinned AlayaWorld and Depth-Anything-3
-revisions, downloads the merged checkpoint and Gemma text encoder, and
-populates the pinned DA3 cache. Interrupted Hugging Face downloads resume on
-the next start. Later runs verify and reuse the completed resources. The
-playground cases used by `random_image` arrive in the AlayaWorld checkout; no
-separate sample dataset is required.
+`prepare_weights.py` writes one folder per `assets` entry in
+`alayaworld.yaml`, each holding the files of one Hugging Face repository at its
+pinned revision:
 
-`source.path` in `alayaworld.yaml` is relative to the mounted weights root.
-Every other relative model, configuration, and playground path is then resolved
-from that source checkout. To place the cache elsewhere, change only
-`runtime.weights_path` in `reactor.yaml`; the CLI creates and mounts that path.
+| Folder | Repository and revision | Size |
+| --- | --- | --- |
+| `AlayaWorld/` | `AlayaLab/AlayaWorld@f9699009a00f93214d8d2942d6546f3fa5398bea` | 33.6 GB |
+| `gemma-3-12b-it-qat-q4_0-unquantized/` | `google/gemma-3-12b-it-qat-q4_0-unquantized@68f7ee4fbd59087436ada77ed2d62f373fdd4482` (gated) | 24.4 GB |
+| `DA3NESTED-GIANT-LARGE-1.1/` | `depth-anything/DA3NESTED-GIANT-LARGE-1.1@b2359bdf726fb44ef62acca04d629dcf158053e7` | 6.8 GB |
 
-Model loading reports preparation progress in the container log. A failed
-download keeps health unavailable and names the public repository; gated model
-errors point to Hugging Face authentication. An existing source checkout must
-match the configured immutable revision; startup reports any mismatch.
+The sources are `AlayaLab/AlayaWorld@1abbe2e196603ef9f8eeedfddd427b4d37d57bc1`
+and `ByteDance-Seed/Depth-Anything-3@3d835ec1a5802d64a8b8b15f817a1ab54809bfe4`
+on GitHub.
 
-The adapter imports DA3's inference modules directly from its pinned source
-checkout.
+A second run downloads only the missing files. The model reads the folder
+read-only and nothing downloads at runtime (`HF_HUB_OFFLINE=1`). A missing file
+stops `load()` with an error that names it and the command that builds the
+folder.
 
 AlayaWorld and its weights use the LTX-2 Community License for academic and
 non-commercial use. Gemma and Depth-Anything-3 retain their own terms.
@@ -188,7 +200,7 @@ channel carries the binary data.
 [`example_images/`](./example_images) contains two licensed upstream still
 images ready for manual upload. These convenience copies are independent of
 `random_image`, which reads the same pinned playground cases from the source
-checkout prepared at startup.
+checkout in the image.
 
 Uploads are limited to 25 MiB and 100 million decoded pixels. EXIF orientation
 is applied, then the image is resized and center-cropped to 960x544 by

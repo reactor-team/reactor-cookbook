@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: abot-world
-  version: v0.1.4
+  version: v0.2.0
   description: |
     Play the distilled ABot-World model with uploaded images, prompts, and native keyboard controls.
   resources:
@@ -19,7 +19,8 @@ model:
 runtime:
   import: abot_world:ABotWorld
   config: abot_world.yaml
-  weights_path: ~/.cache/reactor_registry/abot-world
+  # abot_world.yaml's checkpoint section pins the same repository and revision.
+  weights_path: hf://acvlab/ABot-World-0-5B-LF@d26a3003701e70d38cd17e2af2faf63bd4ff7632
   recording:
     enabled: true
     chunk_seconds: 4
@@ -38,3 +39,14 @@ build:
   system_packages:
     - ffmpeg
     - git
+  runtime_env:
+    # The checkpoint comes from the weight set; nothing downloads at runtime.
+    HF_HUB_OFFLINE: "1"
+  # Pin the upstream source that abot_world.yaml's source.path names.
+  run:
+    - >-
+      git init /opt/ABot-World
+      && git -C /opt/ABot-World fetch --depth 1
+      https://github.com/amap-cvlab/ABot-World.git
+      604a09c4b135c08af684cadbba0a53efeb119e6d
+      && git -C /opt/ABot-World checkout --detach FETCH_HEAD

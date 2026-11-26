@@ -269,7 +269,7 @@ class MatrixGame30Backend:
             image="",
             num_iterations=config.max_chunks,
             convert_model_dtype=False,
-            output_dir=str(config.checkpoint_path / "reactor-output"),
+            output_dir=str(Path.home() / ".cache" / "matrix-game-3-0" / "output"),
             save_name="reactor",
             sample_shift=config.sample_shift,
             sample_guide_scale=config.guide_scale,

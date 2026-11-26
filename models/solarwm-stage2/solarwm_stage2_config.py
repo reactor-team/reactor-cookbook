@@ -1,4 +1,4 @@
-"""Validate SolarWM adapter settings and prepare pinned public assets."""
+"""Read SolarWM adapter settings and check the image's source and the weights folder."""
 
 from __future__ import annotations
 
@@ -8,16 +8,44 @@ from pathlib import Path
 
 import yaml
 
+PREPARE_COMMAND = "HF_TOKEN=<your token> python prepare_weights.py --output ./weights"
+BASE_FOLDER = "SolarWM-5B-base"
+CHECKPOINT_FOLDER = "SolarWM-5B-sgf-stage2-81f"
+# The files of the pinned repository that Stage2 inference reads. Stage2 loads
+# the whole transformer from model.pt, so the base transformer shards are skipped.
+ALLOW_PATTERNS = (
+    f"{BASE_FOLDER}/LICENSE.txt",
+    f"{BASE_FOLDER}/text_encoder/*",
+    f"{BASE_FOLDER}/tokenizer/*",
+    f"{BASE_FOLDER}/vae/*",
+    f"{CHECKPOINT_FOLDER}/*",
+)
+REQUIRED_FILES = (
+    f"{BASE_FOLDER}/text_encoder/models_t5_umt5-xxl-enc-bf16.pth",
+    f"{BASE_FOLDER}/vae/Wan2.2_VAE.pth",
+    f"{BASE_FOLDER}/tokenizer/tokenizer.json",
+    f"{BASE_FOLDER}/tokenizer/tokenizer_config.json",
+    f"{BASE_FOLDER}/tokenizer/spiece.model",
+    f"{BASE_FOLDER}/tokenizer/special_tokens_map.json",
+    f"{CHECKPOINT_FOLDER}/model.pt",
+    f"{CHECKPOINT_FOLDER}/COMPLETE.json",
+    f"{CHECKPOINT_FOLDER}/checkpoint-manifest.json",
+    f"{CHECKPOINT_FOLDER}/release-manifest.json",
+)
+_RUNTIME_ROOT = Path("~/.cache/solarwm-stage2")
+
 
 @dataclass(frozen=True)
 class SolarWMConfig:
     """Hold validated paths and inference settings for SolarWM Stage2."""
 
     source_path: Path
+    source_url: str
     source_revision: str
     upstream_config: Path
     repo_id: str
     checkpoint_revision: str
+    weights_root: Path
     base_path: Path
     checkpoint_path: Path
     runtime_root: Path
@@ -38,26 +66,25 @@ def read_config(config_path: Path | None, weights_root: Path) -> SolarWMConfig:
     source, assets = raw["source"], raw["assets"]
     stream, motion = raw["stream"], raw["motion"]
 
-    def resolve(value: str) -> Path:
-        path = Path(value).expanduser()
-        return (path if path.is_absolute() else config_path.parent / path).resolve()
-
-    source_path = resolve(source["path"])
-    asset_root = (weights_root / Path(assets["root"]).expanduser()).resolve()
-    base_path = asset_root / "SolarWM-5B-base"
-    checkpoint_path = asset_root / "SolarWM-5B-sgf-stage2-81f"
+    source_path = Path(source["path"]).expanduser()
+    if not source_path.is_absolute():
+        source_path = config_path.parent / source_path
+    source_path = source_path.resolve()
+    weights_root = weights_root.expanduser().resolve()
     max_chunks = int(stream["max_chunks"])
     if not 1 <= max_chunks <= 320:
         raise ValueError("stream.max_chunks must be between 1 and 320")
     return SolarWMConfig(
         source_path=source_path,
+        source_url=str(source["url"]),
         source_revision=str(source["revision"]),
         upstream_config=(source_path / Path(source["config"]).expanduser()).resolve(),
         repo_id=str(assets["repo_id"]),
         checkpoint_revision=str(assets["revision"]),
-        base_path=base_path,
-        checkpoint_path=checkpoint_path,
-        runtime_root=asset_root / "runtime",
+        weights_root=weights_root,
+        base_path=weights_root / BASE_FOLDER,
+        checkpoint_path=weights_root / CHECKPOINT_FOLDER,
+        runtime_root=_RUNTIME_ROOT.expanduser(),
         seed=int(raw["inference"]["seed"]),
         default_prompt=str(raw["inference"]["default_prompt"]).strip(),
         max_chunks=max_chunks,
@@ -66,10 +93,24 @@ def read_config(config_path: Path | None, weights_root: Path) -> SolarWMConfig:
     )
 
 
-def prepare_runtime(config: SolarWMConfig) -> None:
-    """Verify the pinned source and download only the Stage2 5B files in use."""
+def check_runtime(config: SolarWMConfig) -> None:
+    """Check the source and the weights folder, then create the scratch folder.
+
+    Never downloads. The image holds the source at the pinned revision, and
+    ``prepare_weights.py`` builds the weights folder.
+    """
+    check_source(config)
+    check_weights(config)
+    config.runtime_root.mkdir(parents=True, exist_ok=True)
+
+
+def check_source(config: SolarWMConfig) -> None:
+    """Raise unless the image holds the upstream checkout at the pinned revision."""
     if not (config.source_path / ".git").is_dir():
-        raise RuntimeError("The image must include the pinned SolarWM checkout")
+        raise FileNotFoundError(
+            f"SolarWM source not found at {config.source_path}; "
+            "rebuild the image with `reactor build`"
+        )
     revision = subprocess.run(
         [
             "git",
@@ -88,46 +129,18 @@ def prepare_runtime(config: SolarWMConfig) -> None:
         raise RuntimeError(
             f"SolarWM source revision is {revision}; expected {config.source_revision}"
         )
-    required = (
-        "SolarWM-5B-base/**",
-        "SolarWM-5B-sgf-stage2-81f/**",
-    )
-    required_files = (
-        config.base_path / "text_encoder/models_t5_umt5-xxl-enc-bf16.pth",
-        config.base_path / "vae/Wan2.2_VAE.pth",
-        config.base_path / "tokenizer/tokenizer.json",
-        config.base_path / "tokenizer/tokenizer_config.json",
-        config.base_path / "tokenizer/spiece.model",
-        config.base_path / "tokenizer/special_tokens_map.json",
-        config.checkpoint_path / "model.pt",
-        config.checkpoint_path / "release-manifest.json",
-    )
-    if any(not path.is_file() or path.stat().st_size == 0 for path in required_files):
-        from huggingface_hub import snapshot_download
 
-        snapshot_download(
-            repo_id=config.repo_id,
-            revision=config.checkpoint_revision,
-            local_dir=config.base_path.parent,
-            allow_patterns=list(required),
-        )
-    # Hub metadata can consider an existing empty file current; force only those files.
-    empty = [
-        path.relative_to(config.base_path.parent).as_posix()
-        for path in required_files
-        if path.is_file() and path.stat().st_size == 0
+
+def check_weights(config: SolarWMConfig) -> None:
+    """Raise when the weights folder lacks, or holds an empty copy of, a file Stage2 reads."""
+    root = config.weights_root
+    missing = [
+        name
+        for name in REQUIRED_FILES
+        if not (root / name).is_file() or (root / name).stat().st_size == 0
     ]
-    if empty:
-        from huggingface_hub import snapshot_download
-
-        snapshot_download(
-            repo_id=config.repo_id,
-            revision=config.checkpoint_revision,
-            local_dir=config.base_path.parent,
-            allow_patterns=empty,
-            force_download=True,
+    if missing:
+        raise FileNotFoundError(
+            f"SolarWM weights in {root} lack: {', '.join(missing)}. "
+            f"Run `{PREPARE_COMMAND}` and deploy with `--weights ./weights`."
         )
-    for path in required_files:
-        if not path.is_file() or path.stat().st_size == 0:
-            raise RuntimeError(f"SolarWM asset is missing or empty: {path}")
-    config.runtime_root.mkdir(parents=True, exist_ok=True)

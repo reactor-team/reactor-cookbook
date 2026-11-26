@@ -1,22 +1,27 @@
 # Which DROID policy checkpoint to serve and how to sample it. Read by the
-# model half (cosmos3_policy_droid_model.py) through cosmos3_policy_droid_assets.py.
+# model half (cosmos3_policy_droid_model.py) through cosmos3_policy_droid_assets.py,
+# and by prepare_weights.py, which downloads the checkpoint named here.
 #
-# The Edge and Nano checkpoints share one serving path. To serve Nano instead:
-#   checkpoint: nvidia/Cosmos3-Nano-Policy-DROID
+# The Edge and Nano checkpoints share one serving path. To serve Nano instead,
+# set these keys and run prepare_weights.py again:
+#   checkpoint:
+#     repo_id: nvidia/Cosmos3-Nano-Policy-DROID
+#     revision: 5e9dd43c3c99d813c512960594bfd7b40678b180
 #   format_prompt_as_json: null
 #   guidance_interval: null
 
-# Upstream serving code, cloned into the weights root at this exact commit on
-# first load. COSMOS_FRAMEWORK_PATH in the environment points at an existing
-# checkout instead.
+# Upstream serving code. The image build fetches it at this exact commit (see
+# build.run in reactor.yaml). COSMOS_FRAMEWORK_PATH in the environment points
+# at another checkout of the same commit instead.
 source:
-  path: source/cosmos-framework
+  path: /opt/cosmos-framework
   url: https://github.com/NVIDIA/cosmos-framework.git
   revision: cf5d68c00d97ccd2480a2320ed652b92dec63102
 
-# Hugging Face repository id, or a local directory holding the checkpoint.
-checkpoint: nvidia/Cosmos3-Edge-Policy-DROID
-hf_revision: main
+# The Hugging Face checkpoint, read from <weights folder>/<repo_id>.
+checkpoint:
+  repo_id: nvidia/Cosmos3-Edge-Policy-DROID
+  revision: a74e848cdfd222ec1ff80bd82d4b07eeb3c78d14
 
 # Edge was post-trained on the structured JSON prompt and applies
 # classifier-free guidance only inside this denoising-timestep range.

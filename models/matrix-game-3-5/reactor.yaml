@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: matrix-game-3-5-distilled-first-person
-  version: v0.2.1
+  version: v0.3.0
   description: |
     Explore an autoregressive world from an image, a prompt, and six-axis camera motion.
   # Matrix needs roughly 40 GB of VRAM at 704x1280; the 5B model, its rolling
@@ -22,8 +22,8 @@ model:
 runtime:
   import: matrix_game_3_5:MatrixGame35
   config: matrix_game_3_5.yaml
-  # Source, checkpoints, the isolated worker, and download caches stay here.
-  weights_path: ~/.cache/reactor_registry/matrix-game-3-5
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 4
@@ -41,9 +41,30 @@ build:
   python_version: "3.12"
   system_packages:
     - build-essential
+    - ca-certificates
     - ffmpeg
     - git
     - libgl1
     - libglib2.0-0
   runtime_env:
+    HF_HUB_OFFLINE: "1"
     PYTORCH_ALLOC_CONF: expandable_segments:True
+  run:
+    - pip install --no-cache-dir uv==0.11.19
+    - >-
+      git init /opt/Matrix-Game-3.5
+      && git -C /opt/Matrix-Game-3.5 fetch --depth 1
+      https://github.com/Riemann-Dynamics/Matrix-Game-3.5.git
+      fa6d2b628ac9b0f1657dc24689536d74bfeb51da
+      && git -C /opt/Matrix-Game-3.5 checkout --detach FETCH_HEAD
+    # The worker runs Matrix-Game-3.5 in its own Python 3.10 environment:
+    # torch 2.10.0 on CUDA 12.8, then the upstream requirements.
+    - >-
+      export UV_CACHE_DIR=/tmp/matrix-uv UV_PYTHON_INSTALL_DIR=/opt/matrix-python
+      && uv venv --python 3.10 /opt/Matrix-Game-3.5/.venv
+      && uv pip install --python /opt/Matrix-Game-3.5/.venv/bin/python
+      torch==2.10.0 torchvision==0.25.0
+      --index-url https://download.pytorch.org/whl/cu128
+      && uv pip install --python /opt/Matrix-Game-3.5/.venv/bin/python
+      --requirement /opt/Matrix-Game-3.5/requirements.txt ftfy==6.3.1
+      && rm -rf /tmp/matrix-uv

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
-from hy_world_1_5_assets import HYWorld15Config, assemble_base_model
+from hy_world_1_5_assets import HYWorld15Config
 from hy_world_1_5_camera import CameraChunk
 from PIL import Image
 
@@ -48,7 +48,6 @@ class HYWorld15Backend:
 
     def load(self) -> None:
         """Load the pinned upstream distilled model once and keep it resident."""
-        assemble_base_model(self._config)
         source = self._config.source.path
         source_text = str(source)
         if source_text not in sys.path:
@@ -279,6 +278,7 @@ class HYWorld15Backend:
         """Initialize the single-rank public inference state expected upstream."""
         dist = torch.distributed
         if not dist.is_initialized():
+            self._config.cache_path.mkdir(parents=True, exist_ok=True)
             rendezvous = self._config.cache_path / f"torch-dist-{os.getpid()}"
             rendezvous.unlink(missing_ok=True)
             dist.init_process_group(

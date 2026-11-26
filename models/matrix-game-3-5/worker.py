@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib
+import importlib.abc
+import importlib.util
 import inspect
 import json
 import os
@@ -21,6 +23,39 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+
+
+_PATCHED_UPSTREAM = Path(__file__).resolve().with_name("upstream_patched")
+
+
+class _PatchedUpstreamFinder(importlib.abc.MetaPathFinder):
+    """Serve the upstream modules that ``upstream_patched/`` carries changed copies of.
+
+    The copies keep their upstream module names, so their relative imports and
+    every upstream import of them resolve as they do in the pinned source.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.files = {
+            ".".join(path.relative_to(root).with_suffix("").parts): path
+            for path in root.rglob("*.py")
+        }
+
+    def find_spec(self, name, path=None, target=None):
+        file = self.files.get(name)
+        if file is None:
+            return None
+        return importlib.util.spec_from_file_location(name, file)
+
+
+def _load_patched_upstream() -> None:
+    """Import the patched copies in place of the pinned source's own modules."""
+    finder = _PatchedUpstreamFinder(_PATCHED_UPSTREAM)
+    early = sorted(set(finder.files) & set(sys.modules))
+    if early:
+        raise RuntimeError(f"upstream modules imported before their patched copies: {early}")
+    sys.meta_path.insert(0, finder)
+
 
 _RESPONSE_PREFIX = "REACTOR_MATRIX_RESPONSE "
 _RGB_FRAMES_PER_CHUNK = 12
@@ -144,6 +179,7 @@ class MatrixRuntime:
         os.environ.setdefault("DIFFSYNTH_SKIP_DOWNLOAD", "true")
         os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
+        _load_patched_upstream()
         accelerate = importlib.import_module("accelerate")
         torch = importlib.import_module("torch")
         load_inference_config = importlib.import_module(
@@ -179,8 +215,8 @@ class MatrixRuntime:
             not in inspect.signature(run_distilled_inference).parameters
         ):
             raise RuntimeError(
-                "Matrix source is missing the Reactor stateful rollout patch; "
-                "apply the patch documented in models/matrix-game-3-5/README.md"
+                "Matrix rollout lacks `interactive_session`; the worker did not "
+                "load upstream_patched/"
             )
         self._config = load_inference_config(Path(settings["inference_config"]))
         if int(self._config.num_blocks) != 1:

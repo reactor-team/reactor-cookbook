@@ -3,7 +3,7 @@ $schema: reactor/v2
 
 model:
   name: alaya-world
-  version: v0.2.1
+  version: v0.3.0
   description: |
     Play the distilled AlayaWorld model with live prompt and six-axis camera controls.
   resources:
@@ -21,8 +21,8 @@ model:
 runtime:
   import: alayaworld:AlayaWorld
   config: alayaworld.yaml
-  # Source checkouts, checkpoints, and downloads stay here.
-  weights_path: ~/.cache/reactor_registry/alayaworld
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 4
@@ -43,3 +43,18 @@ build:
     - build-essential
   runtime_env:
     PYTORCH_ALLOC_CONF: expandable_segments:True
+    HF_HUB_OFFLINE: "1"
+  # Pin the upstream sources that alayaworld.yaml's source and da3_source name.
+  run:
+    - >-
+      git init /opt/AlayaWorld
+      && git -C /opt/AlayaWorld fetch --depth 1
+      https://github.com/AlayaLab/AlayaWorld.git
+      1abbe2e196603ef9f8eeedfddd427b4d37d57bc1
+      && git -C /opt/AlayaWorld checkout --detach FETCH_HEAD
+    - >-
+      git init /opt/Depth-Anything-3
+      && git -C /opt/Depth-Anything-3 fetch --depth 1
+      https://github.com/ByteDance-Seed/Depth-Anything-3.git
+      3d835ec1a5802d64a8b8b15f817a1ab54809bfe4
+      && git -C /opt/Depth-Anything-3 checkout --detach FETCH_HEAD

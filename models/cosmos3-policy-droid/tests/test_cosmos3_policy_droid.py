@@ -20,13 +20,14 @@ import cosmos3_policy_droid_assets as assets
 import cosmos3_policy_droid_model
 from cosmos3_policy_droid import Cosmos3PolicyDroid, parse_executed_step, parse_observation_time, parse_proprio
 from cosmos3_policy_droid_assets import (
+    DEFAULT_CHECKPOINT,
     DEFAULT_SOURCE,
     SOURCE_ENV,
+    HubFiles,
     Repository,
-    ensure_source_checkout,
+    check_source,
     read_config,
     resolve_source_path,
-    route_checkpoint_downloads,
 )
 from cosmos3_policy_droid_model import VIEWS, Cosmos3PolicyModel, PolicyInput, PolicyResult
 from cosmos3_policy_droid_types import ActionPrediction, PolicyState
@@ -535,41 +536,52 @@ def test_oversized_proprio_refuses_the_step(raw: str) -> None:
 
 def test_config_defaults_to_the_edge_checkpoint(tmp_path: Path) -> None:
     config = read_config(MODEL_DIR / "cosmos3_policy_droid.yaml")
-    assert config.checkpoint == "nvidia/Cosmos3-Edge-Policy-DROID"
+    assert config.checkpoint == DEFAULT_CHECKPOINT
+    assert config.checkpoint.repo_id == "nvidia/Cosmos3-Edge-Policy-DROID"
     assert config.format_prompt_as_json is True
     assert config.guidance_interval == (960, 1001)
     assert (config.num_steps, config.guidance, config.action_chunk_size) == (4, 3.0, 32)
 
     nano = tmp_path / "nano.yaml"
     nano.write_text(
-        "checkpoint: nvidia/Cosmos3-Nano-Policy-DROID\nformat_prompt_as_json: null\nguidance_interval: null\n"
+        "checkpoint:\n"
+        "  repo_id: nvidia/Cosmos3-Nano-Policy-DROID\n"
+        "  revision: 5e9dd43c3c99d813c512960594bfd7b40678b180\n"
+        "format_prompt_as_json: null\nguidance_interval: null\n"
     )
     config = read_config(nano)
-    assert config.checkpoint == "nvidia/Cosmos3-Nano-Policy-DROID"
+    assert config.checkpoint == HubFiles(
+        repo_id="nvidia/Cosmos3-Nano-Policy-DROID", revision="5e9dd43c3c99d813c512960594bfd7b40678b180"
+    )
     assert config.format_prompt_as_json is None
     assert config.guidance_interval is None
 
 
-def test_config_pins_the_upstream_source(tmp_path: Path) -> None:
+def test_config_pins_the_upstream_source_and_the_checkpoint(tmp_path: Path) -> None:
     config = read_config(MODEL_DIR / "cosmos3_policy_droid.yaml")
     assert config.source == DEFAULT_SOURCE
     assert len(config.source.revision) == 40
+    assert len(config.checkpoint.revision) == 40
 
     short = tmp_path / "short.yaml"
     short.write_text("source:\n  revision: cf5d68c\n")
     with pytest.raises(ValueError, match="40-hex"):
         read_config(short)
+    branch = tmp_path / "branch.yaml"
+    branch.write_text("checkpoint:\n  repo_id: nvidia/Cosmos3-Edge-Policy-DROID\n  revision: main\n")
+    with pytest.raises(ValueError, match="40-hex"):
+        read_config(branch)
+    bare = tmp_path / "bare.yaml"
+    bare.write_text("checkpoint: nvidia/Cosmos3-Edge-Policy-DROID\n")
+    with pytest.raises(ValueError, match="repo_id and revision"):
+        read_config(bare)
 
 
-def test_source_path_resolves_under_the_weights_root_unless_overridden(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_source_path_is_the_image_checkout_unless_overridden(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(SOURCE_ENV, raising=False)
-    assert resolve_source_path(DEFAULT_SOURCE, Path("/weights")) == Path("/weights/source/cosmos-framework")
-    absolute = Repository(path=Path("/src/cf"), url=DEFAULT_SOURCE.url, revision=DEFAULT_SOURCE.revision)
-    assert resolve_source_path(absolute, Path("/weights")) == Path("/src/cf")
+    assert resolve_source_path(DEFAULT_SOURCE) == Path("/opt/cosmos-framework")
     monkeypatch.setenv(SOURCE_ENV, "/elsewhere/cosmos-framework")
-    assert resolve_source_path(DEFAULT_SOURCE, Path("/weights")) == Path("/elsewhere/cosmos-framework")
+    assert resolve_source_path(DEFAULT_SOURCE) == Path("/elsewhere/cosmos-framework")
 
 
 def _git(*args: str, cwd: Path) -> str:
@@ -582,51 +594,34 @@ def _git(*args: str, cwd: Path) -> str:
     ).stdout.strip()
 
 
-def _local_upstream(tmp_path: Path) -> tuple[Repository, Path]:
-    """A local Git repository standing in for github.com/NVIDIA/cosmos-framework."""
-    upstream = tmp_path / "upstream"
-    (upstream / "cosmos_framework").mkdir(parents=True)
-    (upstream / "cosmos_framework" / "__init__.py").write_text("")
-    _git("init", "-q", cwd=upstream)
-    _git("add", ".", cwd=upstream)
-    _git("commit", "-q", "-m", "pinned", cwd=upstream)
-    pinned = _git("rev-parse", "HEAD", cwd=upstream)
-    (upstream / "later.txt").write_text("after the pin")
-    _git("add", ".", cwd=upstream)
-    _git("commit", "-q", "-m", "later", cwd=upstream)
-    return Repository(path=Path("source/cf"), url=str(upstream), revision=pinned), tmp_path / "weights"
+def _checkout(tmp_path: Path) -> Repository:
+    """A local Git checkout standing in for the one the image build makes."""
+    path = tmp_path / "cosmos-framework"
+    (path / "cosmos_framework").mkdir(parents=True)
+    (path / "cosmos_framework" / "__init__.py").write_text("")
+    _git("init", "-q", cwd=path)
+    _git("add", ".", cwd=path)
+    _git("commit", "-q", "-m", "pinned", cwd=path)
+    return Repository(path=path, url=DEFAULT_SOURCE.url, revision=_git("rev-parse", "HEAD", cwd=path))
 
 
-def test_source_checkout_clones_the_pinned_revision_once(tmp_path: Path) -> None:
-    source, weights = _local_upstream(tmp_path)
-    path = resolve_source_path(source, weights)
-    ensure_source_checkout(source, path)
-    assert _git("rev-parse", "HEAD", cwd=path) == source.revision
-    assert not (path / "later.txt").exists()  # detached at the pin, not at the branch head
-    assert (path / "cosmos_framework" / "__init__.py").is_file()
-    # A second call verifies and leaves the checkout alone.
-    ensure_source_checkout(source, path)
+def test_source_check_accepts_the_checkout_at_the_pin(tmp_path: Path) -> None:
+    source = _checkout(tmp_path)
+    check_source(source, source.path)
 
 
-def test_source_checkout_refuses_a_drifted_or_modified_checkout(tmp_path: Path) -> None:
-    source, weights = _local_upstream(tmp_path)
-    path = resolve_source_path(source, weights)
-    ensure_source_checkout(source, path)
-
-    (path / "cosmos_framework" / "__init__.py").write_text("# edited\n")
-    with pytest.raises(RuntimeError, match="local changes"):
-        ensure_source_checkout(source, path)
-    _git("checkout", "--", ".", cwd=path)
-
-    _git("checkout", "-q", "--detach", "HEAD~0", cwd=path)
+def test_source_check_refuses_a_checkout_at_another_revision(tmp_path: Path) -> None:
+    source = _checkout(tmp_path)
     wrong = Repository(path=source.path, url=source.url, revision="0" * 40)
-    with pytest.raises(RuntimeError, match="revision is"):
-        ensure_source_checkout(wrong, path)
+    with pytest.raises(RuntimeError, match="revision is .*reactor build"):
+        check_source(wrong, source.path)
 
-    plain = tmp_path / "plain"
-    plain.mkdir()
-    with pytest.raises(RuntimeError, match="Git checkout"):
-        ensure_source_checkout(source, plain)
+
+def test_source_check_refuses_a_folder_without_git(tmp_path: Path) -> None:
+    (tmp_path / "cosmos_framework").mkdir()
+    (tmp_path / "cosmos_framework" / "__init__.py").write_text("")
+    with pytest.raises(FileNotFoundError, match="reactor build"):
+        check_source(DEFAULT_SOURCE, tmp_path)
 
 
 def test_activate_source_puts_the_checkout_first_on_sys_path(
@@ -662,9 +657,11 @@ class _FakeService:
         return {"action": np.zeros(self.shape, np.float32)}
 
 
-def _stub_framework(
-    monkeypatch: pytest.MonkeyPatch, cache_calls: list[dict[str, Any]]
-) -> list[tuple[Repository, Path]]:
+CHECKPOINT = Path("/weights/nvidia/Cosmos3-Edge-Policy-DROID")
+VAE = Path("/weights/Wan-AI/Wan2.2-TI2V-5B/Wan2.2_VAE.pth")
+
+
+def _stub_framework(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
     def server_args(**kwargs: Any) -> Any:
         return types.SimpleNamespace(**kwargs)
 
@@ -673,45 +670,8 @@ def _stub_framework(
     server.RobolabServerArgs = server_args  # type: ignore[attr-defined]
     scripts = types.ModuleType("cosmos_framework.scripts")
     scripts.action_policy_server_robolab = server  # type: ignore[attr-defined]
-
-    class _Hf:
-        repository_type = types.SimpleNamespace(value="model")
-        include: tuple[str, ...] = ()
-        exclude: tuple[str, ...] = ()
-        subdirectory = ""
-
-        def __init__(self, repository: str, revision: str, filename: str = "") -> None:
-            self.repository, self.revision, self.filename = repository, revision, filename
-
-    class CheckpointDirHf(_Hf):
-        def _download(self) -> str:
-            raise AssertionError("upstream downloader must be routed")
-
-    class CheckpointFileHf(_Hf):
-        def _download(self) -> str:
-            raise AssertionError("upstream downloader must be routed")
-
-    db = types.ModuleType("cosmos_framework.utils.checkpoint_db")
-    db.CheckpointDirHf = CheckpointDirHf  # type: ignore[attr-defined]
-    db.CheckpointFileHf = CheckpointFileHf  # type: ignore[attr-defined]
-    utils = types.ModuleType("cosmos_framework.utils")
-    utils.checkpoint_db = db  # type: ignore[attr-defined]
     package = types.ModuleType("cosmos_framework")
     package.scripts = scripts  # type: ignore[attr-defined]
-    package.utils = utils  # type: ignore[attr-defined]
-
-    hub = types.ModuleType("huggingface_hub")
-
-    def snapshot_download(repo_id: str, **kwargs: Any) -> str:
-        cache_calls.append({"repo": repo_id, **kwargs})
-        return f"/weights/{repo_id}"
-
-    def hf_hub_download(repo_id: str, filename: str, **kwargs: Any) -> str:
-        cache_calls.append({"repo": repo_id, "filename": filename, **kwargs})
-        return f"/weights/{repo_id}/{filename}"
-
-    hub.snapshot_download = snapshot_download  # type: ignore[attr-defined]
-    hub.hf_hub_download = hf_hub_download  # type: ignore[attr-defined]
 
     torch = types.ModuleType("torch")
     torch.cuda = types.SimpleNamespace(set_device=lambda _i: None)  # type: ignore[attr-defined]
@@ -720,37 +680,46 @@ def _stub_framework(
         "cosmos_framework": package,
         "cosmos_framework.scripts": scripts,
         "cosmos_framework.scripts.action_policy_server_robolab": server,
-        "cosmos_framework.utils": utils,
-        "cosmos_framework.utils.checkpoint_db": db,
-        "huggingface_hub": hub,
+        "huggingface_hub": None,
         "torch": torch,
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
     _FakeService.instances.clear()
 
-    # The source checkout is the model half's first step; record it instead of cloning.
-    checkouts: list[tuple[Repository, Path]] = []
+    # The checks run first; record them instead of reading a checkout and a weights folder.
+    checks: list[tuple[str, Any]] = []
+
+    def check_weights(config: Any, weights_root: Path) -> tuple[Path, Path]:
+        checks.append(("weights", (config.checkpoint, weights_root)))
+        return CHECKPOINT, VAE
+
     monkeypatch.setattr(
-        cosmos3_policy_droid_model,
-        "ensure_source_checkout",
-        lambda source, path: checkouts.append((source, path)),
+        cosmos3_policy_droid_model, "check_source", lambda source, path: checks.append(("source", (source, path)))
     )
+    monkeypatch.setattr(cosmos3_policy_droid_model, "check_weights", check_weights)
     monkeypatch.setattr(cosmos3_policy_droid_model, "activate_source", lambda path: None)
-    return checkouts
+    return checks
 
 
-def test_model_load_clones_the_source_then_builds_the_edge_service_and_warms_it(
+def test_model_load_checks_the_source_and_weights_then_builds_the_edge_service_and_warms_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[dict[str, Any]] = []
-    checkouts = _stub_framework(monkeypatch, calls)
+    checks = _stub_framework(monkeypatch)
     monkeypatch.delenv(SOURCE_ENV, raising=False)
     model = Cosmos3PolicyModel()
     model.load(MODEL_DIR / "cosmos3_policy_droid.yaml", Path("/weights"))
 
-    assert checkouts == [(DEFAULT_SOURCE, Path("/weights/source/cosmos-framework"))]
+    assert checks == [
+        ("source", (DEFAULT_SOURCE, Path("/opt/cosmos-framework"))),
+        ("weights", (DEFAULT_CHECKPOINT, Path("/weights"))),
+    ]
     service = _FakeService.instances[-1]
-    assert service.args.checkpoint_path == "nvidia/Cosmos3-Edge-Policy-DROID"
+    assert service.args.checkpoint_path == str(CHECKPOINT)
+    assert service.args.experiment_overrides == [
+        'model.config.tokenizer.bucket_name=""',
+        f'model.config.tokenizer.vae_path="{VAE}"',
+    ]
+    assert not hasattr(service.args, "hf_revision")
     assert service.args.format_prompt_as_json is True
     assert service.args.guidance_interval == (960, 1001)
     assert (service.args.num_steps, service.args.guidance) == (4, 3.0)
@@ -760,7 +729,7 @@ def test_model_load_clones_the_source_then_builds_the_edge_service_and_warms_it(
 
 
 def test_model_generate_maps_the_input_to_the_observation(monkeypatch: pytest.MonkeyPatch) -> None:
-    _stub_framework(monkeypatch, [])
+    _stub_framework(monkeypatch)
     model = Cosmos3PolicyModel()
     model.load(None, Path("/weights"))
     service = _FakeService.instances[-1]
@@ -785,25 +754,6 @@ def test_model_generate_before_load_fails_loudly() -> None:
         Cosmos3PolicyModel().generate(
             PolicyInput(WRIST, EXTERIOR, EXTERIOR, np.zeros((1, 7)), np.zeros((1, 1)), "t")
         )
-
-
-def test_checkpoint_downloads_route_through_huggingface_hub(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[dict[str, Any]] = []
-    _stub_framework(monkeypatch, calls)
-    route_checkpoint_downloads(Path("/weights"))
-    route_checkpoint_downloads(Path("/elsewhere"))  # idempotent: the first routing stays
-    from cosmos_framework.utils import checkpoint_db as db
-
-    assert db.CheckpointDirHf("nvidia/Cosmos3-Edge-Policy-DROID", "main")._download() == (
-        "/weights/nvidia/Cosmos3-Edge-Policy-DROID"
-    )
-    assert (
-        db.CheckpointFileHf("Wan-AI/Wan2.2-TI2V-5B", "main", "Wan2.2_VAE.pth")
-        ._download()
-        .endswith("Wan2.2_VAE.pth")
-    )
-    assert all(call["cache_dir"] == "/weights" for call in calls)
-    assert calls[0]["revision"] == "main"
 
 
 def test_disable_guardrails_is_idempotent() -> None:

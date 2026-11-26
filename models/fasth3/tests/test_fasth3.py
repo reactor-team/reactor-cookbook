@@ -1693,3 +1693,27 @@ def test_no_weights_are_committed_alongside_the_model():
         if path.is_file() and path.suffix.lower() in WEIGHT_SUFFIXES
     ]
     assert not offenders, f"weights never live in git: {offenders}"
+
+
+def test_manifest_weight_set_is_the_pinned_snapshot():
+    from fasth3 import WEIGHTS_REF
+
+    manifest = yaml.safe_load((Path(__file__).parents[1] / "reactor.yaml").read_text())
+    assert manifest["runtime"]["weights_path"] == WEIGHTS_REF
+
+
+def test_snapshot_at_the_weights_root_is_accepted(tmp_path):
+    from fasth3 import DEFAULT_CHECKPOINT_DIR, REQUIRED_COMPONENTS, _require_weights
+
+    (tmp_path / "modular_model_index.json").write_text("{}")
+    for component in REQUIRED_COMPONENTS:
+        (tmp_path / component).mkdir()
+    _require_weights(tmp_path, tmp_path / DEFAULT_CHECKPOINT_DIR)
+
+
+def test_incomplete_weight_set_names_the_weights_value(tmp_path):
+    from fasth3 import WEIGHTS_REF, _require_weights
+
+    with pytest.raises(FileNotFoundError, match="modular_model_index.json") as raised:
+        _require_weights(tmp_path, tmp_path)
+    assert f"--weights {WEIGHTS_REF}" in str(raised.value)

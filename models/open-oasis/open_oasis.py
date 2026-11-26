@@ -7,8 +7,8 @@ from pathlib import Path
 
 import numpy as np
 from open_oasis_assets import (
-    download_checkpoints,
-    prepare_source,
+    check_source,
+    resolve_checkpoints,
     OpenOasisConfig,
     read_config,
 )
@@ -111,8 +111,8 @@ class OpenOasis(ReactorApp):
     def load(self, config_path: Path | None) -> None:
         config = read_config(config_path)
         self._config = config
-        prepare_source(config)
-        model_path, vae_path = download_checkpoints(config, get_weights_path())
+        check_source(config)
+        model_path, vae_path = resolve_checkpoints(config, get_weights_path())
         # Decode the explicitly selected, attributed application sample once.
         self._sample = decode_image(
             (Path(__file__).parent / "example_images/sample_image_0.png").read_bytes()

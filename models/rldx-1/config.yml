@@ -2,14 +2,24 @@
 # RLDX-1 ReactorPipeline configuration.
 
 # ----------------------------------------------------------------------
-# Checkpoint
+# Weights
 # ----------------------------------------------------------------------
-# RLDX-1 finetuned checkpoint (RLWRLD/RLDX-1-FT-ROBOCASA, ~13GB). Empty ->
-# the release weights root resolved by reactor_runtime.get_weights_path()
-# (REACTOR_WEIGHTS_PATH in production, the local cache during development). A
-# relative name resolves under that root; an absolute path bypasses it. The
-# checkpoint loads from this one local directory — nothing is fetched at run time.
-checkpoint_dir: ""
+# `python prepare_weights.py --output ./weights` downloads each repository at
+# its pinned commit into <weights>/<dir>. load() reads both folders under
+# reactor_runtime.get_weights_path() and never downloads; a missing file stops
+# it with an error that names the command.
+#   checkpoint - the finetuned policy, about 13.8 GB.
+#   base_model - the base VLM that the checkpoint names: its config, tokenizer
+#                and processor files only, about 5 MB. The checkpoint carries
+#                the whole backbone, so the base weights are not needed.
+checkpoint:
+  repo_id: RLWRLD/RLDX-1-FT-ROBOCASA
+  revision: 740c41d70731027221815388f8b97a4a6a85553b
+  dir: RLDX-1-FT-ROBOCASA
+base_model:
+  repo_id: RLWRLD/RLDX-1-VLM
+  revision: 2c0960dfa27647c7f211ead942bec947ab10940a
+  dir: RLDX-1-VLM
 
 # Embodiment tag the policy is built with (rldx.data.embodiment_tags.EmbodimentTag).
 embodiment_tag: GENERAL_EMBODIMENT

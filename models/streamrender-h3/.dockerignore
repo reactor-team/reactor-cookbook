@@ -6,3 +6,4 @@ demo/public/examples
 .env*
 *.local.json
 tests
+weights/

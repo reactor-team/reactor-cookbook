@@ -1,8 +1,7 @@
-"""Application-owned source, checkpoint preparation, and configuration."""
+"""Configuration, and the checks that the image holds the source and the weight set holds the checkpoints."""
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass
@@ -42,20 +41,19 @@ def read_config(path: Path | None) -> OpenOasisConfig:
     )
 
 
-def prepare_source(config: OpenOasisConfig) -> Path:
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
+
+
+def check_source(config: OpenOasisConfig) -> Path:
+    """Return the upstream checkout that the image build made, after checking its revision."""
     root = Path(config.source_path)
     if not (root / ".git").exists():
-        root.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "clone", "https://github.com/etched-ai/open-oasis.git", str(root)],
-            check=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(root), "checkout", "--detach", config.source_revision],
-            check=True,
+        raise FileNotFoundError(
+            f"Open-Oasis source not found at {root}; rebuild the image with `reactor build`"
         )
     revision = subprocess.check_output(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ["git", "-c", f"safe.directory={root}", "-C", str(root), "rev-parse", "HEAD"],
+        text=True,
     ).strip()
     if revision != config.source_revision:
         raise RuntimeError(
@@ -64,20 +62,15 @@ def prepare_source(config: OpenOasisConfig) -> Path:
     return root
 
 
-def download_checkpoints(
+def resolve_checkpoints(
     config: OpenOasisConfig, weights_root: Path
 ) -> tuple[Path, Path]:
-    from huggingface_hub import hf_hub_download
-
-    cache = weights_root / "huggingface"
-    cache.mkdir(parents=True, exist_ok=True)
-    kwargs = {
-        "repo_id": config.checkpoint_repo_id,
-        "revision": config.checkpoint_revision,
-        "cache_dir": cache,
-        "token": os.environ.get("HF_TOKEN") or os.environ.get("HF_KEY"),
-    }
-    return (
-        Path(hf_hub_download(filename=config.model_filename, **kwargs)),
-        Path(hf_hub_download(filename=config.vae_filename, **kwargs)),
-    )
+    """Return the model and VAE checkpoints in the weights folder; never download."""
+    paths = (weights_root / config.model_filename, weights_root / config.vae_filename)
+    for path in paths:
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Open-Oasis checkpoint not found at {path}; "
+                f"run `{PREPARE_COMMAND}` and deploy with `--weights ./weights`"
+            )
+    return paths

@@ -18,7 +18,7 @@ from matrix_game_3_5_camera import (
     MotionConfig,
     load_camera_path,
 )
-from matrix_game_3_5_config import MatrixConfig, prepare_runtime, read_config
+from matrix_game_3_5_config import MatrixConfig, check_runtime, read_config
 from matrix_game_3_5_images import validate_uploaded_image
 from matrix_game_3_5_model import (
     OUTPUT_FRAMES_PER_CHUNK,
@@ -83,7 +83,7 @@ class MatrixGame35(ReactorApp):
             config_path: Path to ``matrix_game_3_5.yaml`` from ``reactor.yaml``.
         """
         config = read_config(config_path, get_weights_path())
-        initial_pose, intrinsics = prepare_runtime(config)
+        initial_pose, intrinsics = check_runtime(config)
         self._camera_anchor = initial_pose.copy()
         self._config = config
         self._default_prompt = config.default_prompt

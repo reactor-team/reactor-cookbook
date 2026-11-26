@@ -15,9 +15,13 @@ reactor build
 reactor run --gpus device=0
 ```
 
-The first startup downloads the pinned checkpoint into the mounted weights
-directory. Use `--weights /path/to/weights` to choose storage and `--port`
-to change the HTTP port. Forward `HF_TOKEN` if authentication is required.
+`runtime.weights_path` is the pinned weight set
+`hf://stdstu123/Yume-5B-720P@b117c778405246a0b932d7ec5873b01a4840da3a`, so
+the checkpoint is ready before the container starts and nothing downloads at
+runtime (`HF_HUB_OFFLINE=1`). The image build clones the pinned YUME source.
+The weight set is the full 35 GB repository, which holds about 0.15 GB more
+than the model reads. Use `--weights` to run with another copy and `--port` to
+change the HTTP port. Caches and compiled kernels go to `~/.cache/yume`.
 
 ## Select a scene
 

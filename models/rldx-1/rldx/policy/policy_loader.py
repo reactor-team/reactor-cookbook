@@ -14,7 +14,7 @@ and general setup. Problems:
     injection, video delta adjustment) were scattered and hard to trace.
 
 PolicyLoader owns these concerns:
-  1. Resolve model_dir (local or HF snapshot download)
+  1. Resolve model_dir (a local checkpoint folder; nothing is downloaded)
   2. Load model (primary from_pretrained + fallback safetensors + key remap)
   3. Apply model-level tweaks (sample_timestep_from_beta_dist, denoising)
   4. Load processor (subdir-aware) + inject physics / conversation_image_first
@@ -34,7 +34,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from huggingface_hub import snapshot_download
 import torch
 from transformers import AutoConfig, AutoModel, AutoProcessor
 
@@ -106,13 +105,20 @@ class PolicyLoader:
         sample_timestep_from_beta_dist: bool = False,
         denoising_timesteps: list[float] | None = None,
         rtc_overrides: RTCOverrides | None = None,
+        base_model_path: str | None = None,
     ) -> LoaderResult:
-        """Full load pipeline. See module docstring for phase summary."""
+        """Full load pipeline. See module docstring for phase summary.
+
+        ``base_model_path`` is a local folder that replaces the base VLM id the
+        checkpoint names (``model_name`` in its model and processor configs),
+        so the backbone config and the tokenizer load from disk.
+        """
         model_dir = _resolve_model_dir(model_path)
-        model = _load_model(model_dir, device, deactivate_memory)
+        base_model_dir = _resolve_model_dir(base_model_path) if base_model_path else None
+        model = _load_model(model_dir, device, deactivate_memory, base_model_dir)
         _apply_model_tweaks(model, sample_timestep_from_beta_dist, denoising_timesteps)
 
-        processor = _load_processor(model_dir, model)
+        processor = _load_processor(model_dir, model, base_model_dir)
 
         modality_configs = processor.get_modality_configs()[embodiment_tag.value]
         collate_fn = processor.collator
@@ -151,8 +157,8 @@ class PolicyLoader:
 
 def _resolve_model_dir(model_path: str) -> Path:
     model_dir = Path(model_path)
-    if not model_dir.exists():
-        model_dir = Path(snapshot_download(model_path))
+    if not model_dir.is_dir():
+        raise FileNotFoundError(f"RLDX model folder does not exist: {model_dir}")
     return model_dir
 
 
@@ -160,6 +166,7 @@ def _load_model(
     model_dir: Path,
     device: int | str,
     deactivate_memory: bool,
+    base_model_dir: Path | None = None,
 ) -> Any:
     """Load model + optionally disable memory inference; return in eval mode."""
     config = AutoConfig.from_pretrained(model_dir, trust_remote_code=True)
@@ -169,7 +176,12 @@ def _load_model(
         config.use_memory = False
         config.concat_memory = False
 
-    model = AutoModel.from_pretrained(model_dir, device_map=device, torch_dtype=torch.bfloat16)
+    # A keyword that names a config field overrides the saved value, so the
+    # backbone reads its config from the local base folder.
+    overrides = {"model_name": str(base_model_dir)} if base_model_dir is not None else {}
+    model = AutoModel.from_pretrained(
+        model_dir, device_map=device, torch_dtype=torch.bfloat16, **overrides
+    )
     model.eval()
     return model
 
@@ -188,11 +200,14 @@ def _apply_model_tweaks(
         print(f"[Policy] Set fixed denoising timesteps: {denoising_timesteps}")
 
 
-def _load_processor(model_dir: Path, model: Any) -> BaseProcessor:
+def _load_processor(
+    model_dir: Path, model: Any, base_model_dir: Path | None = None
+) -> BaseProcessor:
     """Load processor (subdir-aware) + inject physics config + image-first flag."""
     _processor_subdir = model_dir / "processor"
     _processor_path = _processor_subdir if _processor_subdir.exists() else model_dir
-    processor: BaseProcessor = AutoProcessor.from_pretrained(_processor_path)
+    overrides = {"model_name": str(base_model_dir)} if base_model_dir is not None else {}
+    processor: BaseProcessor = AutoProcessor.from_pretrained(_processor_path, **overrides)
 
     # Fallback: inject physics config from model config if processor lacks it
     if not processor.physics_keys and getattr(model.config, "physics_keys", None):

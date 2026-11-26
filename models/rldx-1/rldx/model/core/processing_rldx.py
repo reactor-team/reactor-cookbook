@@ -770,6 +770,8 @@ class RLDXProcessor(BaseProcessor):
                 "formalize_language",
                 "apply_sincos_state_encoding",
                 "conversation_image_first",
+                # A local folder for the base VLM that the checkpoint names.
+                "model_name",
             ]
             for key in override_keys:
                 if key in kwargs:

@@ -37,7 +37,7 @@ class LingBotBackend:
         import torch.distributed as dist
         import wan
         from wan.configs import WAN_CONFIGS
-        from wan.interactive_fast import InteractiveFastRollout
+        from lingbot_world_v1_rollout import InteractiveFastRollout
 
         self._torch = torch
         self._rank = rank

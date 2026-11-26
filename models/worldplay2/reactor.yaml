@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: worldplay2
-  version: v0.2.0
+  version: v0.3.0
   public: false
   description: Steer an uploaded scene with native WorldPlay2 action-conditioned chunks.
   resources:
@@ -19,6 +19,7 @@ model:
 runtime:
   import: worldplay2_app:WorldPlay2
   config: worldplay2.yaml
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
   weights_path: ./weights
 
 build:
@@ -44,6 +45,7 @@ build:
       && git -C /opt/worldplay2 fetch --depth 1 https://github.com/WorldPlay2/WorldPlay2.git 6c7dd87c09b99b9c9086d6265b50db34f997502a
       && git -C /opt/worldplay2 checkout --detach FETCH_HEAD
   runtime_env:
+    HF_HUB_OFFLINE: "1"
     PYTHONPATH: /opt/worldplay2
     TOKENIZERS_PARALLELISM: "false"
     OMP_NUM_THREADS: "8"

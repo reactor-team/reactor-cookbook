@@ -6,10 +6,11 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# Local environments and upstream checkouts live in the mounted weights cache.
+# Local environments, and the folder that prepare_weights.py builds; the deploy
+# uploads it as the weight set.
 .venv/
 venv/
-Matrix-Game-3.5/
+weights/
 
 # Editor and operating-system state
 .vscode/

@@ -36,7 +36,7 @@ first-frame behavior.
 - Working hardware EGL/OpenGL for the game capture. CUDA availability alone
   does not establish this; the game refuses software rendering by default.
 - Space for the model image, game assets and weights. The complete three-scene
-  resource set occupies approximately 42 GiB, plus the Hugging Face download cache.
+  resource set occupies approximately 42 GiB.
 - Node.js 22.12+ and npm for the demo.
 
 ## 1. Install the CLI
@@ -53,18 +53,35 @@ inference preset. For racing, `prompt_mode: dynamic` enables the original
 engine-generated captions; `fixed` uses the released scene prompt. The two
 shooter scenes always use their original fixed prompts.
 
+Build the weights folder once. It downloads all three scenes and the shared
+assets at a pinned revision and checks each file's size and SHA256:
+
+```sh
+pip install huggingface-hub numpy pyyaml
+python prepare_weights.py --output ./weights
+```
+
+The upstream downloader copies each file out of the Hugging Face cache, so the
+run needs about twice the folder's size. Set `HF_HUB_CACHE` to a scratch folder
+to keep the cache copy off your home disk, and delete it after the run.
+
+Then validate, build and run:
+
 ```sh
 reactor validate
 reactor build
 reactor run --gpus device=0 --port 8080
 ```
 
+Deploy the same folder with `reactor deploy production --weights ./weights`.
+
 Select a GPU that is available to you. The image uses Reactor Runtime 3.8.3,
 Python 3.12 and the original CUDA 13.2/PyTorch 2.12 inference dependencies.
 The manifest builds both native game engines and pins one upstream checkout.
-First startup downloads all three scenes and shared assets into
-`runtime.weights_path`, checking the original manifests' file sizes and hashes.
-Further starts reuse those files. Rebuild after changing configuration or code.
+Startup downloads nothing. It verifies the files in `runtime.weights_path`
+(`./weights`) against the original manifests, and a missing file stops it with
+an error that names `python prepare_weights.py --output ./weights`. Rebuild after
+changing configuration or code.
 
 Check readiness from another terminal:
 

@@ -40,28 +40,7 @@ def test_config_paths_expand_home_and_ignore_cwd(tmp_path, monkeypatch, value):
     assert config.asset_path == (tmp_path / expected).resolve()
 
 
-@pytest.mark.parametrize(
-    "damaged",
-    [
-        "generator/model.pt",
-        "pretrained/vae/config.json",
-        "pretrained/vae/diffusion_pytorch_model.safetensors",
-        "pretrained/text_encoder/config.json",
-        "pretrained/text_encoder/model.safetensors.index.json",
-        "pretrained/text_encoder/model-00001-of-00003.safetensors",
-        "pretrained/text_encoder/model-00002-of-00003.safetensors",
-        "pretrained/text_encoder/model-00003-of-00003.safetensors",
-        "pretrained/tokenizer/tokenizer_config.json",
-        "pretrained/tokenizer/tokenizer.json",
-        "pretrained/tokenizer/spiece.model",
-        "pretrained/tokenizer/special_tokens_map.json",
-    ],
-)
-@pytest.mark.parametrize("empty", [False, True])
-def test_asset_download_repairs_each_required_file(
-    tmp_path, monkeypatch, damaged, empty
-):
-    import sys
+def _checked_config(tmp_path, monkeypatch):
     from dataclasses import replace
 
     import zing_assets as assets
@@ -74,61 +53,81 @@ def test_asset_download_repairs_each_required_file(
         "run",
         lambda *a, **kw: SimpleNamespace(stdout=config.source_revision),
     )
-    root = config.asset_path
-    files = [
-        "generator/model.pt",
-        "pretrained/vae/config.json",
-        "pretrained/vae/diffusion_pytorch_model.safetensors",
-        "pretrained/text_encoder/config.json",
-        "pretrained/text_encoder/model.safetensors.index.json",
-        "pretrained/text_encoder/model-00001-of-00003.safetensors",
-        "pretrained/text_encoder/model-00002-of-00003.safetensors",
-        "pretrained/text_encoder/model-00003-of-00003.safetensors",
-        "pretrained/tokenizer/tokenizer_config.json",
-        "pretrained/tokenizer/tokenizer.json",
-        "pretrained/tokenizer/spiece.model",
-        "pretrained/tokenizer/special_tokens_map.json",
-    ]
+    return assets, config
 
-    def populate(**kwargs):
-        for name in files:
-            path = root / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"fixture")
 
-    populate()
-    target = root / damaged
+@pytest.mark.parametrize("empty", [False, True])
+def test_missing_checkpoint_file_names_the_weight_set_and_downloads_nothing(
+    tmp_path, monkeypatch, empty
+):
+    import sys
+
+    assets, config = _checked_config(tmp_path, monkeypatch)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+    for name in assets.REQUIRED_FILES:
+        path = config.asset_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
+    assets.check_assets(config)
+    damaged = config.asset_path / "generator/model.pt"
     if empty:
-        target.write_bytes(b"")
+        damaged.write_bytes(b"")
     else:
-        target.unlink()
+        damaged.unlink()
+    with pytest.raises(FileNotFoundError, match="generator/model.pt") as raised:
+        assets.check_assets(config)
+    assert f"--weights {assets.weights_ref(config)}" in str(raised.value)
 
-    def download_snapshot(**kwargs):
-        # Simulate Hub reusing stale metadata for an existing zero-byte file.
-        populate()
-        if empty and not kwargs.get("force_download"):
-            target.write_bytes(b"")
 
-    download = Mock(side_effect=download_snapshot)
-    monkeypatch.setitem(
-        sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=download)
+def test_manifest_weight_set_matches_the_pinned_checkpoint():
+    import yaml
+    import zing_assets as assets
+
+    config = assets.read_config(Path(__file__).parents[1] / "zing.yaml", Path("/w"))
+    manifest = yaml.safe_load((Path(__file__).parents[1] / "reactor.yaml").read_text())
+    assert manifest["runtime"]["weights_path"] == assets.weights_ref(config)
+    assert manifest["build"]["runtime_env"]["HF_HUB_OFFLINE"] == "1"
+
+
+def test_source_at_another_revision_is_refused(tmp_path, monkeypatch):
+    assets, config = _checked_config(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        assets.subprocess, "run", lambda *a, **kw: SimpleNamespace(stdout="0" * 40)
     )
-    monkeypatch.setenv("HF_TOKEN", "preferred")
-    monkeypatch.setenv("HF_KEY", "legacy")
-    assets.prepare_assets(config)
-    assert download.call_count == (2 if empty else 1)
-    if empty:
-        assert download.call_args.kwargs["force_download"] is True
-        assert download.call_args.kwargs["allow_patterns"] == [damaged]
-    assert download.call_args.kwargs["revision"] == config.asset_revision
-    assert download.call_args.kwargs["token"] == "preferred"
-    download.reset_mock()
-    assets.prepare_assets(config)
-    download.assert_not_called()
-    target.unlink()
-    download.side_effect = None
-    with pytest.raises(RuntimeError, match="missing or empty"):
-        assets.prepare_assets(config)
+    with pytest.raises(RuntimeError, match="expected"):
+        assets.check_assets(config)
+
+
+def test_missing_source_asks_for_a_rebuild(tmp_path):
+    from dataclasses import replace
+
+    import zing_assets as assets
+
+    config = replace(
+        assets.read_config(Path(__file__).parents[1] / "zing.yaml", tmp_path),
+        source_path=tmp_path / "absent",
+    )
+    with pytest.raises(FileNotFoundError, match="reactor build"):
+        assets.check_assets(config)
+
+
+def test_caches_leave_the_weights_folder(tmp_path, monkeypatch):
+    import zing_assets as assets
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    for name in (
+        "HF_HOME",
+        "HUGGINGFACE_HUB_CACHE",
+        "XDG_CACHE_HOME",
+        "TORCHINDUCTOR_CACHE_DIR",
+        "CUDA_CACHE_PATH",
+    ):
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
+    config = assets.read_config(Path(__file__).parents[1] / "zing.yaml", tmp_path / "w")
+    assets.configure_environment(config)
+    assert not (tmp_path / "w").exists()
+    assert (tmp_path / "home" / ".cache" / "zing-0-5").is_dir()
 
 
 def test_contract_covers_text_image_and_all_native_controls() -> None:

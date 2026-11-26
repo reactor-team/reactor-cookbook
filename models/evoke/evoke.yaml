@@ -1,5 +1,6 @@
 source:
-  path: Evoke
+  # The image holds this checkout, patched, at the pinned revision (build.run).
+  path: /opt/Evoke
   url: https://github.com/AlayaLab/Evoke.git
   revision: 74d268516d95c8fceadd2378f91a73f9f187042b
 

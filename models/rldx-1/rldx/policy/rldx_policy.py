@@ -78,12 +78,15 @@ class RLDXPolicy(BasePolicy):
         rtc_inference_exec_horizon: int | None = None,
         rtc_jacobian_beta: float | None = None,
         rtc_jacobian_steps_only: int | None = None,
+        base_model_path: str | None = None,
     ):
         """Initialize the RLDX Policy.
 
         Args:
             embodiment_tag: The embodiment tag defining the robot/environment type
             model_path: Path to the pretrained model checkpoint directory
+            base_model_path: Local folder of the base VLM that the checkpoint
+                names; its config and tokenizer load from there
             device: Device to run the model on (e.g., 'cuda:0', 0, 'cpu')
             strict: Whether to enforce strict input validation (default: True)
             rtc_inference_mode / rtc_inference_delay / rtc_inference_exec_horizon /
@@ -120,6 +123,7 @@ class RLDXPolicy(BasePolicy):
                 jacobian_beta=rtc_jacobian_beta,
                 jacobian_steps_only=rtc_jacobian_steps_only,
             ),
+            base_model_path=base_model_path,
         )
         self.model = loader_result.model
         self.processor = loader_result.processor

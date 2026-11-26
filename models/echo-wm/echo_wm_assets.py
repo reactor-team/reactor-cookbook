@@ -1,9 +1,15 @@
-"""Resolve Echo-WM source, model assets, configuration, and built-in scenes."""
+"""Read the Echo-WM config, check its source and weights, and load built-in scenes.
+
+The checks only resolve and verify files; they never download. The image
+holds the pinned upstream source, and ``prepare_weights.py`` builds the
+weights folder.
+"""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -11,6 +17,25 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+PREPARE_COMMAND = "HF_TOKEN=<your token> python prepare_weights.py --output ./weights"
+_REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
+# The files of the pinned Gemma 3 revision that the upstream text encoder,
+# tokenizer, and processor loaders read.
+GEMMA_FILES = (
+    "added_tokens.json",
+    "chat_template.json",
+    "config.json",
+    "generation_config.json",
+    *(f"model-{index:05d}-of-00005.safetensors" for index in range(1, 6)),
+    "model.safetensors.index.json",
+    "preprocessor_config.json",
+    "processor_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer.model",
+    "tokenizer_config.json",
+)
 
 
 @dataclass(frozen=True)
@@ -42,7 +67,6 @@ class EchoWMConfig:
     source_revision: str
     checkpoint: ModelAsset
     gemma: ModelAsset
-    cache_dir: Path
     runtime_dir: Path
     width: int
     height: int
@@ -104,18 +128,29 @@ def _boolean(value: Any, name: str) -> bool:
     return value
 
 
+def _revision(value: Any, name: str) -> str:
+    revision = str(value or "")
+    if not _REVISION_PATTERN.fullmatch(revision):
+        raise ValueError(f"{name} must be a full 40-character commit")
+    return revision
+
+
 def _asset(value: Any, name: str, root: Path) -> ModelAsset:
     raw = _mapping(value, name)
     return ModelAsset(
         path=_local_path(raw["path"], root),
         repo_id=str(raw["repo_id"]),
-        revision=str(raw["revision"]),
+        revision=_revision(raw.get("revision"), f"{name}.revision"),
         filename=str(raw["filename"]) if raw.get("filename") else None,
     )
 
 
 def read_config(path: Path | None, weights_root: Path | None = None) -> EchoWMConfig:
-    """Read and validate the Echo-WM adapter configuration."""
+    """Read and validate the Echo-WM adapter configuration.
+
+    Checkpoint paths resolve under ``weights_root``, the folder that
+    ``prepare_weights.py`` builds; without one they resolve beside the config.
+    """
     if path is None:
         raise ValueError("Echo-WM requires echo_wm.yaml")
     root = weights_root if weights_root is not None else path.resolve().parent
@@ -151,10 +186,9 @@ def read_config(path: Path | None, weights_root: Path | None = None) -> EchoWMCo
     return EchoWMConfig(
         source_path=_local_path(source["path"], root),
         source_url=str(source["url"]),
-        source_revision=str(source["revision"]),
+        source_revision=_revision(source.get("revision"), "source.revision"),
         checkpoint=_asset(assets.get("checkpoint"), "assets.checkpoint", root),
         gemma=_asset(assets.get("gemma"), "assets.gemma", root),
-        cache_dir=_local_path(assets["cache_dir"], root),
         runtime_dir=_local_path(assets["runtime_dir"], root),
         width=width,
         height=height,
@@ -200,10 +234,9 @@ def read_config(path: Path | None, weights_root: Path | None = None) -> EchoWMCo
 
 
 def configure_cache_environment(config: EchoWMConfig) -> None:
-    """Keep model and compiled-kernel caches under the mounted weights root."""
+    """Create the writable runtime folder and point compiled-kernel caches into it."""
     runtime_cache = config.runtime_dir / "cache"
     environment = {
-        "HF_HOME": config.cache_dir,
         "XDG_CACHE_HOME": runtime_cache,
         "TORCHINDUCTOR_CACHE_DIR": runtime_cache / "torchinductor",
         "CUDA_CACHE_PATH": runtime_cache / "cuda",
@@ -215,66 +248,46 @@ def configure_cache_environment(config: EchoWMConfig) -> None:
     os.environ.setdefault("FLASH_ATTENTION_CUTE_DSL_CACHE_ENABLED", "1")
 
 
-def prepare_assets(config: EchoWMConfig) -> None:
-    """Clone or download missing public assets into configured NVMe paths."""
-    config.cache_dir.mkdir(parents=True, exist_ok=True)
-    config.runtime_dir.mkdir(parents=True, exist_ok=True)
-    if not (config.source_path / ".git").is_dir():
-        config.source_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "clone", config.source_url, str(config.source_path)],
-            check=True,
+def check_assets(config: EchoWMConfig) -> None:
+    """Check the source in the image and the weights folder; never download."""
+    check_source(config)
+    check_weights(config)
+
+
+def check_source(config: EchoWMConfig) -> None:
+    """Raise unless the image holds the upstream checkout at the pinned revision."""
+    root = config.source_path
+    if not (root / ".git").is_dir():
+        raise FileNotFoundError(
+            f"Echo-WM source not found at {root}; rebuild the image with `reactor build`"
         )
-    git = ["git", "-c", f"safe.directory={config.source_path}"]
-    subprocess.run(
-        [
-            *git,
-            "-C",
-            str(config.source_path),
-            "checkout",
-            "--detach",
-            config.source_revision,
-        ],
-        check=True,
-    )
+    # The image's checkout can belong to another user than the runtime's.
     actual_revision = subprocess.run(
-        [*git, "-C", str(config.source_path), "rev-parse", "HEAD"],
+        ["git", "-c", f"safe.directory={root}", "-C", str(root), "rev-parse", "HEAD"],
         check=True,
         capture_output=True,
         text=True,
     ).stdout.strip()
     if actual_revision != config.source_revision:
         raise RuntimeError(
-            f"Echo-WM source revision is {actual_revision}; expected {config.source_revision}"
+            f"Echo-WM source revision is {actual_revision}; expected "
+            f"{config.source_revision}; rebuild the image with `reactor build`"
         )
-    if not config.checkpoint.path.is_file():
-        from huggingface_hub import hf_hub_download
 
-        if config.checkpoint.filename is None:
-            raise ValueError("Echo-WM checkpoint filename is required")
-        config.checkpoint.path.parent.mkdir(parents=True, exist_ok=True)
-        hf_hub_download(
-            repo_id=config.checkpoint.repo_id,
-            revision=config.checkpoint.revision,
-            filename=config.checkpoint.filename,
-            local_dir=config.checkpoint.path.parent,
-            cache_dir=config.cache_dir,
+
+def check_weights(config: EchoWMConfig) -> None:
+    """Raise ``FileNotFoundError`` naming the fix when a checkpoint file is absent."""
+    expected = [
+        config.checkpoint.path,
+        *(config.gemma.path / name for name in GEMMA_FILES),
+    ]
+    missing = [path for path in expected if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"Echo-WM weights are incomplete: {missing[0]} is missing "
+            f"({len(missing)} files). Accept the Gemma 3 terms on Hugging Face, "
+            f"run `{PREPARE_COMMAND}`, and deploy with `--weights ./weights`."
         )
-    if not (config.gemma.path / "model.safetensors.index.json").is_file():
-        from huggingface_hub import snapshot_download
-
-        config.gemma.path.mkdir(parents=True, exist_ok=True)
-        try:
-            snapshot_download(
-                repo_id=config.gemma.repo_id,
-                revision=config.gemma.revision,
-                local_dir=config.gemma.path,
-                cache_dir=config.cache_dir,
-            )
-        except Exception as error:
-            raise RuntimeError(
-                "Gemma 3 is gated; accept its public license and set HF_TOKEN before startup"
-            ) from error
 
 
 def load_examples(config: EchoWMConfig) -> tuple[ExampleScene, ...]:

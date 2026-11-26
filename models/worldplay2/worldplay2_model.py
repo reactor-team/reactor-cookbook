@@ -20,6 +20,43 @@ logger = logging.getLogger(__name__)
 MAX_CHUNKS = 1024 // 4
 
 
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
+# Each entry: Hugging Face repo, pinned revision, folder in the weights root, files to fetch.
+BASE_REPO = "Wan-AI/Wan2.2-I2V-A14B"
+BASE_REVISION = "206a9ee1b7bfaaf8f7e4d81335650533490646a3"
+BASE_FILES = (
+    "models_t5_umt5-xxl-enc-bf16.pth",
+    "Wan2.1_VAE.pth",
+    "google/umt5-xxl/special_tokens_map.json",
+    "google/umt5-xxl/spiece.model",
+    "google/umt5-xxl/tokenizer.json",
+    "google/umt5-xxl/tokenizer_config.json",
+    "high_noise_model/config.json",
+    "low_noise_model/config.json",
+)
+FAST_REPO = "aejion/WorldPlay2-Fast"
+FAST_REVISION = "1991d1cd9a3b116c2f6d9513a220c0ee5077ab79"
+FAST_FILES = (
+    "high_noise_model/diffusion_pytorch_model.safetensors",
+    "low_noise_model/diffusion_pytorch_model.safetensors",
+)
+
+
+def check_weights(weights_root: Path) -> None:
+    """Raise when the weights folder lacks a file that the model reads. Never downloads."""
+    required = [weights_root / "base" / name for name in BASE_FILES] + [
+        weights_root / "fast" / name for name in FAST_FILES
+    ]
+    missing = [
+        str(path) for path in required if not path.is_file() or path.stat().st_size == 0
+    ]
+    if missing:
+        raise FileNotFoundError(
+            f"WorldPlay2 weights lack: {', '.join(missing)}. "
+            f"Run `{PREPARE_COMMAND}` and deploy with `--weights ./weights`."
+        )
+
+
 @dataclass(frozen=True)
 class Settings:
     height: int = 448
@@ -153,6 +190,7 @@ class WorldPlay2Model:
         self._pending = None
 
     def load(self, settings: Settings, weights_root: Path) -> None:
+        check_weights(weights_root)
         from configs import I2V_A14B_CONFIG
 
         from worldplay2_inference.pipeline import WorldPlay2Pipeline

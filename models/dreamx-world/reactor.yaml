@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: dreamx-world-5b
-  version: v0.3.1
+  version: v0.4.0
   description: |
     Explore an autoregressive world from an image, event prompt, and native
     composable camera controls.
@@ -20,8 +20,8 @@ model:
 runtime:
   import: dreamx_world:DreamXWorld
   config: dreamx_world.yaml
-  # Source checkout, checkpoints, and downloads stay here.
-  weights_path: ~/.cache/reactor_registry/dreamx-world
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 4
@@ -40,3 +40,13 @@ build:
   system_packages:
     - ca-certificates
     - git
+  runtime_env:
+    HF_HUB_OFFLINE: "1"
+  # Pin the upstream source that dreamx_world.yaml's source.path names.
+  run:
+    - >-
+      git init /opt/DreamX-World
+      && git -C /opt/DreamX-World fetch --depth 1
+      https://github.com/AMAP-ML/DreamX-World.git
+      a1f4c6e5e45600718e5236955f2e0702e53fc275
+      && git -C /opt/DreamX-World checkout --detach FETCH_HEAD

@@ -1,11 +1,13 @@
 source:
-  path: lingbot-world-v2
+  # The image build clones the pinned revision here (reactor.yaml, build.run).
+  path: /opt/lingbot-world-v2
   url: https://github.com/Robbyant/lingbot-world-v2.git
   revision: 2648877f763a06cc743bcd919936da4d25f12e7b
 
 assets:
   checkpoint:
-    path: lingbot-world-v2-14b-causal-fast
+    # prepare_weights.py puts the pinned repository at the weights root.
+    path: .
     repo_id: robbyant/lingbot-world-v2-14b-causal-fast
     revision: 5c33dd40b213598c418fd25bff30fdbd23fd38a7
 

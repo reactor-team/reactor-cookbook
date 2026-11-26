@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: sgf-plus
-  version: v0.2.2
+  version: v0.3.0
   description: Generate long silent videos from text and optional uploaded images with SGF+.
   resources:
     gpu:
@@ -18,7 +18,8 @@ model:
 runtime:
   import: sgf_plus:SGFPlus
   config: sgf_plus.yaml
-  weights_path: ~/.cache/reactor_registry/sgf-plus
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
 
 build:
   runtime_version: "3.8.1"
@@ -30,5 +31,6 @@ build:
     - git clone https://github.com/Zihan-Su/Self_Gradient_Forcing_Plus.git /opt/sgf-plus && git -C /opt/sgf-plus checkout 14cda9bb35f87000fbc11138a5170002d213effe
     - pip install --no-build-isolation flash-attn==2.8.3
   runtime_env:
+    HF_HUB_OFFLINE: "1"
     TOKENIZERS_PARALLELISM: "false"
     PYTORCH_ALLOC_CONF: expandable_segments:True

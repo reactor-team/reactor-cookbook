@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib
+import importlib.abc
+import importlib.util
 import inspect
 import json
 import queue
@@ -16,6 +18,39 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+
+_PATCHED_UPSTREAM = Path(__file__).resolve().with_name("upstream_patched")
+
+
+class _PatchedUpstreamFinder(importlib.abc.MetaPathFinder):
+    """Serve the upstream modules that ``upstream_patched/`` carries changed copies of.
+
+    The copies keep their upstream module names, so their relative imports and
+    every upstream import of them resolve as they do in the pinned source.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.files = {
+            ".".join(path.relative_to(root).with_suffix("").parts): path
+            for path in root.rglob("*.py")
+        }
+
+    def find_spec(self, name, path=None, target=None):
+        file = self.files.get(name)
+        if file is None:
+            return None
+        return importlib.util.spec_from_file_location(name, file)
+
+
+def _load_patched_upstream() -> None:
+    """Import the patched copies in place of the pinned source's own modules."""
+    finder = _PatchedUpstreamFinder(_PATCHED_UPSTREAM)
+    early = sorted(set(finder.files) & set(sys.modules))
+    if early:
+        raise RuntimeError(f"upstream modules imported before their patched copies: {early}")
+    sys.meta_path.insert(0, finder)
+
 
 _RESPONSE_PREFIX = "REACTOR_EVOKE_RESPONSE "
 # The released launcher's negative prompt (scripts/inference/infer_batch.py NEG). CFG is off
@@ -147,6 +182,7 @@ class EvokeRuntime:
                 if entry and Path(entry).resolve() not in {source_path, adapter_path}
             ),
         ]
+        _load_patched_upstream()
         self._runtime_root = Path(settings["runtime_root"]).resolve()
         self._runtime_root.mkdir(parents=True, exist_ok=True)
         self._default_image = Path(settings["default_image"]).resolve()

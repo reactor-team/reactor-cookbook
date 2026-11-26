@@ -24,7 +24,7 @@ from lingbot_world_v1_camera import (
 from lingbot_world_v1_config import (
     LingBotConfig,
     Sample,
-    prepare_runtime,
+    check_runtime,
     read_config,
 )
 from lingbot_world_v1_images import (
@@ -101,7 +101,7 @@ class LingBotWorldV1(ReactorApp):
             config_path: Path to ``lingbot_world_v1.yaml`` from ``reactor.yaml``.
         """
         config = read_config(config_path)
-        prepare_runtime(config)
+        check_runtime(config)
         self._config = config
         self._default_prompt = config.samples[0].prompt
         self._seed = config.seed

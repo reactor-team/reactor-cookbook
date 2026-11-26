@@ -1,25 +1,70 @@
-"""Prepare pinned public HY-World 1.5 sources, weights, and example images."""
+"""Read the HY-World 1.5 config and check its source, weights, and example images.
+
+Nothing here downloads. The image holds the upstream source at the pinned
+revision, and ``prepare_weights.py`` builds the weights folder.
+"""
 
 from __future__ import annotations
 
 import csv
-import logging
 import os
 import re
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 import yaml
 
-logger = logging.getLogger(__name__)
-
 SOURCE_ENV = "HY_WORLDPLAY_PATH"
-BASE_MODEL_ENV = "HY_WORLDPLAY_BASE_MODEL_PATH"
-ACTION_MODEL_ENV = "HY_WORLDPLAY_ACTION_MODEL_PATH"
-VISION_MODEL_ENV = "HY_WORLDPLAY_VISION_ENCODER_PATH"
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
+FIX = f"Run `{PREPARE_COMMAND}` and deploy with `--weights ./weights`."
+# Writable state of the model process. The weights folder is read-only.
+CACHE_ROOT = Path("~/.cache/hy-world-1-5")
+
+# The files of each pinned repository that the upstream pipeline reads, at
+# their repository paths. The repositories also hold other checkpoints and
+# framework copies, which the weights folder skips.
+BASE_MODEL_FILES = (
+    "scheduler/scheduler_config.json",
+    "transformer/480p_i2v/config.json",
+    "transformer/480p_i2v/diffusion_pytorch_model.safetensors",
+    "vae/config.json",
+    "vae/diffusion_pytorch_model.safetensors",
+)
+ACTION_MODEL_FILES = ("ar_distilled_action_model/model.safetensors",)
+QWEN_FILES = (
+    "chat_template.json",
+    "config.json",
+    "generation_config.json",
+    "merges.txt",
+    *(f"model-0000{index}-of-00005.safetensors" for index in range(1, 6)),
+    "model.safetensors.index.json",
+    "preprocessor_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+)
+BYT5_FILES = (
+    "config.json",
+    "generation_config.json",
+    "pytorch_model.bin",
+    "special_tokens_map.json",
+    "tokenizer_config.json",
+)
+GLYPH_FILES = (
+    "assets/color_idx.json",
+    "assets/multilingual_10-lang_idx.json",
+    "checkpoints/byt5_model.pt",
+)
+VISION_ENCODER_FILES = ("config.json", "model.safetensors")
+VISION_PROCESSOR_FILES = ("preprocessor_config.json",)
+
+# Where the upstream pipeline reads each encoder, relative to the base model.
+_QWEN_DIR = "text_encoder/llm"
+_BYT5_DIR = "text_encoder/byt5-small"
+_GLYPH_DIR = "text_encoder/Glyph-SDXL-v2"
+_VISION_DIR = "vision_encoder/siglip"
 
 _REVISION = re.compile(r"[0-9a-f]{40}")
 
@@ -43,6 +88,21 @@ class HubAsset:
 
 
 @dataclass(frozen=True)
+class HubFile:
+    """One file of a pinned repository and the folder it is written into."""
+
+    repo_id: str
+    revision: str
+    filename: str
+    local_dir: Path
+
+    @property
+    def path(self) -> Path:
+        """Return the file's path in the weights folder."""
+        return self.local_dir / self.filename
+
+
+@dataclass(frozen=True)
 class ExampleImage:
     """Pair one built-in reference image with its official scene prompt."""
 
@@ -60,8 +120,8 @@ class HYWorld15Config:
     qwen: HubAsset
     byt5: HubAsset
     glyph: HubAsset
-    flux_vision: HubAsset
-    public_vision_fallback: HubAsset
+    vision_encoder: HubAsset
+    weights_root: Path
     cache_path: Path
     seed: int
     inference_steps: int
@@ -72,17 +132,17 @@ class HYWorld15Config:
     max_chunks: int
 
 
-def read_config(
-    config_path: Path | None, weights_root: Path | None = None
-) -> HYWorld15Config:
-    """Read and validate the HY-World 1.5 adapter YAML."""
+def read_config(config_path: Path | None, weights_root: Path) -> HYWorld15Config:
+    """Read and validate the HY-World 1.5 adapter YAML.
+
+    ``weights_root`` is the folder that ``prepare_weights.py`` builds.
+    """
     if config_path is None:
         raise ValueError("HY-World 1.5 requires runtime.config in reactor.yaml")
     document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(document, dict):
         raise TypeError(f"{config_path}: expected a YAML mapping")
 
-    weights = weights_root if weights_root is not None else config_path.resolve().parent
     source_raw = _mapping(document.get("source"), "source")
     assets = _mapping(document.get("assets"), "assets")
     inference = _mapping(document.get("inference"), "inference")
@@ -90,20 +150,16 @@ def read_config(
     stream = _mapping(document.get("stream"), "stream")
 
     source_path = Path(
-        os.environ.get(SOURCE_ENV) or weights / str(source_raw["path"])
+        os.environ.get(SOURCE_ENV) or str(source_raw.get("path", "/opt/HY-WorldPlay"))
     ).expanduser()
     base_raw = _mapping(assets.get("base_model"), "assets.base_model")
     action_raw = _mapping(assets.get("action_model"), "assets.action_model")
-    base_path = Path(
-        os.environ.get(BASE_MODEL_ENV) or weights / str(base_raw["path"])
-    ).expanduser()
-    action_path = Path(
-        os.environ.get(ACTION_MODEL_ENV) or weights / str(action_raw["path"])
-    ).expanduser()
-    vision_raw = _mapping(assets["flux_vision"], "assets.flux_vision")
-    vision_path = Path(
-        os.environ.get(VISION_MODEL_ENV) or weights / str(vision_raw["path"])
-    ).expanduser()
+    base_path = weights_root / _relative_path(
+        base_raw.get("path"), "assets.base_model.path"
+    )
+    action_path = weights_root / _relative_path(
+        action_raw.get("path"), "assets.action_model.path"
+    )
 
     inference_steps = int(inference.get("steps", 4))
     if inference_steps != 4:
@@ -138,33 +194,16 @@ def read_config(
         ),
         base_model=_asset(base_path, base_raw, "assets.base_model"),
         action_model=_asset(action_path, action_raw, "assets.action_model"),
-        qwen=_asset(
-            weights / str(_mapping(assets["qwen"], "assets.qwen")["path"]),
-            assets["qwen"],
-            "assets.qwen",
+        qwen=_asset(base_path / _QWEN_DIR, assets.get("qwen"), "assets.qwen"),
+        byt5=_asset(base_path / _BYT5_DIR, assets.get("byt5"), "assets.byt5"),
+        glyph=_asset(base_path / _GLYPH_DIR, assets.get("glyph"), "assets.glyph"),
+        vision_encoder=_asset(
+            base_path / _VISION_DIR,
+            assets.get("vision_encoder"),
+            "assets.vision_encoder",
         ),
-        byt5=_asset(
-            weights / str(_mapping(assets["byt5"], "assets.byt5")["path"]),
-            assets["byt5"],
-            "assets.byt5",
-        ),
-        glyph=_asset(
-            weights / str(_mapping(assets["glyph"], "assets.glyph")["path"]),
-            assets["glyph"],
-            "assets.glyph",
-        ),
-        flux_vision=_asset(vision_path, vision_raw, "assets.flux_vision"),
-        public_vision_fallback=_asset(
-            weights
-            / str(
-                _mapping(
-                    assets["public_vision_fallback"], "assets.public_vision_fallback"
-                )["path"]
-            ),
-            assets["public_vision_fallback"],
-            "assets.public_vision_fallback",
-        ),
-        cache_path=weights / str(assets.get("cache", "cache")),
+        weights_root=weights_root,
+        cache_path=CACHE_ROOT.expanduser(),
         seed=int(inference.get("seed", 1)),
         inference_steps=inference_steps,
         memory_frames=memory_frames,
@@ -175,28 +214,66 @@ def read_config(
     )
 
 
-def prepare_runtime_assets(config: HYWorld15Config) -> None:
-    """Download every missing public source and model asset into the weights root."""
-    config.cache_path.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("HF_HOME", str(config.cache_path / "huggingface"))
-    os.environ.setdefault(
-        "HUGGINGFACE_HUB_CACHE", str(config.cache_path / "huggingface/hub")
+def huggingface_files(config: HYWorld15Config) -> tuple[HubFile, ...]:
+    """Return every Hugging Face file of the weights folder, at its pinned revision."""
+    vision = config.vision_encoder
+    return (
+        *_files(config.base_model, config.base_model.path, BASE_MODEL_FILES),
+        *_files(config.action_model, config.action_model.path, ACTION_MODEL_FILES),
+        *_files(config.qwen, config.qwen.path, QWEN_FILES),
+        *_files(config.byt5, config.byt5.path, BYT5_FILES),
+        *_files(vision, vision.path / "image_encoder", VISION_ENCODER_FILES),
+        *_files(vision, vision.path / "feature_extractor", VISION_PROCESSOR_FILES),
     )
-    os.environ.setdefault("MODELSCOPE_CACHE", str(config.cache_path / "modelscope"))
-    _ensure_git_checkout(config.source)
-    _ensure_hf_snapshot(
-        config.base_model,
-        allow_patterns=("transformer/480p_i2v/**", "vae/**", "scheduler/**"),
+
+
+def modelscope_files(config: HYWorld15Config) -> tuple[HubFile, ...]:
+    """Return every ModelScope file of the weights folder, at its pinned revision."""
+    return _files(config.glyph, config.glyph.path, GLYPH_FILES)
+
+
+def check_runtime_assets(config: HYWorld15Config) -> None:
+    """Check the source in the image, the weights folder, and the example table."""
+    check_source(config)
+    check_weights(config)
+    load_examples(config)
+
+
+def check_source(config: HYWorld15Config) -> None:
+    """Require the upstream checkout in the image at the pinned revision.
+
+    The check reads the checkout's revision and runs no other ``git`` command.
+    """
+    source = config.source
+    required = (
+        ".git",
+        "hyvideo/pipelines/worldplay_video_pipeline.py",
+        "assets/test_case.csv",
     )
-    _ensure_hf_file(
-        config.action_model,
-        filename="ar_distilled_action_model/model.safetensors",
-    )
-    _ensure_hf_snapshot(config.qwen)
-    _ensure_hf_snapshot(config.byt5)
-    _ensure_modelscope_snapshot(config.glyph)
-    _ensure_vision_encoder(config)
-    validate_runtime_paths(config)
+    missing = [name for name in required if not (source.path / name).exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"HY-World source at {source.path} lacks {', '.join(missing)}; "
+            "rebuild the image with `reactor build`"
+        )
+    actual = _run_git(["-C", str(source.path), "rev-parse", "HEAD"]).stdout.strip()
+    if actual != source.revision:
+        raise RuntimeError(
+            f"HY-World source revision is {actual}; expected {source.revision}. "
+            "Rebuild the image with `reactor build`."
+        )
+
+
+def check_weights(config: HYWorld15Config) -> None:
+    """Raise ``FileNotFoundError`` naming the fix when a weights file is absent."""
+    expected = [file.path for file in huggingface_files(config)]
+    expected += [file.path for file in modelscope_files(config)]
+    missing = [path for path in expected if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"HY-World 1.5 weights are incomplete in {config.weights_root}: "
+            f"{missing[0]} is missing ({len(missing)} files). {FIX}"
+        )
 
 
 def load_examples(config: HYWorld15Config) -> tuple[ExampleImage, ...]:
@@ -215,214 +292,14 @@ def load_examples(config: HYWorld15Config) -> tuple[ExampleImage, ...]:
     return tuple(examples)
 
 
-def validate_runtime_paths(config: HYWorld15Config) -> None:
-    """Require the complete source, checkpoint, encoder, and example layout."""
-    required = {
-        "HY-World source": config.source.path
-        / "hyvideo/pipelines/worldplay_video_pipeline.py",
-        "distilled action checkpoint": config.action_model.path
-        / "ar_distilled_action_model/model.safetensors",
-        "480p transformer": config.base_model.path / "transformer/480p_i2v/config.json",
-        "VAE": config.base_model.path / "vae/config.json",
-        "scheduler": config.base_model.path / "scheduler/scheduler_config.json",
-        "Qwen text encoder": config.qwen.path / "config.json",
-        "ByT5 encoder": config.byt5.path / "config.json",
-        "Glyph encoder": config.glyph.path / "checkpoints/byt5_model.pt",
-        "SigLIP image encoder": config.flux_vision.path / "image_encoder/config.json",
-        "SigLIP image processor": config.flux_vision.path
-        / "feature_extractor/preprocessor_config.json",
-        "example table": config.source.path / "assets/test_case.csv",
-    }
-    missing = [
-        f"{name}: {path}" for name, path in required.items() if not path.exists()
-    ]
-    if missing:
-        raise FileNotFoundError(
-            "Missing HY-World runtime assets:\n" + "\n".join(missing)
-        )
-    load_examples(config)
-
-
-def assemble_base_model(config: HYWorld15Config) -> None:
-    """Link separately pinned encoders into the directory layout the pipeline expects."""
-    links = {
-        config.base_model.path / "text_encoder/llm": config.qwen.path,
-        config.base_model.path / "text_encoder/byt5-small": config.byt5.path,
-        config.base_model.path / "text_encoder/Glyph-SDXL-v2": config.glyph.path,
-        config.base_model.path / "vision_encoder/siglip": config.flux_vision.path,
-    }
-    for destination, target in links.items():
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        relative_target = Path(os.path.relpath(target, destination.parent))
-        if destination.is_symlink():
-            if (
-                Path(os.readlink(destination)) == relative_target
-                and destination.resolve() == target.resolve()
-            ):
-                continue
-            destination.unlink()
-        elif destination.exists():
-            raise RuntimeError(
-                f"Model layout path already exists and is not the expected link: {destination}"
-            )
-        destination.symlink_to(relative_target, target_is_directory=True)
-
-
-def _ensure_git_checkout(repository: Repository) -> None:
-    """Clone a missing source tree and require its configured immutable revision."""
-    if not repository.path.exists():
-        logger.info(
-            "downloading source checkout %s to %s",
-            repository.url,
-            repository.path,
-        )
-        repository.path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix=".hy-world-source-", dir=repository.path.parent
-        ) as temporary:
-            checkout = Path(temporary) / "checkout"
-            _run(
-                [
-                    "git",
-                    "clone",
-                    "--filter=blob:none",
-                    "--no-checkout",
-                    repository.url,
-                    str(checkout),
-                ]
-            )
-            _run(
-                [
-                    "git",
-                    "-C",
-                    str(checkout),
-                    "checkout",
-                    "--detach",
-                    repository.revision,
-                ]
-            )
-            checkout.rename(repository.path)
-    if not (repository.path / ".git").exists():
-        raise RuntimeError(f"HY-World source must be a Git checkout: {repository.path}")
-    git = [
-        "git",
-        "-c",
-        f"safe.directory={repository.path}",
-        "-C",
-        str(repository.path),
-    ]
-    actual = _run([*git, "rev-parse", "HEAD"]).stdout.strip()
-    if actual != repository.revision:
-        raise RuntimeError(
-            f"HY-World source revision is {actual}; expected {repository.revision}"
-        )
-    dirty = _run([*git, "status", "--porcelain"]).stdout.strip()
-    if dirty:
-        raise RuntimeError(
-            f"HY-World source checkout has local changes: {repository.path}"
-        )
-
-
-def _ensure_hf_snapshot(
-    asset: HubAsset, allow_patterns: tuple[str, ...] | None = None
-) -> None:
-    """Download a pinned Hugging Face snapshot into its configured path."""
-    marker = asset.path / ".reactor-revision"
-    if (
-        marker.is_file()
-        and marker.read_text(encoding="utf-8").strip() == asset.revision
-    ):
-        return
-    from huggingface_hub import snapshot_download
-
-    asset.path.mkdir(parents=True, exist_ok=True)
-    snapshot_download(
-        repo_id=asset.repo_id,
-        revision=asset.revision,
-        local_dir=asset.path,
-        allow_patterns=list(allow_patterns) if allow_patterns else None,
+def _files(
+    asset: HubAsset, local_dir: Path, filenames: tuple[str, ...]
+) -> tuple[HubFile, ...]:
+    """Pair each file name of one pinned repository with its destination folder."""
+    return tuple(
+        HubFile(asset.repo_id, asset.revision, filename, local_dir)
+        for filename in filenames
     )
-    marker.write_text(asset.revision + "\n", encoding="utf-8")
-
-
-def _ensure_hf_file(asset: HubAsset, *, filename: str) -> None:
-    """Download one pinned Hugging Face file without duplicating it."""
-    destination = asset.path / filename
-    if destination.is_file():
-        return
-    from huggingface_hub import hf_hub_download
-
-    asset.path.mkdir(parents=True, exist_ok=True)
-    hf_hub_download(
-        repo_id=asset.repo_id,
-        revision=asset.revision,
-        filename=filename,
-        local_dir=asset.path,
-    )
-
-
-def _ensure_modelscope_snapshot(asset: HubAsset) -> None:
-    """Download the pinned public Glyph snapshot with ModelScope."""
-    marker = asset.path / ".reactor-revision"
-    if (
-        marker.is_file()
-        and marker.read_text(encoding="utf-8").strip() == asset.revision
-    ):
-        return
-    from modelscope.hub.snapshot_download import snapshot_download
-
-    asset.path.mkdir(parents=True, exist_ok=True)
-    snapshot_download(
-        asset.repo_id,
-        revision=asset.revision,
-        local_dir=str(asset.path),
-        allow_patterns=[
-            "assets/color_idx.json",
-            "assets/multilingual_10-lang_idx.json",
-            "checkpoints/byt5_model.pt",
-        ],
-    )
-    marker.write_text(asset.revision + "\n", encoding="utf-8")
-
-
-def _ensure_vision_encoder(config: HYWorld15Config) -> None:
-    """Prepare the official gated SigLIP encoder or its public architecture match."""
-    if os.environ.get(VISION_MODEL_ENV):
-        # read_config resolved the override into config.flux_vision.path already;
-        # an explicit path must be a complete layout, so downloads never run.
-        if not (config.flux_vision.path / "image_encoder/config.json").is_file():
-            raise FileNotFoundError(
-                f"{VISION_MODEL_ENV} is not a HY-World SigLIP layout: "
-                f"{config.flux_vision.path}"
-            )
-        return
-    if (config.flux_vision.path / "image_encoder/config.json").is_file():
-        return
-    try:
-        _ensure_hf_snapshot(
-            config.flux_vision,
-            allow_patterns=("image_encoder/**", "feature_extractor/**"),
-        )
-        return
-    except Exception as error:  # noqa: BLE001 - every gated-asset failure selects the fallback
-        logger.warning(
-            "official gated vision encoder unavailable; preparing the public "
-            "SigLIP SO400M architecture match: %s",
-            error,
-        )
-
-    _ensure_hf_snapshot(config.public_vision_fallback)
-    from transformers import SiglipImageProcessor, SiglipVisionModel
-
-    model = SiglipVisionModel.from_pretrained(config.public_vision_fallback.path)
-    processor = SiglipImageProcessor.from_pretrained(config.public_vision_fallback.path)
-    image_encoder = config.flux_vision.path / "image_encoder"
-    feature_extractor = config.flux_vision.path / "feature_extractor"
-    image_encoder.mkdir(parents=True, exist_ok=True)
-    feature_extractor.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(image_encoder)
-    processor.save_pretrained(feature_extractor)
-    del model
 
 
 def _asset(path: Path, raw: object, name: str) -> HubAsset:
@@ -440,6 +317,14 @@ def _mapping(value: object, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise TypeError(f"{name} must be a YAML mapping")
     return cast(dict[str, Any], value)
+
+
+def _relative_path(value: object, name: str) -> Path:
+    """Return a path that stays inside the weights folder."""
+    path = Path(str(value or ""))
+    if not path.parts or path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{name} must be a relative path inside the weights folder")
+    return path
 
 
 def _revision(value: object, name: str) -> str:
@@ -463,6 +348,15 @@ def _url(value: object, name: str) -> str:
     return value
 
 
-def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    """Run one bootstrap command and preserve its full failure output."""
-    return subprocess.run(command, check=True, text=True, capture_output=True)
+def _run_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run Git on the image's checkout without an interactive credential prompt."""
+    # The image's checkout can belong to another user than the runtime's.
+    environment = os.environ.copy()
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    return subprocess.run(
+        ["git", "-c", "safe.directory=*", *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
