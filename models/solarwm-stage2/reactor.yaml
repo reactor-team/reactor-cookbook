@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: solarwm-5b-stage2
-  version: v0.2.1
+  version: v0.3.0
   description: |
     Explore SolarWM's autoregressive Wan2.2 TI2V-5B world from an uploaded
     image, a prompt, and six-axis camera motion.
@@ -20,7 +20,8 @@ model:
 runtime:
   import: solarwm_stage2:SolarWM
   config: solarwm_stage2.yaml
-  weights_path: ~/.cache/reactor_registry/solarwm-stage2
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 4
@@ -50,8 +51,15 @@ build:
   runtime_env:
     PYTORCH_ALLOC_CONF: expandable_segments:True
     TOKENIZERS_PARALLELISM: "false"
+    HF_HUB_OFFLINE: "1"
+  # Pin the upstream source that solarwm_stage2.yaml's source.path names.
   run:
-    - git clone https://github.com/Junchao-cs/SolarWM.git /opt/solarwm-source && git -C /opt/solarwm-source checkout --detach 7c52987bd9c7c387884c4d963338b3ab6069c394
+    - >-
+      git init /opt/solarwm-source
+      && git -C /opt/solarwm-source fetch --depth 1
+      https://github.com/Junchao-cs/SolarWM.git
+      7c52987bd9c7c387884c4d963338b3ab6069c394
+      && git -C /opt/solarwm-source checkout --detach FETCH_HEAD
     - >-
       pip install --no-cache-dir --no-deps --no-build-isolation
       /opt/solarwm-source

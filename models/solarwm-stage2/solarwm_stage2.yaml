@@ -1,12 +1,13 @@
 source:
   path: /opt/solarwm-source
+  url: https://github.com/Junchao-cs/SolarWM.git
   revision: 7c52987bd9c7c387884c4d963338b3ab6069c394
   config: configs/examples/wan22_ti2v_5b/infer_stage2_sgf_camera_length.yaml
 
+# The gated repository that prepare_weights.py reads into the weights folder.
 assets:
   repo_id: junchaoh-cs/SolarWM
   revision: 0fc64396fb5b7480f2c0792a23db552008efe722
-  root: weights
 
 inference:
   seed: 42

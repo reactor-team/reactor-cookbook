@@ -32,97 +32,13 @@ def test_config_paths_expand_home_and_ignore_cwd(tmp_path, monkeypatch, value):
     path = Path(__file__).parents[1] / "solarwm_stage2.yaml"
     raw = yaml.safe_load(path.read_text())
     raw["source"]["path"] = value
-    raw["assets"]["root"] = value
     monkeypatch.setattr(assets.yaml, "safe_load", lambda text: raw)
     monkeypatch.chdir(tmp_path)
-    config = assets.read_config(path, tmp_path)
+    config = assets.read_config(path, Path("weights"))
     expected = Path(value).expanduser()
     assert config.source_path == (path.parent / expected).resolve()
-    assert config.base_path.parent == (tmp_path / expected).resolve()
-
-
-@pytest.mark.parametrize(
-    "damaged",
-    [
-        "SolarWM-5B-base/text_encoder/models_t5_umt5-xxl-enc-bf16.pth",
-        "SolarWM-5B-base/vae/Wan2.2_VAE.pth",
-        "SolarWM-5B-base/tokenizer/tokenizer.json",
-        "SolarWM-5B-base/tokenizer/tokenizer_config.json",
-        "SolarWM-5B-base/tokenizer/spiece.model",
-        "SolarWM-5B-base/tokenizer/special_tokens_map.json",
-        "SolarWM-5B-sgf-stage2-81f/model.pt",
-        "SolarWM-5B-sgf-stage2-81f/release-manifest.json",
-    ],
-)
-@pytest.mark.parametrize("empty", [False, True])
-def test_asset_download_repairs_each_required_file(
-    tmp_path, monkeypatch, damaged, empty
-):
-    import sys
-    from dataclasses import replace
-
-    import solarwm_stage2_config as assets
-
-    config = assets.read_config(
-        Path(__file__).parents[1] / "solarwm_stage2.yaml", tmp_path
-    )
-    config = replace(config, source_path=tmp_path / "source")
-    (config.source_path / ".git").mkdir(parents=True)
-    monkeypatch.setattr(
-        assets.subprocess,
-        "run",
-        lambda *a, **kw: SimpleNamespace(stdout=config.source_revision),
-    )
-    root = config.base_path.parent
-    files = [
-        "SolarWM-5B-base/text_encoder/models_t5_umt5-xxl-enc-bf16.pth",
-        "SolarWM-5B-base/vae/Wan2.2_VAE.pth",
-        "SolarWM-5B-base/tokenizer/tokenizer.json",
-        "SolarWM-5B-base/tokenizer/tokenizer_config.json",
-        "SolarWM-5B-base/tokenizer/spiece.model",
-        "SolarWM-5B-base/tokenizer/special_tokens_map.json",
-        "SolarWM-5B-sgf-stage2-81f/model.pt",
-        "SolarWM-5B-sgf-stage2-81f/release-manifest.json",
-    ]
-
-    def populate(**kwargs):
-        for name in files:
-            path = root / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"fixture")
-
-    populate()
-    target = root / damaged
-    if empty:
-        target.write_bytes(b"")
-    else:
-        target.unlink()
-
-    def download_snapshot(**kwargs):
-        # Simulate Hub reusing stale metadata for an existing zero-byte file.
-        populate()
-        if empty and not kwargs.get("force_download"):
-            target.write_bytes(b"")
-
-    download = Mock(side_effect=download_snapshot)
-    monkeypatch.setitem(
-        sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=download)
-    )
-
-    assets.prepare_runtime(config)
-    assert download.call_count == (2 if empty else 1)
-    if empty:
-        assert download.call_args.kwargs["force_download"] is True
-        assert download.call_args.kwargs["allow_patterns"] == [damaged]
-    assert download.call_args.kwargs["revision"] == config.checkpoint_revision
-
-    download.reset_mock()
-    assets.prepare_runtime(config)
-    download.assert_not_called()
-    target.unlink()
-    download.side_effect = None
-    with pytest.raises(RuntimeError, match="missing or empty"):
-        assets.prepare_runtime(config)
+    assert config.weights_root == (tmp_path / "weights").resolve()
+    assert config.base_path.parent == config.weights_root
 
 
 def _upload() -> UploadedFile:
@@ -387,7 +303,7 @@ def test_config_paths_use_explicit_weights_root(tmp_path):
     config = read_config(Path(__file__).parents[1] / "solarwm_stage2.yaml", tmp_path)
     assert config.base_path.is_relative_to(tmp_path)
     assert config.checkpoint_path.is_relative_to(tmp_path)
-    assert config.runtime_root.is_relative_to(tmp_path)
+    assert not config.runtime_root.is_relative_to(tmp_path)
 
 
 def test_application_with_fake_model():

@@ -16,20 +16,38 @@ commands are unavailable while a path is selected.
 
 ## Run
 
-Requires the Reactor CLI, Docker, NVIDIA Container Toolkit, sufficient model
-storage, and access to the gated
-[junchaoh-cs/SolarWM](https://huggingface.co/junchaoh-cs/SolarWM) repository.
+Requires the Reactor CLI, Docker, NVIDIA Container Toolkit and about 55 GB
+for the weights folder. The
+[junchaoh-cs/SolarWM](https://huggingface.co/junchaoh-cs/SolarWM) repository
+is gated: accept its terms on the model card with your Hugging Face account.
+
+Build the weights folder once, with a Hugging Face token that can read the
+gated repository. It downloads the files that Stage2 inference reads, about
+54 GB, at the pinned revision: the text encoder, tokenizer and VAE from
+`SolarWM-5B-base` and the `SolarWM-5B-sgf-stage2-81f` checkpoint. A second
+run downloads only missing files.
 
 ```sh
 cd models/solarwm-stage2
-reactor build
-reactor run --gpus device=0 -e HF_TOKEN
+pip install huggingface-hub pyyaml
+HF_TOKEN=<your token> python prepare_weights.py --output ./weights
 ```
 
-The build installs one pinned upstream checkout and Runtime 3.10. Startup
-validates that checkout and downloads missing checkpoint files to the mounted
-weights directory. Use `--weights /path/to/weights` to select storage and
-`--port` to change the default HTTP port 8080.
+Then build, run and deploy. `runtime.weights_path` points `reactor run` at the
+same folder, and the deploy uploads it, so a new instance does not download
+the checkpoints:
+
+```sh
+reactor build
+reactor run --gpus device=0
+reactor deploy production --weights ./weights
+```
+
+The build installs the upstream source at its pinned commit and Runtime 3.10.
+Nothing downloads at runtime (`HF_HUB_OFFLINE=1`). Startup checks the
+source revision and the weights folder; a missing checkpoint stops `load()`
+with an error that names the command that builds the folder. Use `--port` to
+change the default HTTP port 8080.
 
 ## Inputs and controls
 
@@ -78,13 +96,17 @@ Ending the session releases the world while retaining loaded weights.
 
 `reactor.yaml` defines the complete image build and recording of
 `main_video`. The image contains a fixed upstream source revision; the
-persistent weights mount holds model assets and working data.
+weight set holds the checkpoints and is read-only. Working data goes to
+`~/.cache/solarwm-stage2`.
 
 Remote clients require reachable WebRTC media transport as well as HTTP
 signalling. An SSH HTTP-port forward alone does not carry UDP media.
 
-Source and checkpoint revisions are pinned in `solarwm_stage2.yaml`. Consult
-the upstream repository and model card for their usage terms.
+Source and checkpoint revisions are pinned in `solarwm_stage2.yaml`, and
+`reactor.yaml` clones the same source commit
+(`7c52987bd9c7c387884c4d963338b3ab6069c394`); `prepare_weights.py` reads
+checkpoint revision `0fc64396fb5b7480f2c0792a23db552008efe722`. Consult the
+upstream repository and model card for their usage terms.
 
 
 ## Tests
