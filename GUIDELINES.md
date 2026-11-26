@@ -169,10 +169,9 @@ the image never carries a patched upstream checkout:
   names, as `models/evoke/worker.py` does, and startup checks that every copy
   names the pinned revision.
 
-A folder whose `load()` still downloads or clones its source predates this
-rule. Do not copy that code into another model. A change to how such a folder gets its
-weights moves it onto the rule, in its own PR. That PR bumps `model.version`
-at least one minor version, because a deploy without `--weights` then fails.
+A change to which files the weights folder holds, or where `load()` reads
+them, bumps `model.version` at least one minor version: a deploy with the
+previous `--weights` value fails on it.
 
 ## Typed contracts
 

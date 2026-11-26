@@ -103,8 +103,8 @@ review enforces them. Writing or reviewing a model, check that:
 - The PR says whether the model was started once with `reactor run` from the
   weights folder, with the hub off.
 
-A folder whose `load()` still downloads predates the rule. Do not copy from it.
-Moving it onto the rule is its own PR and at least a minor `model.version` bump.
+A change to the weights folder's layout, or to where `load()` reads it, is at
+least a minor `model.version` bump.
 
 ## Layout
 
