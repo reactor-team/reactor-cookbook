@@ -17,14 +17,8 @@ prepare_weights = importlib.import_module("prepare_weights")
 
 
 def fake_hub(calls: list[tuple[str, str]]) -> SimpleNamespace:
-    def fake_download(repo_id, filename, revision, local_dir=None, cache_dir=None):
-        if cache_dir is not None:
-            target = lyra2_assets.snapshot_dir(
-                Path(cache_dir).parents[1], repo_id, revision
-            )
-            target = target / filename
-        else:
-            target = Path(local_dir) / filename
+    def fake_download(repo_id, filename, revision, local_dir):
+        target = Path(local_dir) / filename
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"x")
         calls.append((repo_id, revision))
@@ -38,7 +32,7 @@ def test_manifest_uses_prepared_folder_offline() -> None:
     assert manifest["build"]["runtime_env"]["HF_HUB_OFFLINE"] == "1"
     assert lyra2_assets.SOURCE_REVISION in " ".join(manifest["build"]["run"])
     revisions = [lyra2_assets.CHECKPOINT_REVISION, lyra2_assets.SOURCE_REVISION]
-    revisions += [revision for revision, _ in lyra2_assets.HUB_REPOS.values()]
+    revisions += [revision for _, revision, _ in lyra2_assets.HUB_REPOS.values()]
     assert all(len(revision) == 40 for revision in revisions)
 
 
@@ -80,10 +74,21 @@ def test_prepare_builds_the_folder_that_the_check_accepts(
     lyra2_assets.check_weights(out)
     assert {repo for repo, _ in calls} == {
         lyra2_assets.CHECKPOINT_REPO,
-        *lyra2_assets.HUB_REPOS,
+        *(repo for repo, _, _ in lyra2_assets.HUB_REPOS.values()),
     }
     assert all(len(revision) == 40 for _, revision in calls)
     assert (out / "source/Lyra-2/checkpoints/model/model/.metadata").is_file()
+    assert not [path for path in out.rglob("*") if path.is_symlink()]
+
+
+def test_hub_cache_is_keyed_by_the_id_the_source_loads(tmp_path: Path) -> None:
+    # CLIPModel loads the tokenizer as `xlm-roberta-large`; offline lookup uses
+    # that id, not the repository it moved to.
+    revision = lyra2_assets.HUB_REPOS["xlm-roberta-large"][1]
+    folder = lyra2_assets.snapshot_dir(tmp_path, "xlm-roberta-large", revision)
+    assert folder.parents[1].name == "models--xlm-roberta-large"
+    umt5 = lyra2_assets.HUB_REPOS["google/umt5-xxl"][2]
+    assert not [name for name in umt5 if name.startswith("pytorch_model")]
 
 
 def test_prepare_config_writes_nothing_into_the_weights_folder(

@@ -1,10 +1,12 @@
 # Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
 """Build the Matrix-Game-4 weights folder from the pinned release manifests.
 
-Run it once, on any machine with about 45 GB free, before ``reactor run`` or
-``reactor deploy``::
+Run it once, on any machine with about 90 GB free, before ``reactor run`` or
+``reactor deploy``. The upstream downloader copies each file out of the Hugging
+Face cache, so the cache holds a second copy; set ``HF_HUB_CACHE`` to a
+scratch folder to choose where it goes::
 
-    pip install huggingface-hub
+    pip install huggingface-hub numpy pyyaml
     python prepare_weights.py --output ./weights
 
 It fetches the pinned upstream source for its release manifests, then downloads

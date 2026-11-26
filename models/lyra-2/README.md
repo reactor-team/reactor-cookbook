@@ -24,7 +24,7 @@ world continues. This recipe uses the released four-step video model.
 
 - [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
   NVIDIA driver and NVIDIA Container Toolkit.
-- One NVIDIA B200 GPU and about 140 GB of disk for the weights folder.
+- One NVIDIA B200 GPU and about 105 GB of disk for the weights folder.
 - Review the upstream source and model usage terms.
 
 ## Run
@@ -41,7 +41,9 @@ python prepare_weights.py --output ./weights
 
 The script downloads pinned revisions of `nvidia/Lyra-2.0` (the
 `checkpoints/` folder), `depth-anything/DA3NESTED-GIANT-LARGE-1.1`,
-`google/umt5-xxl` and `Ruicheng/moge-vitl` (1.3 GB, for the depth rescale).
+`Ruicheng/moge-vitl` (1.3 GB, for the depth rescale), and the
+`google/umt5-xxl` and `FacebookAI/xlm-roberta-large` tokenizers. Every file in
+the folder is a plain file, so `reactor deploy` can upload it.
 Then build, run and deploy:
 
 ```sh

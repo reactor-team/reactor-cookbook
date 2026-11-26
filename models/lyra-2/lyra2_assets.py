@@ -32,20 +32,22 @@ CHECKPOINT_FILES = (
     "vae/video_mean_std.pt",
 )
 
-# Hub repos that the pinned source reads through the Hugging Face cache.
+# Hub repos that the pinned source reads through the Hugging Face cache, keyed
+# by the id the source asks for: (repo to download, revision, files). The
+# UMT5 and XLM-RoBERTa entries are tokenizers only; their encoders load from
+# the Lyra checkpoints.
 HUB_CACHE_DIR = "hf-cache/hub"
 HUB_REPOS = {
     "depth-anything/DA3NESTED-GIANT-LARGE-1.1": (
+        "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
         "b2359bdf726fb44ef62acca04d629dcf158053e7",
         ("config.json", "model.safetensors"),
     ),
     "google/umt5-xxl": (
+        "google/umt5-xxl",
         "66cb9e7e85526fe440a945569e42c72fb6cbc0ad",
         (
             "config.json",
-            "generation_config.json",
-            *(f"pytorch_model-0000{i}-of-00006.bin" for i in range(1, 7)),
-            "pytorch_model.bin.index.json",
             "special_tokens_map.json",
             "spiece.model",
             "tokenizer.json",
@@ -53,12 +55,22 @@ HUB_REPOS = {
         ),
     ),
     "Ruicheng/moge-vitl": (
+        "Ruicheng/moge-vitl",
         "ad326bfb61facd6c52b5a825bc1e34d7c97d9672",
         ("model.pt",),
     ),
+    "xlm-roberta-large": (
+        "FacebookAI/xlm-roberta-large",
+        "c23d21b0620b635a76227c604d44e43a9f0ee389",
+        (
+            "config.json",
+            "sentencepiece.bpe.model",
+            "tokenizer.json",
+            "tokenizer_config.json",
+        ),
+    ),
 }
 
-SOURCE_URL = "https://github.com/nv-tlabs/lyra.git"
 SOURCE_REVISION = "9fffc9adc37004091ecf26ef03abfb3abdf4d59a"
 
 
@@ -72,7 +84,7 @@ def check_weights(weights_root: Path) -> None:
     """Raise ``FileNotFoundError`` naming the fix when a prepared file is absent."""
     root = Path(weights_root)
     expected = [root / CHECKPOINT_DIR / name for name in CHECKPOINT_FILES]
-    for repo_id, (revision, names) in HUB_REPOS.items():
+    for repo_id, (_, revision, names) in HUB_REPOS.items():
         folder = snapshot_dir(root, repo_id, revision)
         expected += [folder / name for name in names]
         expected.append(root / HUB_CACHE_DIR / folder.parents[1].name / "refs" / "main")

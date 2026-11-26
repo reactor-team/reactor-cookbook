@@ -4,7 +4,7 @@
 Run it once, on any machine with about 82 GB free, before ``reactor run`` or
 ``reactor deploy``::
 
-    pip install huggingface-hub
+    pip install huggingface-hub numpy pyyaml pillow
     python prepare_weights.py --output ./weights
 
 The folder holds ``base/`` (Wan2.2 text encoder, VAE, tokenizer and configs) and

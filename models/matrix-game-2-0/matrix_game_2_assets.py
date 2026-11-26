@@ -241,10 +241,11 @@ def _public_url(value: object, name: str) -> str:
 
 def _run_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     """Run Git without an interactive credential prompt."""
+    # The image's checkout can belong to another user than the runtime's.
     environment = os.environ.copy()
     environment["GIT_TERMINAL_PROMPT"] = "0"
     return subprocess.run(
-        ["git", *arguments],
+        ["git", "-c", "safe.directory=*", *arguments],
         check=True,
         capture_output=True,
         text=True,

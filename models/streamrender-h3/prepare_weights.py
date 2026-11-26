@@ -27,7 +27,11 @@ def prepare(output: Path) -> None:
     from huggingface_hub import snapshot_download
 
     snapshot_download(repo_id=REPO_ID, revision=REVISION, local_dir=output)
-    if not (output / MERGED_BACKBONE).exists():
+    merged = output / MERGED_BACKBONE
+    if not merged.exists():
+        # An interrupted rebuild leaves this file, and the bundle's script
+        # refuses to start while it exists.
+        merged.with_suffix(".incomplete").unlink(missing_ok=True)
         subprocess.run([sys.executable, str(output / "download_assets.py")], check=True)
     check_weights(output / "assets.json")
 

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Reactor Technologies, Inc. All rights reserved.
 """Check the StreamRender-H3 weights folder that prepare_weights.py builds. Nothing here downloads."""
 
 import json

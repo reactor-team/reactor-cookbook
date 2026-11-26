@@ -57,9 +57,13 @@ Build the weights folder once. It downloads all three scenes and the shared
 assets at a pinned revision and checks each file's size and SHA256:
 
 ```sh
-pip install huggingface-hub
+pip install huggingface-hub numpy pyyaml
 python prepare_weights.py --output ./weights
 ```
+
+The upstream downloader copies each file out of the Hugging Face cache, so the
+run needs about twice the folder's size. Set `HF_HUB_CACHE` to a scratch folder
+to keep the cache copy off your home disk, and delete it after the run.
 
 Then validate, build and run:
 

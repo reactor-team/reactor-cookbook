@@ -231,9 +231,13 @@ def _repo_id(value: object, name: str) -> str:
 
 def _run_git(arguments: list[str]) -> subprocess.CompletedProcess[str]:
     """Run Git and report a public-resource preparation error."""
+    # The image's checkout can belong to another user than the runtime's.
     try:
         return subprocess.run(
-            ["git", *arguments], check=True, capture_output=True, text=True
+            ["git", "-c", "safe.directory=*", *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
         )
     except FileNotFoundError as error:
         raise RuntimeError("Git is required to prepare Matrix-Game 3.0") from error

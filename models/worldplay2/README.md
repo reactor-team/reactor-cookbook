@@ -66,7 +66,7 @@ not its expert shards) from
 
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
-pip install -U huggingface_hub
+pip install -U huggingface_hub numpy pyyaml pillow
 python prepare_weights.py --output ./weights
 ```
 

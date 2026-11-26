@@ -83,3 +83,29 @@ def test_prepare_builds_the_folder_that_the_check_accepts(
     prepare_weights.main(["--output", str(out)])
     streamrender_h3_assets.check_weights(out / "assets.json")
     assert calls == [(streamrender_h3_assets.REPO_ID, streamrender_h3_assets.REVISION)]
+
+
+def test_prepare_reruns_over_an_interrupted_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "weights"
+    merged = out / streamrender_h3_assets.MERGED_BACKBONE
+    leftover = merged.with_suffix(".incomplete")
+
+    def fake_snapshot(repo_id, revision, local_dir, **_kwargs):
+        (Path(local_dir) / "assets.json").parent.mkdir(parents=True, exist_ok=True)
+        (Path(local_dir) / "assets.json").write_text(json.dumps(ASSETS))
+
+    def fake_run(command, check):
+        assert not leftover.exists()
+        merged.write_bytes(b"x")
+
+    leftover.parent.mkdir(parents=True)
+    leftover.write_bytes(b"partial")
+    monkeypatch.setitem(
+        sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=fake_snapshot)
+    )
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(prepare_weights, "check_weights", lambda _path: None)
+    prepare_weights.main(["--output", str(out)])
+    assert merged.read_bytes() == b"x"
