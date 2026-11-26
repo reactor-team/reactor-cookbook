@@ -75,7 +75,8 @@ modules use the model name as a prefix and split along fixed seams:
 | `<model>.py` | The application half: the `ReactorApp` subclass, commands, lifecycle, the three step hooks |
 | `<model>_model.py` | The model half: `load()` / `generate()` / `reset()`, `<Model>Input`, `<Model>Result`, its own errors; no runtime import |
 | `<model>_types.py` | `InputState`, `Output` tracks, and every `ModelMessage` |
-| `<model>_assets.py` | Config parsing plus source/checkpoint download and validation |
+| `<model>_assets.py` | Config parsing plus checkpoint path resolution and validation; no download |
+| `prepare_weights.py` | Builds the weights folder before a deploy; with `build.run` scripts named `prepare_*.py`, the only files that download (see [Weights and startup](#weights-and-startup)) |
 | `<model>_backend.py` | The in-process upstream model wrapper (GPU code) the model half calls |
 | `<model>_camera.py`, `<model>_images.py` | Optional camera-planning and image helpers, used by the application half |
 
@@ -83,14 +84,94 @@ Models whose upstream cannot share the runtime's Python environment
 (conflicting dependencies) run it in a separate interpreter with
 `upstream_backend.py` + `worker.py`. A model that only needs its own process
 or several GPUs uses `DistributedRunner` and keeps `<model>_backend.py`.
-Either kind may carry `download_snapshot.py`, a documented `*.patch`, and
-`<model>_config.py` in place of `<model>_assets.py`. Everything else about
-them follows the same rules.
+Either kind may carry `upstream_patched/` (see
+[Weights and startup](#weights-and-startup)) and `<model>_config.py` in place
+of `<model>_assets.py`. Everything else about them follows the same rules.
 
 Also uniform across models: a `.dockerignore`, an `example_images/` folder
 when the README shows sample inputs, `tests/test_<model>.py` when tests
 exist, and **no** `__init__.py` — model modules are imported flat by
 `reactor.yaml`'s `runtime.import`.
+
+## Weights and startup
+
+A model starts from two inputs: its image and its weights folder. `load()`
+reads nothing from the network. Reactor makes the selected weight set
+available, read-only, before the model container starts. A model that
+downloads in `load()` downloads again on every new instance, and a model
+deployed with a weight set cannot write into it.
+
+- **Upstream source is in the image.** `build.run` (or the Dockerfile)
+  fetches the upstream repository at its pinned commit, directly or through a
+  `prepare_*.py` script. `load()` may read the checkout's revision, but runs
+  no `git` command that fetches.
+- **Checkpoints come from `get_weights_path()`.** The application passes the
+  folder to the model half's `load()`, which resolves every checkpoint under
+  it.
+- **One public Hugging Face repository whose tree is the layout `load()`
+  reads is the weight set.** Pin it by commit in `runtime.weights_path` for
+  `reactor run`, and deploy with the same reference:
+
+  ```yaml
+  runtime:
+    weights_path: hf://<org>/<repo>@<commit>
+  ```
+
+  ```sh
+  reactor deploy production --weights hf://<org>/<repo>@<commit>
+  ```
+
+- **Any other layout is built by `prepare_weights.py`:** several
+  repositories, a subset of a large repository, a gated repository, or a
+  converted file. Reactor fetches an `hf://` weight set without a token, so a
+  gated repository is read by the script with the reader's Hugging Face
+  token. The script pins every source by commit, writes the folder `load()`
+  reads, and is safe to run again. `runtime.weights_path: ./weights` makes
+  `reactor run` use the same folder, and `.dockerignore` lists `weights/` so
+  the folder stays out of the image.
+
+  ```sh
+  python prepare_weights.py --output ./weights
+  reactor deploy production --weights ./weights
+  ```
+
+- **A missing checkpoint is an error, not a download.** `<model>_assets.py`
+  raises an error that names the missing path and the command that supplies
+  it.
+- **The hub is off at runtime.** `build.runtime_env` (or `ENV` in the
+  Dockerfile) sets `HF_HUB_OFFLINE: "1"`, so a stray hub call in upstream
+  code fails at once instead of downloading.
+- **Caches the model writes go to a writable folder**, such as one under
+  `~/.cache`, and never under the weights folder. TorchInductor and Triton
+  compile caches are examples.
+
+The rules cover everything the container runs: the model's modules, upstream
+code in a subfolder, and a worker process. A `snapshot_download`,
+`hf_hub_download`, `from_pretrained` with a repository id, URL fetch, or
+`git clone`, `fetch` or `pull` belongs only in `prepare_weights.py` or a
+`build.run` step. Every source is pinned by full commit, and `reactor.yaml`,
+the config, and the README name the same commits. Review holds each model to these rules,
+and the model's weights tests prove them (see
+[Verifying a change](#verifying-a-change)).
+
+`build.run` steps run before the model code is copied into the image, and the
+remote builder behind `reactor deploy` refuses the bind mount that would let
+one read the model folder. So a step reads nothing from the model folder, and
+the image never carries a patched upstream checkout:
+
+- New code that only builds on upstream is a module in the model folder that
+  imports the pinned source, as `lingbot_world_v1_rollout.py` does.
+- A change inside an upstream module is a copy of that module in
+  `upstream_patched/`, at its upstream path, taken from the pinned revision
+  with the change applied. Its header names the source repository, the
+  revision, the path, the license, and what changed. The process that imports
+  upstream installs a finder that serves those copies under their upstream
+  names, as `models/evoke/worker.py` does, and startup checks that every copy
+  names the pinned revision.
+
+A change to which files the weights folder holds, or where `load()` reads
+them, bumps `model.version` at least one minor version: a deploy with the
+previous `--weights` value fails on it.
 
 ## Typed contracts
 
@@ -229,3 +310,25 @@ reaches the model; a refused command raises `CommandError` with its code and
 sends nothing; `generate()` reads only its input; a fresh world carries its
 anchor once; a model error out of `generate()` reaches `process_output()` and
 does not count as a completed step.
+
+Tests also prove the [weights rules](#weights-and-startup), without the
+network:
+
+- `reactor.yaml` sets `runtime.weights_path` to `./weights` or to the pinned
+  `hf://` reference the README deploys, `build.runtime_env` sets
+  `HF_HUB_OFFLINE`, and `build.run` clones the commit the config names.
+- The model's path check passes on a folder that holds the files `load()`
+  resolves. For a prepared folder, that folder is the one `prepare_weights.py`
+  writes into `tmp_path` against a fake `huggingface_hub`, which also asserts
+  the pinned revisions.
+- With `huggingface_hub` blocked
+  (`monkeypatch.setitem(sys.modules, "huggingface_hub", None)`), a missing
+  checkpoint raises the error that names it and the command that supplies it,
+  and nothing is written to the weights folder.
+- A missing upstream checkout raises an error that asks for a rebuild, and
+  runs no `git`.
+
+Putting a download back into `load()` turns at least one of these tests red.
+They do not start the upstream loaders. Before the first deploy from a
+new weights layout, start the model once with `reactor run` from the weights
+folder, with the hub off. The PR says whether that run was done.

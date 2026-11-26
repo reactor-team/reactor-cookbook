@@ -76,6 +76,36 @@ move with it in one change.
   warning. Review asks for the switch on any PR that adds or edits a
   manifest on an older format.
 
+## Models read weights only from the weight set
+
+A deployed model starts from its image and the weight set it is deployed with,
+mounted read-only. GUIDELINES.md,
+[Weights and startup](./GUIDELINES.md#weights-and-startup), has the rules, and
+review enforces them. Writing or reviewing a model, check that:
+
+- Nothing the container runs downloads or fetches with `git`: not `load()`,
+  not a helper, not upstream code in a subfolder, and not a worker process.
+  Downloads live in `prepare_weights.py` and in `build.run` steps.
+- `runtime.weights_path` is `./weights` or a pinned `hf://<org>/<repo>@<commit>`
+  of a public, ungated repository, and the README shows prepare (where needed), `reactor run`, then
+  `reactor deploy production --weights …` with the same value.
+- Every source is pinned by full commit, and `reactor.yaml`, the config, and
+  the README agree on each one.
+- `build.runtime_env` sets `HF_HUB_OFFLINE: "1"`, and caches go to `~/.cache`
+  or `/tmp`, never under the weights folder.
+- `.dockerignore` lists `weights/`. The CLI copies the whole model folder into
+  the image, so an unlisted weights folder ends up in it.
+- No `build.run` step reads the model folder or starts with a RUN flag such as
+  `--mount`; the remote builder behind `reactor deploy` refuses it. A change to
+  upstream code is a copied module in `upstream_patched/`, never a patch file.
+- The weights tests in GUIDELINES.md,
+  [Verifying a change](./GUIDELINES.md#verifying-a-change), exist and pass.
+- The PR says whether the model was started once with `reactor run` from the
+  weights folder, with the hub off.
+
+A change to the weights folder's layout, or to where `load()` reads it, is at
+least a minor `model.version` bump.
+
 ## Layout
 
 - `models/` — deployable models; each folder is a `reactor` CLI workspace
