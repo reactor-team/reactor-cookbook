@@ -1,40 +1,36 @@
+# The upstream source that reactor.yaml's build.run clones into the image.
 source:
-  path: source/HY-WorldPlay
+  path: /opt/HY-WorldPlay
   url: https://github.com/Tencent-Hunyuan/HY-WorldPlay.git
   revision: 1588e1336e842b03b0a7860c654ebd7c46bb065e
 
+# The pinned sources of the weights folder that prepare_weights.py builds.
+# `base_model.path` is the folder the upstream pipeline loads; the encoders go
+# into the subfolders of it that the pipeline reads (text_encoder/llm,
+# text_encoder/byt5-small, text_encoder/Glyph-SDXL-v2, vision_encoder/siglip).
 assets:
-  cache: cache
   base_model:
-    path: models/HunyuanVideo-1.5
+    path: HunyuanVideo-1.5
     repo_id: tencent/HunyuanVideo-1.5
     revision: 9b49404b3f5df2a8f0b31df27a0c7ab872e7b038
   action_model:
-    path: models/HY-WorldPlay
+    path: HY-WorldPlay
     repo_id: tencent/HY-WorldPlay
     revision: f4c29235647707b571479a69b569e4166f9f5bf8
   qwen:
-    path: models/Qwen2.5-VL-7B-Instruct
     repo_id: Qwen/Qwen2.5-VL-7B-Instruct
     revision: cc594898137f460bfe9f0759e9844b3ce807cfb5
   byt5:
-    path: models/byt5-small
     repo_id: google/byt5-small
     revision: 68377bdc18a2ffec8a0533fef03b1c513a4dd49d
+  # Hosted on ModelScope, not Hugging Face.
   glyph:
-    path: models/Glyph-SDXL-v2
     repo_id: AI-ModelScope/Glyph-SDXL-v2
     revision: b51a8604c03c9a4e71a389f4c7deeb526320f2e6
-  # HY-World requires the SigLIP encoder distributed with this gated public
-  # repository. Set HY_WORLDPLAY_VISION_ENCODER_PATH to an existing prepared
-  # image_encoder/ + feature_extractor/ layout, or authenticate Hugging Face.
-  # Without access, bootstrap prepares the same public SO400M architecture.
-  flux_vision:
-    path: models/flux-redux-siglip
-    repo_id: black-forest-labs/FLUX.1-Redux-dev
-    revision: c95859fbf7703ca4d6824b4da4407d7cd0434f81
-  public_vision_fallback:
-    path: models/siglip-so400m-patch14-384
+  # Upstream reads the SigLIP encoder of the gated FLUX.1-Redux-dev repository.
+  # Its tensors are this public SO400M checkpoint's vision tower rounded to
+  # bfloat16, so the weights folder holds this checkpoint and needs no token.
+  vision_encoder:
     repo_id: google/siglip-so400m-patch14-384
     revision: 9fdffc58afc957d1a03a25b10dba0329ab15c2a3
 

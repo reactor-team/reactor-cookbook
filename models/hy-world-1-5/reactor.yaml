@@ -2,7 +2,7 @@ $schema: reactor/v2
 
 model:
   name: hy-world-1-5
-  version: v0.2.1
+  version: v0.3.0
   description: |
     Play HY-World 1.5 with image, prompt, and native four-axis camera controls.
   resources:
@@ -19,7 +19,8 @@ model:
 runtime:
   import: hy_world_1_5:HYWorld15
   config: hy_world_1_5.yaml
-  weights_path: ~/.cache/reactor_registry/hy-world-1-5
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 4
@@ -45,3 +46,12 @@ build:
     UV_INDEX_STRATEGY: unsafe-best-match
   runtime_env:
     TOKENIZERS_PARALLELISM: "false"
+    HF_HUB_OFFLINE: "1"
+  # Pin the upstream source that hy_world_1_5.yaml's source.path names.
+  run:
+    - >-
+      git init /opt/HY-WorldPlay
+      && git -C /opt/HY-WorldPlay fetch --depth 1
+      https://github.com/Tencent-Hunyuan/HY-WorldPlay.git
+      1588e1336e842b03b0a7860c654ebd7c46bb065e
+      && git -C /opt/HY-WorldPlay checkout --detach FETCH_HEAD

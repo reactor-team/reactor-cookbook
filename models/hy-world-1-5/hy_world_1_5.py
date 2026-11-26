@@ -9,8 +9,8 @@ from typing import Literal
 from hy_world_1_5_assets import (
     ExampleImage,
     HYWorld15Config,
+    check_runtime_assets,
     load_examples,
-    prepare_runtime_assets,
     read_config,
 )
 from hy_world_1_5_camera import (
@@ -85,13 +85,13 @@ class HYWorld15(ReactorApp):
         self._camera_path: tuple[CameraChunk, ...] | None = None
 
     def load(self, config_path: Path | None) -> None:
-        """Prepare public assets and load the distilled model once.
+        """Check the source and weights folder, then load the distilled model once.
 
         Args:
             config_path: Path to ``hy_world_1_5.yaml`` from the runtime spec.
         """
         config = read_config(config_path, get_weights_path())
-        prepare_runtime_assets(config)
+        check_runtime_assets(config)
         self._engine.load(config)
         self._config = config
         self._planner = NativeCameraPlanner()
