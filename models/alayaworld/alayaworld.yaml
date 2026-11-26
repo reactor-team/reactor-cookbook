@@ -1,26 +1,28 @@
+# The image build clones both sources at these revisions (reactor.yaml build.run).
 source:
-  path: AlayaWorld
+  path: /opt/AlayaWorld
   url: https://github.com/AlayaLab/AlayaWorld.git
   revision: 1abbe2e196603ef9f8eeedfddd427b4d37d57bc1
+da3_source:
+  path: /opt/Depth-Anything-3
+  url: https://github.com/ByteDance-Seed/Depth-Anything-3.git
+  revision: 3d835ec1a5802d64a8b8b15f817a1ab54809bfe4
 
+# Folders in the weights folder that prepare_weights.py builds, each holding
+# the files of one repository at its pinned revision.
 assets:
   model:
-    path: checkpoints/merged_infer.safetensors
+    path: AlayaWorld
     repo_id: AlayaLab/AlayaWorld
     revision: f9699009a00f93214d8d2942d6546f3fa5398bea
   gemma:
-    path: checkpoints/gemma-3-12b-it-qat-q4_0-unquantized
+    path: gemma-3-12b-it-qat-q4_0-unquantized
     repo_id: google/gemma-3-12b-it-qat-q4_0-unquantized
     revision: 68f7ee4fbd59087436ada77ed2d62f373fdd4482
-  da3_source:
-    path: checkpoints/Depth-Anything-3
-    url: https://github.com/ByteDance-Seed/Depth-Anything-3.git
-    revision: 3d835ec1a5802d64a8b8b15f817a1ab54809bfe4
   da3_model:
-    path: checkpoints/hf_cache/hub/models--depth-anything--DA3NESTED-GIANT-LARGE-1.1
+    path: DA3NESTED-GIANT-LARGE-1.1
     repo_id: depth-anything/DA3NESTED-GIANT-LARGE-1.1
     revision: b2359bdf726fb44ef62acca04d629dcf158053e7
-  da3_cache: checkpoints/hf_cache
 
 inference:
   config: configs/infer.yaml

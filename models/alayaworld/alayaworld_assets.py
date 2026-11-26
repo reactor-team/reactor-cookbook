@@ -1,26 +1,62 @@
-"""Prepare pinned AlayaWorld sources, model assets, and scene metadata."""
+"""Read the AlayaWorld config and check its sources, weights, and scene inputs.
+
+Nothing here downloads. The image holds the AlayaWorld and Depth-Anything-3
+sources at their pinned revisions, and ``prepare_weights.py`` builds the
+weights folder.
+"""
 
 from __future__ import annotations
 
-import importlib
-import logging
+import os
 import re
 import subprocess
-import tempfile
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Never, cast
+from typing import Any, cast
 
 import yaml
+
+PREPARE_COMMAND = "HF_TOKEN=<your token> python prepare_weights.py --output ./weights"
+# The files of each pinned repository that the model reads, keyed by the
+# `assets` entry of alayaworld.yaml. Each lands at its repository path in the
+# entry's folder.
+ASSET_FILES: dict[str, tuple[str, ...]] = {
+    "model": ("merged_infer.safetensors",),
+    "gemma": (
+        "added_tokens.json",
+        "chat_template.json",
+        "config.json",
+        "generation_config.json",
+        *(f"model-0000{index}-of-00005.safetensors" for index in range(1, 6)),
+        "model.safetensors.index.json",
+        "preprocessor_config.json",
+        "processor_config.json",
+        "special_tokens_map.json",
+        "tokenizer.json",
+        "tokenizer.model",
+        "tokenizer_config.json",
+    ),
+    "da3_model": ("config.json", "model.safetensors"),
+}
 
 
 @dataclass(frozen=True)
 class Asset:
-    """Describe one model asset pinned to a public repository revision."""
+    """Describe one weights-folder directory and the pinned repository it holds."""
 
     path: Path
     repo_id: str
+    revision: str
+    files: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SourceCheckout:
+    """Describe one upstream checkout that the image build makes."""
+
+    name: str
+    path: Path
+    url: str
     revision: str
 
 
@@ -28,19 +64,15 @@ class Asset:
 class AlayaWorldConfig:
     """Hold validated source, asset, inference, and interaction settings."""
 
-    source_path: Path
-    source_url: str
-    source_revision: str
+    weights_root: Path
+    source: SourceCheckout
+    da3_source: SourceCheckout
     upstream_config: Path
     upload_template: Path
     random_inputs: tuple[Path, ...]
     model: Asset
     gemma: Asset
-    da3_source_path: Path
-    da3_source_url: str
-    da3_source_revision: str
     da3_model: Asset
-    da3_cache: Path
     seed: int
     compile_mode: str
     warmup_chunks: int
@@ -49,9 +81,6 @@ class AlayaWorldConfig:
     ttc: bool
     bank_taehv: bool
     taehv_path: Path | None
-    taehv_source_path: Path | None
-    taehv_source_url: str | None
-    taehv_source_revision: str | None
     decode_overlap_latents: int
     max_chunks_per_rollout: int
     strafe_units_per_second: float
@@ -61,8 +90,16 @@ class AlayaWorldConfig:
     yaw_degrees_per_second: float
     roll_degrees_per_second: float
 
+    @property
+    def source_path(self) -> Path:
+        """Return the AlayaWorld checkout in the image."""
+        return self.source.path
 
-logger = logging.getLogger(__name__)
+    @property
+    def checkpoint_path(self) -> Path:
+        """Return the merged AlayaWorld checkpoint in the weights folder."""
+        return self.model.path / ASSET_FILES["model"][0]
+
 
 _REVISION_PATTERN = re.compile(r"[0-9a-f]{40}")
 _COMPILE_MODES = ["none", "default", "reduce-overhead", "max-autotune"]
@@ -74,24 +111,25 @@ _SCENE_MEMBER_SUFFIXES = (
     "_prompt.txt",
     *tuple(f"_image{extension}" for extension in _SCENE_IMAGE_EXTENSIONS),
 )
-_SNAPSHOT_REVISION_MARKER = ".reactor-revision"
 
 
 def read_config(config_path: Path | None, weights_root: Path) -> AlayaWorldConfig:
-    """Read and validate the AlayaWorld adapter YAML."""
+    """Read and validate the AlayaWorld adapter YAML.
+
+    ``weights_root`` is the folder that ``prepare_weights.py`` builds; asset
+    paths resolve under it. Source paths are absolute paths in the image.
+    """
     if config_path is None:
         raise ValueError("AlayaWorld requires runtime.config in reactor.yaml")
     document = yaml.safe_load(config_path.read_text())
     if not isinstance(document, dict):
         raise ValueError(f"{config_path}: expected a YAML mapping")
-    source = _mapping(document.get("source"), "source")
     assets = _mapping(document.get("assets"), "assets")
     inference = _mapping(document.get("inference"), "inference")
     inputs = _mapping(document.get("inputs"), "inputs")
     motion = _mapping(document.get("motion"), "motion")
     decode = _mapping(document.get("decode"), "decode")
     stream = _mapping(document.get("stream", {}), "stream")
-    da3_source = _mapping(assets.get("da3_source"), "assets.da3_source")
 
     compile_mode = str(inference.get("compile", "reduce-overhead"))
     if compile_mode not in _COMPILE_MODES:
@@ -132,32 +170,24 @@ def read_config(config_path: Path | None, weights_root: Path) -> AlayaWorldConfi
         if value <= 0:
             raise ValueError(f"motion.{name} must be positive")
 
-    source_path = _path(weights_root, source["path"])
-    taehv_raw = assets.get("taehv")
-    taehv_path = _path(source_path, taehv_raw) if taehv_raw else None
-    taehv_source_raw = assets.get("taehv_source")
-    taehv_source = (
-        _mapping(taehv_source_raw, "assets.taehv_source") if taehv_source_raw else None
+    source = _source(document.get("source"), "source", "AlayaWorld source")
+    da3_source = _source(
+        document.get("da3_source"), "da3_source", "Depth-Anything-3 source"
     )
+    taehv_raw = assets.get("taehv")
     random_inputs_raw = inputs.get("random_images")
     if not isinstance(random_inputs_raw, list) or not random_inputs_raw:
         raise ValueError("inputs.random_images must be a non-empty YAML list")
     return AlayaWorldConfig(
-        source_path=source_path,
-        source_url=_repository_url(source.get("url"), "source.url"),
-        source_revision=_revision(source.get("revision"), "source.revision"),
-        upstream_config=_path(source_path, inference["config"]),
-        upload_template=_path(source_path, inputs["upload_template"]),
-        random_inputs=tuple(_path(source_path, value) for value in random_inputs_raw),
-        model=_asset(source_path, assets.get("model"), "assets.model"),
-        gemma=_asset(source_path, assets.get("gemma"), "assets.gemma"),
-        da3_source_path=_path(source_path, da3_source["path"]),
-        da3_source_url=_repository_url(da3_source.get("url"), "assets.da3_source.url"),
-        da3_source_revision=_revision(
-            da3_source.get("revision"), "assets.da3_source.revision"
-        ),
-        da3_model=_asset(source_path, assets.get("da3_model"), "assets.da3_model"),
-        da3_cache=_path(source_path, assets["da3_cache"]),
+        weights_root=weights_root,
+        source=source,
+        da3_source=da3_source,
+        upstream_config=_path(source.path, inference["config"]),
+        upload_template=_path(source.path, inputs["upload_template"]),
+        random_inputs=tuple(_path(source.path, value) for value in random_inputs_raw),
+        model=_asset(weights_root, assets, "model"),
+        gemma=_asset(weights_root, assets, "gemma"),
+        da3_model=_asset(weights_root, assets, "da3_model"),
         seed=int(inference.get("seed", 1234)),
         compile_mode=compile_mode,
         warmup_chunks=warmup_chunks,
@@ -165,20 +195,7 @@ def read_config(config_path: Path | None, weights_root: Path) -> AlayaWorldConfi
         flex_attention=bool(inference.get("flex_attention", True)),
         ttc=bool(inference.get("ttc", False)),
         bank_taehv=bool(inference.get("bank_taehv", False)),
-        taehv_path=taehv_path,
-        taehv_source_path=(
-            None if taehv_source is None else _path(source_path, taehv_source["path"])
-        ),
-        taehv_source_url=(
-            None
-            if taehv_source is None
-            else _repository_url(taehv_source.get("url"), "assets.taehv_source.url")
-        ),
-        taehv_source_revision=(
-            None
-            if taehv_source is None
-            else _revision(taehv_source.get("revision"), "assets.taehv_source.revision")
-        ),
+        taehv_path=_path(weights_root, taehv_raw) if taehv_raw else None,
         decode_overlap_latents=overlap,
         max_chunks_per_rollout=max_chunks_per_rollout,
         strafe_units_per_second=motion_rates["strafe_units_per_second"],
@@ -190,61 +207,66 @@ def read_config(config_path: Path | None, weights_root: Path) -> AlayaWorldConfi
     )
 
 
-def prepare_runtime_assets(config: AlayaWorldConfig) -> None:
-    """Download each missing public source checkout and model asset."""
-    _ensure_git_checkout(
-        config.source_path,
-        url=config.source_url,
-        revision=config.source_revision,
-        name="AlayaWorld source",
-    )
-    _ensure_hf_file(config.model, name="AlayaWorld merged checkpoint")
-    _ensure_hf_snapshot(config.gemma, name="Gemma text encoder")
-    _ensure_git_checkout(
-        config.da3_source_path,
-        url=config.da3_source_url,
-        revision=config.da3_source_revision,
-        name="Depth-Anything-3 source",
-    )
-    _ensure_hf_snapshot(
-        config.da3_model,
-        name="Depth-Anything-3 checkpoint",
-        cache_dir=config.da3_cache / "hub",
-    )
-    if (
-        config.taehv_source_path is not None
-        and config.taehv_source_url is not None
-        and config.taehv_source_revision is not None
-    ):
-        _ensure_git_checkout(
-            config.taehv_source_path,
-            url=config.taehv_source_url,
-            revision=config.taehv_source_revision,
-            name="TAEHV tiny decoder source",
+def check_runtime_assets(config: AlayaWorldConfig) -> None:
+    """Require both source checkouts, every weights file, and every scene input."""
+    check_source(config)
+    if not config.upstream_config.is_file():
+        raise FileNotFoundError(
+            f"AlayaWorld inference config not found: {config.upstream_config}"
         )
-
-
-def validate_runtime_paths(config: AlayaWorldConfig) -> None:
-    """Require every prepared source, model asset, and scene input."""
-    required = {
-        "AlayaWorld source": config.source_path,
-        "AlayaWorld inference config": config.upstream_config,
-        "AlayaWorld merged checkpoint": config.model.path,
-        "Gemma text encoder": config.gemma.path,
-        "Depth-Anything-3 source": config.da3_source_path,
-        "Depth-Anything-3 checkpoint": config.da3_model.path,
-        "DA3 checkpoint cache": config.da3_cache,
-    }
-    for name, path in required.items():
-        if not path.exists():
-            raise FileNotFoundError(f"{name} not found: {path}")
     _validate_scene_triplet(config.upload_template, "upload template")
     for index, path in enumerate(config.random_inputs):
         _validate_scene_triplet(path, f"random image {index}")
+    check_weights(config)
     if config.bank_taehv and (
         config.taehv_path is None or not config.taehv_path.is_file()
     ):
-        raise FileNotFoundError("inference.bank_taehv requires assets.taehv")
+        raise FileNotFoundError(
+            "inference.bank_taehv requires assets.taehv, a file in the weights folder"
+        )
+
+
+def check_source(config: AlayaWorldConfig) -> None:
+    """Require each upstream checkout in the image at its pinned revision."""
+    for checkout in (config.source, config.da3_source):
+        if not checkout.path.is_dir():
+            raise FileNotFoundError(
+                f"{checkout.name} not found at {checkout.path}; "
+                "rebuild the image with `reactor build`"
+            )
+        actual = _run_git(
+            [
+                "-c",
+                f"safe.directory={checkout.path}",
+                "-C",
+                str(checkout.path),
+                "rev-parse",
+                "HEAD",
+            ],
+            checkout.name,
+        ).stdout.strip()
+        if actual != checkout.revision:
+            raise RuntimeError(
+                f"{checkout.name} revision is {actual}; expected {checkout.revision}. "
+                "Rebuild the image with `reactor build`."
+            )
+
+
+def check_weights(config: AlayaWorldConfig) -> None:
+    """Raise ``FileNotFoundError`` naming the fix when a weights file is absent."""
+    missing = [
+        asset.path / name
+        for asset in (config.model, config.gemma, config.da3_model)
+        for name in asset.files
+        if not (asset.path / name).is_file()
+    ]
+    if missing:
+        raise FileNotFoundError(
+            f"AlayaWorld weights are incomplete in {config.weights_root}: "
+            f"{missing[0]} is missing ({len(missing)} files). Accept the Gemma "
+            f"terms on Hugging Face, run `{PREPARE_COMMAND}`, and deploy with "
+            "`--weights ./weights`."
+        )
 
 
 def scene_prompt_path(path: Path) -> Path:
@@ -281,16 +303,36 @@ def _mapping(value: object, name: str) -> dict[str, Any]:
     return cast(dict[str, Any], value)
 
 
-def _asset(source_path: Path, value: object, name: str) -> Asset:
-    """Read one local path and immutable public repository identity."""
+def _source(value: object, name: str, label: str) -> SourceCheckout:
+    """Read one absolute image path and pinned public repository."""
     document = _mapping(value, name)
+    path = Path(str(document.get("path") or ""))
+    if not path.is_absolute():
+        raise ValueError(f"{name}.path must be the absolute checkout path in the image")
+    return SourceCheckout(
+        name=label,
+        path=path,
+        url=_repository_url(document.get("url"), f"{name}.url"),
+        revision=_revision(document.get("revision"), f"{name}.revision"),
+    )
+
+
+def _asset(weights_root: Path, assets: dict[str, Any], key: str) -> Asset:
+    """Read one weights-folder directory and its pinned repository identity."""
+    name = f"assets.{key}"
+    document = _mapping(assets.get(key), name)
     repo_id = str(document.get("repo_id", ""))
     if "/" not in repo_id:
-        raise ValueError(f"{name}.repo_id must identify a public repository")
+        raise ValueError(f"{name}.repo_id must identify a Hugging Face repository")
+    raw_path = str(document.get("path") or "")
+    path = Path(raw_path)
+    if not raw_path or path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{name}.path must be a folder inside the weights folder")
     return Asset(
-        path=_path(source_path, document["path"]),
+        path=weights_root / path,
         repo_id=repo_id,
         revision=_revision(document.get("revision"), f"{name}.revision"),
+        files=ASSET_FILES[key],
     )
 
 
@@ -318,199 +360,23 @@ def _repository_url(value: object, name: str) -> str:
     return url
 
 
-def _verify_repository_revision(path: Path, expected: str, name: str) -> None:
-    """Require a local Git checkout to match its configured revision."""
-    actual = _run_git(
-        ["-c", f"safe.directory={path}", "-C", str(path), "rev-parse", "HEAD"],
-        name,
-    ).stdout.strip()
-    if actual != expected:
-        raise RuntimeError(f"{name} revision is {actual}; expected {expected}")
-
-
-def _ensure_git_checkout(path: Path, *, url: str, revision: str, name: str) -> None:
-    """Clone a missing public repository and require its pinned revision."""
-    if path.exists():
-        _verify_repository_revision(path, revision, name)
-        return
-    logger.info(
-        "downloading source checkout asset=%s url=%s revision=%s", name, url, revision
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix=".reactor-download-", dir=path.parent
-    ) as temporary:
-        checkout = Path(temporary) / "checkout"
-        _run_git(
-            ["clone", "--filter=blob:none", "--no-checkout", url, str(checkout)], name
-        )
-        _run_git(["-C", str(checkout), "checkout", "--detach", revision], name)
-        with suppress(FileExistsError):
-            checkout.rename(path)
-    _verify_repository_revision(path, revision, name)
-
-
 def _run_git(arguments: list[str], name: str) -> subprocess.CompletedProcess[str]:
-    """Run Git and report an actionable public-resource error."""
+    """Run a local Git query without an interactive credential prompt."""
+    environment = os.environ.copy()
+    environment["GIT_TERMINAL_PROMPT"] = "0"
     try:
         return subprocess.run(
             ["git", *arguments],
             check=True,
             capture_output=True,
             text=True,
+            env=environment,
         )
     except FileNotFoundError as error:
-        raise RuntimeError(f"Git is required to download {name}") from error
+        raise RuntimeError(f"Git is required to check the {name} revision") from error
     except subprocess.CalledProcessError as error:
         detail = error.stderr.strip() or error.stdout.strip() or "Git command failed"
-        raise RuntimeError(f"Unable to prepare {name}: {detail}") from error
-
-
-def _ensure_hf_file(asset: Asset, *, name: str) -> None:
-    """Download one file at its pinned revision and record completed preparation."""
-    marker = _file_revision_marker(asset.path)
-    if _is_nonempty_file(asset.path) and _marker_matches(marker, asset.revision):
-        return
-    logger.info(
-        "downloading model file asset=%s repo_id=%s revision=%s",
-        name,
-        asset.repo_id,
-        asset.revision,
-    )
-    asset.path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        downloaded = _hf_hub_download(
-            repo_id=asset.repo_id,
-            filename=asset.path.name,
-            revision=asset.revision,
-            local_dir=asset.path.parent,
-        )
-    except Exception as error:
-        _raise_hf_download_error(name, asset.repo_id, error)
-    if downloaded.resolve() != asset.path.resolve() or not _is_nonempty_file(
-        asset.path
-    ):
-        raise RuntimeError(f"{name} download did not create {asset.path}")
-    _write_marker(marker, asset.revision)
-
-
-def _ensure_hf_snapshot(
-    asset: Asset,
-    *,
-    name: str,
-    cache_dir: Path | None = None,
-) -> None:
-    """Download one repository snapshot and resume incomplete preparation."""
-    marker = asset.path / _SNAPSHOT_REVISION_MARKER
-    if _snapshot_has_content(asset.path) and _marker_matches(marker, asset.revision):
-        return
-    logger.info(
-        "downloading model snapshot asset=%s repo_id=%s revision=%s",
-        name,
-        asset.repo_id,
-        asset.revision,
-    )
-    try:
-        if cache_dir is None:
-            asset.path.mkdir(parents=True, exist_ok=True)
-            downloaded = _hf_snapshot_download(
-                repo_id=asset.repo_id,
-                revision=asset.revision,
-                local_dir=asset.path,
-            )
-        else:
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            downloaded = _hf_snapshot_download(
-                repo_id=asset.repo_id,
-                revision=asset.revision,
-                cache_dir=cache_dir,
-            )
-    except Exception as error:
-        _raise_hf_download_error(name, asset.repo_id, error)
-    if not downloaded.exists() or not _snapshot_has_content(asset.path):
-        raise RuntimeError(f"{name} download did not create {asset.path}")
-    _write_marker(marker, asset.revision)
-
-
-def _file_revision_marker(path: Path) -> Path:
-    """Return the revision marker dedicated to one downloaded file."""
-    return path.with_name(f".{path.name}.reactor-revision")
-
-
-def _is_nonempty_file(path: Path) -> bool:
-    """Return whether a path names a file containing data."""
-    return path.is_file() and path.stat().st_size > 0
-
-
-def _snapshot_has_content(path: Path) -> bool:
-    """Return whether a snapshot directory contains data beyond its marker."""
-    return path.is_dir() and any(
-        child.name != _SNAPSHOT_REVISION_MARKER for child in path.iterdir()
-    )
-
-
-def _marker_matches(path: Path, revision: str) -> bool:
-    """Return whether a completed asset marker matches the pinned revision."""
-    try:
-        return path.read_text(encoding="utf-8").strip() == revision
-    except OSError:
-        return False
-
-
-def _write_marker(path: Path, revision: str) -> None:
-    """Record the revision of a fully prepared asset."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{revision}\n", encoding="utf-8")
-
-
-def _hf_hub_download(
-    *,
-    repo_id: str,
-    filename: str,
-    revision: str,
-    local_dir: Path,
-) -> Path:
-    """Download one Hugging Face file without importing model dependencies eagerly."""
-    hugging_face = importlib.import_module("huggingface_hub")
-    return Path(
-        str(
-            hugging_face.hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                revision=revision,
-                local_dir=local_dir,
-            )
-        )
-    )
-
-
-def _hf_snapshot_download(
-    *,
-    repo_id: str,
-    revision: str,
-    local_dir: Path | None = None,
-    cache_dir: Path | None = None,
-) -> Path:
-    """Download one pinned Hugging Face snapshot lazily."""
-    hugging_face = importlib.import_module("huggingface_hub")
-    return Path(
-        str(
-            hugging_face.snapshot_download(
-                repo_id=repo_id,
-                revision=revision,
-                local_dir=local_dir,
-                cache_dir=cache_dir,
-            )
-        )
-    )
-
-
-def _raise_hf_download_error(name: str, repo_id: str, error: Exception) -> Never:
-    """Raise an authentication-aware Hugging Face download error."""
-    raise RuntimeError(
-        f"Unable to download {name} from {repo_id}. Check network access and run "
-        "`hf auth login` if the repository is gated."
-    ) from error
+        raise RuntimeError(f"Unable to read the {name} revision: {detail}") from error
 
 
 def _scene_prefix(path: Path) -> Path:

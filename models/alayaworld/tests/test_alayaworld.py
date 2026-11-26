@@ -33,7 +33,6 @@ def test_recipe_uses_pre_optimization_inference(tmp_path):
     assert config.attention_backend == "pytorch"
     assert config.bank_taehv is False
     assert config.taehv_path is None
-    assert config.taehv_source_path is None
     assert config.warmup_chunks == 0
     assert config.compile_mode == "default"
     assert config.flex_attention is True
