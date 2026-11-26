@@ -41,9 +41,7 @@ def read_config(path: Path | None) -> OpenOasisConfig:
     )
 
 
-def weights_ref(config: OpenOasisConfig) -> str:
-    """The pinned weight set: ``hf://<repo>@<revision>``."""
-    return f"hf://{config.checkpoint_repo_id}@{config.checkpoint_revision}"
+PREPARE_COMMAND = "python prepare_weights.py --output ./weights"
 
 
 def check_source(config: OpenOasisConfig) -> Path:
@@ -54,7 +52,8 @@ def check_source(config: OpenOasisConfig) -> Path:
             f"Open-Oasis source not found at {root}; rebuild the image with `reactor build`"
         )
     revision = subprocess.check_output(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+        ["git", "-c", f"safe.directory={root}", "-C", str(root), "rev-parse", "HEAD"],
+        text=True,
     ).strip()
     if revision != config.source_revision:
         raise RuntimeError(
@@ -66,12 +65,12 @@ def check_source(config: OpenOasisConfig) -> Path:
 def resolve_checkpoints(
     config: OpenOasisConfig, weights_root: Path
 ) -> tuple[Path, Path]:
-    """Return the model and VAE checkpoints in the weight set; never download."""
+    """Return the model and VAE checkpoints in the weights folder; never download."""
     paths = (weights_root / config.model_filename, weights_root / config.vae_filename)
     for path in paths:
         if not path.is_file():
             raise FileNotFoundError(
                 f"Open-Oasis checkpoint not found at {path}; "
-                f"deploy with `--weights {weights_ref(config)}`"
+                f"run `{PREPARE_COMMAND}` and deploy with `--weights ./weights`"
             )
     return paths

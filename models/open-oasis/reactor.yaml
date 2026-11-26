@@ -10,8 +10,8 @@ model:
 runtime:
   import: open_oasis:OpenOasis
   config: open_oasis.yaml
-  # open_oasis.yaml's checkpoint section pins the same repository and revision.
-  weights_path: hf://Etched/oasis-500m@4ca7d2d811f4f0c6fd1d5719bf83f14af3446c0c
+  # The folder that prepare_weights.py builds. Nothing downloads at runtime.
+  weights_path: ./weights
   recording:
     enabled: true
     chunk_seconds: 4
@@ -28,7 +28,7 @@ build:
     - https://pypi.org/simple
   system_packages: [ffmpeg, git]
   runtime_env:
-    # The checkpoints come from the weight set; nothing downloads at runtime.
+    # The checkpoints come from the weights folder; nothing downloads at runtime.
     HF_HUB_OFFLINE: "1"
   run:
     - >-

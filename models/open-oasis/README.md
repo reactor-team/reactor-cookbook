@@ -10,33 +10,36 @@ controls to guide the generated view.
 - [Reactor CLI](https://docs.reactor.inc/deploy/platform/installation), Docker,
   NVIDIA driver and NVIDIA Container Toolkit.
 - One NVIDIA B200 GPU and storage for model weights and the serving image.
-- Review the [upstream source](https://github.com/etched-ai/open-oasis) and
-  [model card](https://huggingface.co/Etched/oasis-500m) for usage terms.
+- Review the [upstream source](https://github.com/etched-ai/open-oasis), and
+  accept the terms on the [model card](https://huggingface.co/Etched/oasis-500m)
+  with your Hugging Face account. The repository is gated.
 
 ## Run
 
 The YAML manifest declares the image build, Runtime and recording
-configuration. The image build fetches the pinned upstream source. The
-checkpoints come from the pinned Hugging Face weight set
-`hf://Etched/oasis-500m@4ca7d2d811f4f0c6fd1d5719bf83f14af3446c0c`
-(`runtime.weights_path`). `reactor run` downloads it on the host and mounts it:
+configuration. The image build fetches the pinned upstream source. Build the
+weights folder once, with a Hugging Face token that can read the gated
+repository. It downloads the two checkpoints that `load()` reads, about
+3.4 GB, at the pinned revision:
 
 ```sh
 cd models/open-oasis
-reactor build
-reactor run --gpus device=0
+pip install huggingface-hub pyyaml
+HF_TOKEN=<your token> python prepare_weights.py --output ./weights
 ```
 
-To deploy, select the same weight set. Reactor fetches it onto the GPU node
-before the container starts, so a new instance does not download the
-checkpoints. The set holds every file in the repository revision, about 6.7 GB:
+Then build, run and deploy. `runtime.weights_path` points `reactor run` at the
+same folder, and the deploy uploads it, so a new instance does not download
+the checkpoints:
 
 ```sh
-reactor deploy production --weights hf://Etched/oasis-500m@4ca7d2d811f4f0c6fd1d5719bf83f14af3446c0c
+reactor build
+reactor run --gpus device=0
+reactor deploy production --weights ./weights
 ```
 
 Nothing downloads at runtime (`HF_HUB_OFFLINE=1`). A missing checkpoint stops
-`load()` with an error that names the `--weights` value.
+`load()` with an error that names the command that builds the folder.
 
 The default endpoint is `http://localhost:8080`. Use `--port` to choose
 another port. Connect after the service is available. Rebuild after changing

@@ -143,7 +143,7 @@ def blocked(name, *args, **kwargs):
         raise AssertionError(name)
     return original(name, *args, **kwargs)
 builtins.__import__ = blocked
-import opendreamer_model, opendreamer_utils, opendreamer_assets
+import opendreamer_model, opendreamer_utils
 opendreamer_model.OpenDreamerModel()
 """
     subprocess.run(

@@ -13,6 +13,7 @@ import yaml
 SOURCE_REVISION = "11712fe3a3f42cc448c10713a0b0ff79066e5935"
 MODEL_REVISION = "51320c3eb58a6313ccd6021a1da6d723d53e1a58"
 WEIGHT_MANIFEST = Path(__file__).with_name("weights-manifest.json")
+WEIGHTS_FIX = f"deploy with `--weights hf://TencentARC/WorldCrafter-Fast@{MODEL_REVISION}`"
 # GeoCalib's pinhole checkpoint, staged by reactor.yaml's build.run at the path
 # torch.hub reads, so calibration never downloads it.
 GEOCALIB_FILE = Path("hub/geocalib/pinhole.tar")
@@ -101,7 +102,7 @@ def verify_weights(weights: Path, cache: Path):
         try:
             stat = path.stat()
         except FileNotFoundError:
-            raise FileNotFoundError(f"Checkpoint is incomplete: missing {name}; finish the pinned weight download") from None
+            raise FileNotFoundError(f"Checkpoint is incomplete: missing {name}; {WEIGHTS_FIX}") from None
         if not path.is_file() or stat.st_size != expected["size"]:
             raise ValueError(f"Checkpoint is incomplete: incorrect size for {name}")
         fingerprints[name] = [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
@@ -115,7 +116,7 @@ def verify_weights(weights: Path, cache: Path):
             for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
                 digest.update(block)
         if digest.hexdigest() != manifest["files"][name]["sha256"]:
-            raise ValueError(f"Checkpoint checksum mismatch: {name}; download this file again")
+            raise ValueError(f"Checkpoint checksum mismatch: {name}; {WEIGHTS_FIX}")
         stat = (weights / name).stat()
         if [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns] != fingerprints[name]:
             raise RuntimeError(f"Checkpoint changed while being verified: {name}")
