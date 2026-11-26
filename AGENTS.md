@@ -86,8 +86,8 @@ review enforces them. Writing or reviewing a model, check that:
 - Nothing the container runs downloads or runs `git`: not `load()`, not a
   helper, not upstream code in a subfolder, and not a worker process. Downloads
   live in `prepare_weights.py` and in `build.run` `prepare_*.py` scripts.
-- `runtime.weights_path` is `./weights` or a pinned `hf://<org>/<repo>@<commit>`,
-  and the README shows prepare (where needed), `reactor run`, then
+- `runtime.weights_path` is `./weights` or a pinned `hf://<org>/<repo>@<commit>`
+  of a public, ungated repository, and the README shows prepare (where needed), `reactor run`, then
   `reactor deploy production --weights …` with the same value.
 - Every source is pinned by full commit, and `reactor.yaml`, the config, and
   the README agree on each one.

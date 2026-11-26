@@ -120,9 +120,11 @@ deployed with a weight set cannot write into it.
   ```
 
 - **Any other layout is built by `prepare_weights.py`:** several
-  repositories, a subset of a large repository, or a converted file. The
-  script pins every source by commit, writes the folder `load()` reads, and
-  is safe to run again. `runtime.weights_path: ./weights` makes `reactor run`
+  repositories, a subset of a large repository, a gated repository, or a
+  converted file. Reactor fetches an `hf://` weight set without a token, so a
+  gated repository is read by the script with the reader's Hugging Face
+  token. The script pins every source by commit, writes the folder `load()`
+  reads, and is safe to run again. `runtime.weights_path: ./weights` makes `reactor run`
   use the same folder.
 
   ```sh
