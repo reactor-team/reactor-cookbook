@@ -84,7 +84,8 @@ Models whose upstream cannot share the runtime's Python environment
 (conflicting dependencies) run it in a separate interpreter with
 `upstream_backend.py` + `worker.py`. A model that only needs its own process
 or several GPUs uses `DistributedRunner` and keeps `<model>_backend.py`.
-Either kind may carry a documented `*.patch` and `<model>_config.py` in place
+Either kind may carry `upstream_patched/` (see
+[Weights and startup](#weights-and-startup)) and `<model>_config.py` in place
 of `<model>_assets.py`. Everything else about them follows the same rules.
 
 Also uniform across models: a `.dockerignore`, an `example_images/` folder
@@ -153,11 +154,20 @@ the config, and the README name the same commits. Review holds each model to the
 and the model's weights tests prove them (see
 [Verifying a change](#verifying-a-change)).
 
-`build.run` steps run before the model code is copied into the image. A step
-that reads a file from the model folder, such as a patch, bind-mounts it with
-`--mount=type=bind,source=.,target=/build`. The remote builder that
-`reactor deploy` uses by default refuses that flag, so the README deploys that
-model with `reactor deploy production --build-local --weights …`.
+`build.run` steps run before the model code is copied into the image, and the
+remote builder behind `reactor deploy` refuses the bind mount that would let
+one read the model folder. So a step reads nothing from the model folder, and
+the image never carries a patched upstream checkout:
+
+- New code that only builds on upstream is a module in the model folder that
+  imports the pinned source, as `lingbot_world_v1_rollout.py` does.
+- A change inside an upstream module is a copy of that module in
+  `upstream_patched/`, at its upstream path, taken from the pinned revision
+  with the change applied. Its header names the source repository, the
+  revision, the path, the license, and what changed. The process that imports
+  upstream installs a finder that serves those copies under their upstream
+  names, as `models/evoke/worker.py` does, and startup checks that every copy
+  names the pinned revision.
 
 A folder whose `load()` still downloads or clones its source predates this
 rule. Do not copy that code into another model. A change to how such a folder gets its

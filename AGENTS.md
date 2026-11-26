@@ -95,8 +95,9 @@ review enforces them. Writing or reviewing a model, check that:
   or `/tmp`, never under the weights folder.
 - `.dockerignore` lists `weights/`. The CLI copies the whole model folder into
   the image, so an unlisted weights folder ends up in it.
-- A `build.run` step that bind-mounts the model folder only builds locally, so
-  the README deploys with `--build-local`.
+- No `build.run` step reads the model folder or starts with a RUN flag such as
+  `--mount`; the remote builder behind `reactor deploy` refuses it. A change to
+  upstream code is a copied module in `upstream_patched/`, never a patch file.
 - The weights tests in GUIDELINES.md,
   [Verifying a change](./GUIDELINES.md#verifying-a-change), exist and pass.
 - The PR says whether the model was started once with `reactor run` from the
